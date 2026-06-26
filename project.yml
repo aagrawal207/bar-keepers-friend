@@ -1,0 +1,83 @@
+name: BarKeepersFriend
+options:
+  bundleIdPrefix: com.agraabhi
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+schemes:
+  BarKeepersFriend:
+    build:
+      targets:
+        BarKeepersFriend: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - BarKeepersFriendTests
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # Local development uses ad-hoc signing ("sign to run locally"). Switch to a
+    # Developer ID identity + automatic team for notarized release builds.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  # Pure logic + engines. Unit-tested in isolation — the app agent never launches in tests.
+  # A static library (not a framework) so there is nothing to embed or separately sign;
+  # the code links straight into the app and the test bundle.
+  BarKeepersFriendCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/Core
+    settings:
+      base:
+        APPLICATION_EXTENSION_API_ONLY: false
+
+  # Thin AppKit shell: lifecycle, menu, settings window. Depends on Core.
+  BarKeepersFriend:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+        excludes:
+          - Info.plist
+    dependencies:
+      - target: BarKeepersFriendCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.agraabhi.BarKeepersFriend
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: Bar Keeper's Friend
+        # Agent app: status item, no Dock icon, no app menu bar of its own.
+        LSUIElement: true
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: "Copyright © 2026 Abhishek Agrawal. MIT licensed."
+    entitlements:
+      path: Sources/App/BarKeepersFriend.entitlements
+      properties:
+        # Sandbox MUST be off: this app class calls private window-server APIs and
+        # synthesizes events into other processes. That also makes the Mac App Store
+        # permanently infeasible (guidelines 2.5.1 + 2.4.5(i)).
+        com.apple.security.app-sandbox: false
+        com.apple.security.files.user-selected.read-only: true
+
+  BarKeepersFriendTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/CoreTests
+    dependencies:
+      - target: BarKeepersFriendCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.agraabhi.BarKeepersFriend.Tests
