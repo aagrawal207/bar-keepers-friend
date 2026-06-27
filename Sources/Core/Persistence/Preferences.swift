@@ -23,6 +23,12 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// The floating bar's presentation.
     public var floatingBarStyle: FloatingBarStyle
 
+    /// Try Accessibility press (AXPress) before the synthesized click. Off by default: most
+    /// status items advertise AXPress but don't implement it (returns ActionUnsupported), so
+    /// trying it first only adds latency. Kept as a compatibility escape hatch for items that
+    /// genuinely open via AXShowMenu.
+    public var useAXActivation: Bool
+
     /// Persisted on-screen positions of the control items, keyed by autosave name. This
     /// mirrors the values AppKit stores under "NSStatusItem Preferred Position <name>";
     /// we cache them ourselves because removing a status item deletes AppKit's copy.
@@ -35,6 +41,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         launchAtLogin: Bool = false,
         useFloatingBar: Bool = true,
         floatingBarStyle: FloatingBarStyle = .horizontal,
+        useAXActivation: Bool = false,
         controlItemPositions: [String: Double] = [:]
     ) {
         self.autoRehide = autoRehide
@@ -43,6 +50,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.launchAtLogin = launchAtLogin
         self.useFloatingBar = useFloatingBar
         self.floatingBarStyle = floatingBarStyle
+        self.useAXActivation = useAXActivation
         self.controlItemPositions = controlItemPositions
     }
 
@@ -56,6 +64,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case launchAtLogin
         case useFloatingBar
         case floatingBarStyle
+        case useAXActivation
         case controlItemPositions
     }
 
@@ -70,6 +79,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         useFloatingBar = try container.decodeIfPresent(Bool.self, forKey: .useFloatingBar) ?? d.useFloatingBar
         floatingBarStyle = try container.decodeIfPresent(FloatingBarStyle.self, forKey: .floatingBarStyle) ?? d.floatingBarStyle
+        useAXActivation = try container.decodeIfPresent(Bool.self, forKey: .useAXActivation) ?? d.useAXActivation
         controlItemPositions = try container.decodeIfPresent([String: Double].self, forKey: .controlItemPositions) ?? d.controlItemPositions
     }
 }

@@ -257,36 +257,39 @@ final class FloatingBarController {
                 rehideItems?()
                 return
             }
-            // Primary: press the item's Accessibility element — it opens the owning app's
-            // menu natively. The frame is already fresh from the re-enumeration above, so we
-            // do NOT re-capture here (the full attribution sweep mid-activation only adds
-            // latency and lets the frame drift). On success the section stays REVEALED so the
-            // menu can open, and we arm auto-rehide to tidy it away after the delay.
-            let pid = windowIDToPID[current.windowID] ?? current.ownerPID
-            let pressed = await AXActivator.activate(windowID: current.windowID, pid: pid, frame: current.frame)
-            if pressed {
-                scheduleAutoRehideAfterActivation?()
-                return
-            }
-            // Last gate before the synchronous, cursor-warping CGEvent: a stale/superseded
-            // task abandons silently here. This is what stops the seconds-late teleport.
-            guard !Task.isCancelled, Date() < deadline else {
-                DebugLog.log("activate: superseded/stale before CGEvent fallback for \(item.snapshot.windowID)")
-                return
-            }
+            // Primary: a synthesized click, which opens the owning app's menu natively. AX
+            // press (AXUIElementPerformAction) is NOT used by default — most status items
+            // advertise AXPress but return ActionUnsupported/NotImplemented, so it just adds
+            // ~1.5s of latency and fails. The frame is fresh from the re-enumeration above; on
+            // success the section stays REVEALED so the menu can open, and auto-rehide tidies
+            // it away after the delay.
+            let clickStart = Date()
             do {
-                // The AX attempt can take a moment; re-read the frame right before posting so
-                // the synthesized click lands on the item's current position, not a stale one.
-                let fresh = (try? windowServer.menuBarItems())?.first { $0.windowID == current.windowID } ?? current
-                try windowServer.click(item: fresh)
-                DebugLog.log("activate: CGEvent fallback clicked \(fresh.windowID) at \(fresh.frame)")
+                try windowServer.click(item: current)
+                DebugLog.log("activate: CGEvent clicked \(current.windowID) at \(current.frame) (\(ms(from: clickStart)))")
                 scheduleAutoRehideAfterActivation?()
+                return
             } catch {
-                DebugLog.log("activate: AX + CGEvent both failed for \(current.windowID): \(error) — disabling + re-hiding")
-                unactivatableWindowIDs.insert(current.windowID)
-                rehideItems?()
+                DebugLog.log("activate: CGEvent click failed for \(current.windowID): \(error)")
             }
+            // Optional compatibility fallback for a genuine statusItem.menu item that only
+            // opens via AXShowMenu. Off by default. Guarded again because it can take a moment.
+            if preferences.useAXActivation, !Task.isCancelled, Date() < deadline {
+                let pid = windowIDToPID[current.windowID] ?? current.ownerPID
+                if await AXActivator.activate(windowID: current.windowID, pid: pid, frame: current.frame) {
+                    scheduleAutoRehideAfterActivation?()
+                    return
+                }
+            }
+            DebugLog.log("activate: could not activate \(current.windowID) — disabling + re-hiding")
+            unactivatableWindowIDs.insert(current.windowID)
+            rehideItems?()
         }
+    }
+
+    /// Milliseconds elapsed since `start`, for the activation-timing log.
+    private func ms(from start: Date) -> String {
+        "\(Int(Date().timeIntervalSince(start) * 1000))ms"
     }
 
     private func makePanel() -> NSPanel {
