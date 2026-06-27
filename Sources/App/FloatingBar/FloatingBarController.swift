@@ -281,6 +281,23 @@ final class FloatingBarController {
 
     // MARK: - Internals
 
+    /// Whether the cached mirror no longer matches the live menu bar — i.e. the set of hidden
+    /// items (left of the anchor) changed since the last capture, because an app added or
+    /// removed its status item. Cheap: one `CGWindowList` enumeration, no screenshot. The
+    /// caller shows the (slightly stale) cache instantly and refreshes in the background only
+    /// when this is true, so a normal open never pays for a capture.
+    func cachedMirrorIsStale(anchorMinX: CGFloat) -> Bool {
+        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let hidden = HiddenItemsResolver.hiddenItems(
+            from: snapshots,
+            leftOfAnchorX: anchorMinX,
+            excludingControlItems: controlItemWindowIDs
+        )
+        let live = Set(HiddenItemsResolver.deduplicateByMidXProximity(hidden).map { $0.windowID })
+        let cached = Set(cachedHiddenOrder.map { $0.windowID })
+        return live != cached
+    }
+
     /// Builds the items to show from the cached order + cached images.
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in

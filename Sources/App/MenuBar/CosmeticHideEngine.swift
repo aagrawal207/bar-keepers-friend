@@ -13,8 +13,10 @@ import BarKeepersFriendCore
 /// translates the resulting intents into `NSStatusItem.length` mutations.
 @MainActor
 final class CosmeticHideEngine {
-    /// Called when settings should open (anchor right-click / menu).
+    /// Called when settings should open (chosen from the anchor's right-click menu).
     var onOpenSettings: (() -> Void)?
+    /// Called when the user chooses Quit from the anchor's right-click menu.
+    var onQuit: (() -> Void)?
 
     /// The floating bar that mirrors hidden items below the menu bar. When set and enabled
     /// in preferences, the anchor click toggles this panel instead of reflowing items back
@@ -220,7 +222,7 @@ final class CosmeticHideEngine {
     @objc private func anchorClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
-            onOpenSettings?()
+            showAnchorMenu()
             return
         }
         if preferences.useFloatingBar, floatingBar != nil {
@@ -230,14 +232,35 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Shows or hides the floating bar. On show it refreshes the mirror first (re-capture +
-    /// re-attribute) so names and icons are current rather than the stale launch-time cache.
+    /// Pops the anchor's right-click menu (Settings…, Quit). Built on demand and attached to the
+    /// status item only for the duration of the click, so a normal left-click still routes to
+    /// `anchorClicked` (a permanently-assigned `menu` would swallow left-clicks too).
+    private func showAnchorMenu() {
+        guard let anchor = anchorItem else { return }
+        let menu = NSMenu()
+        let settings = NSMenuItem(title: "Settings…", action: #selector(menuOpenSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Bar Keeper's Friend", action: #selector(menuQuit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+
+        anchor.menu = menu
+        anchor.button?.performClick(nil)
+        anchor.menu = nil // restore left-click action handling
+    }
+
+    @objc private func menuOpenSettings() { onOpenSettings?() }
+    @objc private func menuQuit() { onQuit?() }
+
+    /// Shows or hides the floating bar from the cached mirror — instantly, with no capture on
+    /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
     private func toggleFloatingBar() {
         guard let bar = floatingBar else { return }
-        // Ignore a click while a capture sequence is mid-flight (e.g. the one-time launch
-        // capture): the divider is transiently revealed for capture but the state machine
-        // hasn't settled, so acting now would misread it — collapsing the section and eating
-        // the click, and stacking a duplicate capture. The launch window is ~1s and one-time.
+        // Ignore a click while the one-time launch capture is mid-flight: the divider is
+        // transiently revealed and the cache isn't populated yet, so showing now would misread
+        // the divider state and present an empty bar. The launch window is ~1s and one-time.
         guard !captureInFlight else { return }
         // Refresh now that the windows are fully realized, so our own items are excluded.
         publishControlItemWindowIDs()
@@ -253,19 +276,21 @@ final class CosmeticHideEngine {
             bar.hide()
             return
         }
-        // Refresh the mirror right before showing it: reveal the items on-screen, re-capture
-        // their icons and re-attribute names (Accessibility is unreliable at launch, so the
-        // launch-time cache can show stale "Control Center" names and blank icons), then
-        // collapse the divider and show the panel from the fresh cache. Force-collapse after:
-        // the panel (not the in-bar items) is what the user sees. Serialized behind any
-        // in-flight capture; we await it, then show.
-        let sequence = runCaptureSequence(forceCollapseAfter: true) { [weak self] in
-            await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
-        }
+        // Show INSTANTLY from the cached mirror — never capture on the open path. A capture is
+        // reveal + settle + up to 6 screenshot retries (~2s), which made every open lag. The
+        // cache is kept current out-of-band: the one-time launch capture, and a re-capture on
+        // each screen-parameter change. So opening is just "lay out the cached icons + show".
+        let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
         Task { @MainActor in
-            _ = await sequence.value
-            let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
             await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX)
+        }
+        // If the live menu bar gained/lost items since the cache was built (an app added or
+        // removed its status item while we were idle), refresh in the BACKGROUND. The bar is
+        // already showing from cache; the refresh updates it for next time without lagging this
+        // open. The staleness check is a cheap CGWindowList enumeration (no screenshot), done
+        // inside the controller where the window server lives. No-op while the section is in use.
+        if bar.cachedMirrorIsStale(anchorMinX: frame.minX) {
+            refreshFloatingBarCache()
         }
     }
 

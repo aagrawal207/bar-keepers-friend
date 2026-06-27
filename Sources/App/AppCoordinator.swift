@@ -46,6 +46,7 @@ final class AppCoordinator {
         engine.floatingBar = bar
         engine.install()
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
+        engine.onQuit = { NSApp.terminate(nil) }
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         hideEngine = engine
 
