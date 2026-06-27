@@ -151,22 +151,52 @@ final class CosmeticHideEngine {
             onOpenSettings?()
             return
         }
-        if preferences.useFloatingBar, let bar = floatingBar {
-            // Refresh now that the windows are fully realized, so our own items are excluded.
-            publishControlItemWindowIDs()
-            // If a prior activation left the section revealed in the menu bar, the anchor
-            // should tidy it back up (re-hide) rather than show a redundant panel.
-            if stateMachine.visibility(of: .hidden) == .shown {
-                _ = stateMachine.apply(.hide(.hidden))
-                bar.hide()
-                setHidden(collapsed: true)
-                return
-            }
-            let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
-            Task { await bar.toggle(anchorMinX: frame.minX, anchorRightX: frame.maxX) }
+        if preferences.useFloatingBar, floatingBar != nil {
+            toggleFloatingBar()
         } else {
             toggleHidden()
         }
+    }
+
+    /// Shows or hides the floating bar. On show it refreshes the mirror first (re-capture +
+    /// re-attribute) so names and icons are current rather than the stale launch-time cache.
+    private func toggleFloatingBar() {
+        guard let bar = floatingBar else { return }
+        // Refresh now that the windows are fully realized, so our own items are excluded.
+        publishControlItemWindowIDs()
+        // If a prior activation left the section revealed in the menu bar, the anchor should
+        // tidy it back up (re-hide) rather than show a redundant panel.
+        if stateMachine.visibility(of: .hidden) == .shown {
+            _ = stateMachine.apply(.hide(.hidden))
+            bar.hide()
+            setHidden(collapsed: true)
+            return
+        }
+        if bar.isVisible {
+            bar.hide()
+            return
+        }
+        // Refresh the mirror right before showing it: reveal the items on-screen, re-capture
+        // their icons and re-attribute names (Accessibility is unreliable at launch, so the
+        // launch-time cache can show stale "Control Center" names and blank icons), then hide
+        // them and show the panel from the fresh cache.
+        Task { @MainActor in
+            setHidden(collapsed: false)
+            try? await Task.sleep(for: .milliseconds(250))
+            let anchorMinX = anchorFrame?.minX ?? 1115
+            await bar.captureAndCache(anchorMinX: anchorMinX)
+            setHidden(collapsed: true)
+            let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
+            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX)
+        }
+    }
+
+    /// Toggles the floating bar exactly as a left anchor click would. Used by the SIGUSR2
+    /// diagnostics trigger so the bar can be shown for a screenshot without clicking the menu
+    /// bar. No-op outside floating-bar mode.
+    func toggleFloatingBarForDiagnostics() {
+        guard preferences.useFloatingBar, floatingBar != nil else { return }
+        toggleFloatingBar()
     }
 
     @objc private func dividerClicked(_ sender: NSStatusBarButton) {

@@ -17,6 +17,8 @@ final class AppCoordinator {
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
+    /// Listens for SIGUSR2 to toggle the floating bar so it can be screenshotted (dev aid).
+    private var showBarSignalSource: DispatchSourceSignal?
 
     init() {
         preferences = preferencesStore.load()
@@ -56,8 +58,10 @@ final class AppCoordinator {
         installDiagnosticsSignalHandler()
     }
 
-    /// Dumps a read-only diagnostics report on `kill -USR1 <pid>`. Development aid: lets the
-    /// app's full Accessibility view of the hidden items be inspected without driving the UI.
+    /// Dumps a read-only diagnostics report on `kill -USR1 <pid>`, and toggles the floating
+    /// bar (as if the anchor were clicked) on `kill -USR2 <pid>`. Development aids: let the
+    /// app's Accessibility view be inspected and the bar be shown for a screenshot without
+    /// physically clicking the menu bar.
     private func installDiagnosticsSignalHandler() {
         signal(SIGUSR1, SIG_IGN) // ignore default-terminate; the dispatch source handles it
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
@@ -69,6 +73,14 @@ final class AppCoordinator {
         }
         source.resume()
         diagnosticsSignalSource = source
+
+        signal(SIGUSR2, SIG_IGN)
+        let showSource = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+        showSource.setEventHandler { [weak self] in
+            self?.hideEngine?.toggleFloatingBarForDiagnostics()
+        }
+        showSource.resume()
+        showBarSignalSource = showSource
     }
 
     func stop() {

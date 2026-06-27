@@ -47,7 +47,7 @@ final class IconCaptureService {
         let display = displayContaining(probe, in: content.displays) ?? content.displays[0]
         let displayBounds = CGDisplayBounds(display.displayID)
 
-        guard let full = await captureFullDisplay(display, displayBounds, allWindows: content.windows) else {
+        guard let full = await captureFullDisplay(display, displayBounds) else {
             DebugLog.log("capture: full-display capture failed")
             return [:]
         }
@@ -83,14 +83,13 @@ final class IconCaptureService {
     /// Captures the entire display as a single image (no `sourceRect`/`destinationRect`, so
     /// there is no point/pixel unit ambiguity — the output is the whole display in pixels).
     ///
-    /// The desktop/wallpaper windows are excluded so the translucent Tahoe menu bar isn't
-    /// captured with the wallpaper showing through behind the glyphs.
-    private func captureFullDisplay(_ display: SCDisplay, _ displayBounds: CGRect, allWindows: [SCWindow]) async -> CGImage? {
-        // The wallpaper/desktop sit below the normal window layer (layer < 0). Excluding them
-        // removes the desktop image from behind the menu bar's translucency; the status glyphs
-        // live at a high (positive) layer and are untouched.
-        let backdrop = allWindows.filter { $0.windowLayer < 0 }
-        let filter = SCContentFilter(display: display, excludingWindows: backdrop)
+    /// Note: we deliberately do NOT exclude the wallpaper/backdrop windows. Excluding `layer < 0`
+    /// windows removed the desktop but also left the status glyphs compositing to nothing
+    /// (crops came back fully transparent/black). Capturing the full composited display keeps
+    /// the real glyphs; any wallpaper fringe behind a translucent glyph is cosmetic, and a
+    /// genuinely blank crop falls back to the app icon upstream.
+    private func captureFullDisplay(_ display: SCDisplay, _ displayBounds: CGRect) async -> CGImage? {
+        let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
         config.showsCursor = false
         // `display.width/height` are in POINTS. Scale to native pixels using the matching
@@ -100,7 +99,7 @@ final class IconCaptureService {
         }?.backingScaleFactor ?? 2
         config.width = Int(CGFloat(display.width) * scale)
         config.height = Int(CGFloat(display.height) * scale)
-        DebugLog.log("capture: excluding \(backdrop.count) backdrop windows; requested \(config.width)x\(config.height) px (scale \(scale))")
+        DebugLog.log("capture: full display \(config.width)x\(config.height) px (scale \(scale))")
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 

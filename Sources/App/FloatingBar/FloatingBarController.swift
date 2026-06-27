@@ -98,16 +98,24 @@ final class FloatingBarController {
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
         // Runs off the main thread so it can't stall the run loop (and block bar clicks).
         let attributed = await AXAttributionProvider.attribute(deduped)
+        // Mirror the REAL menu bar glyph (Bartender-style) by capturing it while on-screen.
         let images = await capture.captureIcons(for: attributed)
-        // Merge into the cache so items briefly off-screen keep their last good image.
-        for (id, cg) in images {
-            let item = attributed.first { $0.windowID == id }
-            let size = item?.frame.size ?? CGSize(width: 24, height: 24)
-            iconCache[id] = NSImage(cgImage: cg, size: size)
+        var captured = 0, fellBack = 0
+        for item in attributed {
+            if let cg = images[item.windowID], !Self.isBlank(cg) {
+                let size = item.frame.size.width > 0 ? item.frame.size : CGSize(width: 24, height: 24)
+                iconCache[item.windowID] = NSImage(cgImage: cg, size: size)
+                captured += 1
+            } else {
+                // Capturing the translucent Tahoe menu bar sometimes returns a blank/black
+                // crop; fall back to the owning app's real icon so we never show an empty box.
+                iconCache[item.windowID] = AppIconProvider.icon(forPID: item.ownerPID)
+                fellBack += 1
+            }
         }
         cachedHiddenOrder = attributed
         windowIDToPID = Dictionary(attributed.map { ($0.windowID, $0.ownerPID) }, uniquingKeysWith: { _, new in new })
-        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; cached \(images.count) icons; cache size=\(iconCache.count)")
+        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack); cache size=\(iconCache.count)")
     }
 
     /// Builds and presents the panel from the cached icons (items are off-screen when the
@@ -290,6 +298,23 @@ final class FloatingBarController {
     /// Milliseconds elapsed since `start`, for the activation-timing log.
     private func ms(from start: Date) -> String {
         "\(Int(Date().timeIntervalSince(start) * 1000))ms"
+    }
+
+    /// Whether a captured glyph is effectively empty (fully transparent) — the failure mode
+    /// when capturing the translucent menu bar goes wrong. Such crops trigger the app-icon
+    /// fallback so the bar never shows a blank box. Samples alpha; cheap for a ~30pt crop.
+    private static func isBlank(_ image: CGImage) -> Bool {
+        let w = image.width, h = image.height
+        guard w > 0, h > 0 else { return true }
+        var alpha = [UInt8](repeating: 0, count: w * h)
+        guard let ctx = CGContext(
+            data: &alpha, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue
+        ) else { return false }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // Consider it blank if fewer than 1% of pixels have any opacity.
+        let opaque = alpha.reduce(0) { $0 + ($1 > 8 ? 1 : 0) }
+        return opaque * 100 < w * h
     }
 
     private func makePanel() -> NSPanel {
