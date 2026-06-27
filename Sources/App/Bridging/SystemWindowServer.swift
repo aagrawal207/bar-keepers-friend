@@ -88,10 +88,14 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         guard item.isClickableOnScreen else {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
-        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+        guard let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .privateState) else {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
         let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        // Status-item hit-testing tracks the real cursor: warp it over the item first, then
+        // post via the session tap (the .cghidEventTap HID layer bypasses the dispatcher that
+        // the menu bar's tracking loop listens on, which is why the old path silently failed).
+        CGWarpMouseCursorPosition(centre)
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
             let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: centre, mouseButton: .left)
@@ -100,7 +104,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         }
         down.setIntegerValueField(.mouseEventClickState, value: 1)
         up.setIntegerValueField(.mouseEventClickState, value: 1)
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        down.post(tap: .cgSessionEventTap)
+        up.post(tap: .cgSessionEventTap)
     }
 }

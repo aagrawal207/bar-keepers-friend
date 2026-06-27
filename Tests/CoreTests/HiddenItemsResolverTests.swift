@@ -4,13 +4,13 @@ import Testing
 
 @Suite struct HiddenItemsResolverTests {
 
-    private func item(id: CGWindowID, x: CGFloat, w: CGFloat = 24, bundle: String? = nil, title: String? = nil) -> MenuBarItemSnapshot {
+    private func item(id: CGWindowID, x: CGFloat, w: CGFloat = 24, h: CGFloat = 22, bundle: String? = nil, title: String? = nil) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(
             windowID: id,
             ownerPID: 1,
             ownerBundleID: bundle,
             title: title,
-            frame: CGRect(x: x, y: 0, width: w, height: 22)
+            frame: CGRect(x: x, y: 0, width: w, height: h)
         )
     }
 
@@ -102,5 +102,35 @@ import Testing
         let twice = HiddenItemsResolver.deduplicateByMidXProximity(once)
         #expect(once.map(\.windowID) == [1, 2, 3])
         #expect(twice == once)
+    }
+
+    @Test func rejectsTallPopupPanelWindow() {
+        // A 450x800 popup panel parked at the status layer is not a menu bar glyph.
+        let items = [item(id: 61264, x: 426, w: 450, h: 800)]
+        #expect(HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 2000).isEmpty)
+    }
+
+    @Test func rejectsOneByOneJunkWindow() {
+        let items = [item(id: 163562, x: 755, w: 1, h: 1)]
+        #expect(HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 2000).isEmpty)
+    }
+
+    @Test func keepsNormalAndNotchHeightIcons() {
+        // 33pt normal item and 24pt notch item are both real glyphs.
+        let items = [item(id: 13745, x: 930, w: 30, h: 33), item(id: 13833, x: 1094, w: 24, h: 24)]
+        let hidden = HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 2000)
+        #expect(hidden.map(\.windowID) == [13745, 13833])
+    }
+
+    @Test func keepsWideButMenuBarTallItem() {
+        // Now Playing / date widgets are wide but menu-bar tall — must NOT be filtered.
+        let items = [item(id: 999, x: 1100, w: 200, h: 33)]
+        #expect(HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 2000).map(\.windowID) == [999])
+    }
+
+    @Test func isPlausibleMenuBarItemBoundaries() {
+        #expect(HiddenItemsResolver.isPlausibleMenuBarItem(item(id: 1, x: 0, w: 24, h: 24)))
+        #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(item(id: 2, x: 0, w: 1, h: 1)))
+        #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(item(id: 3, x: 0, w: 450, h: 800)))
     }
 }

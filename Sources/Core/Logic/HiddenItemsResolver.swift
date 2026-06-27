@@ -30,11 +30,31 @@ public enum HiddenItemsResolver {
         excludingControlItems controlItemWindowIDs: Set<CGWindowID> = []
     ) -> [MenuBarItemSnapshot] {
         items
+            .filter { isPlausibleMenuBarItem($0) }
             .filter { !controlItemWindowIDs.contains($0.windowID) }
             .filter { !isOwnControlItem($0) }
             .filter { !ImmovableItems.isImmovable($0) }
             .filter { $0.frame.maxX <= anchorMinX }
             .sorted { $0.frame.minX < $1.frame.minX }
+    }
+
+    /// Rejects windows that sit at the status-window layer but aren't real menu bar glyphs:
+    /// 1×1 placeholder/junk windows, and tall popover panels (e.g. a clipboard manager's
+    /// 450×800 popup) that an app parks at the status layer. A genuine status item is about
+    /// as tall as the menu bar (notch items report ~24 pt, normal items ~33 pt; test
+    /// fixtures use 22 pt) and at least a few points wide.
+    ///
+    /// Bounds are fixed absolutes, deliberately NOT tied to `NSStatusBar.thickness`: that is a
+    /// single value and can't bracket both the 24 pt notch item and 33 pt normal items within
+    /// one tolerance band. There is no upper width bound — legitimately wide items exist (Now
+    /// Playing, date/time, iStat Menus), and height alone already rejects the popup panels.
+    public static func isPlausibleMenuBarItem(_ item: MenuBarItemSnapshot) -> Bool {
+        let minHeight: CGFloat = 18
+        let maxHeight: CGFloat = 40
+        let minWidth: CGFloat = 6
+        return item.frame.height >= minHeight
+            && item.frame.height <= maxHeight
+            && item.frame.width >= minWidth
     }
 
     /// Whether a snapshot is one of the app's own control items, identified by its window

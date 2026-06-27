@@ -171,7 +171,7 @@ final class FloatingBarController {
         Task { @MainActor in
             await revealHiddenItems?()
             // Give the window server a moment to lay the items back on-screen.
-            try? await Task.sleep(for: .milliseconds(180))
+            try? await Task.sleep(for: .milliseconds(250))
 
             // Re-find the item by window id to get its current (on-screen) frame.
             let snapshots = (try? windowServer.menuBarItems()) ?? []
@@ -181,15 +181,18 @@ final class FloatingBarController {
                 rehideItems?()
                 return
             }
-            // Refresh the cache while items are on-screen (keeps the mirror fresh), then
-            // click. On success the section stays REVEALED so the item's menu can open;
-            // on failure we re-hide so icons don't pile up in the menu bar.
-            await captureAndCache(anchorMinX: lastAnchorMinX)
+            // Primary: press the item's Accessibility element — it opens the owning app's
+            // menu natively. The frame is already fresh from the re-enumeration above, so we
+            // do NOT re-capture here (the full attribution sweep mid-activation only adds
+            // latency and lets the frame drift). On success the section stays REVEALED so the
+            // menu can open; on failure (no AX action) we fall back to a synthesized click.
+            let pressed = await AXActivator.activate(windowID: current.windowID, frame: current.frame)
+            if pressed { return }
             do {
                 try windowServer.click(item: current)
-                DebugLog.log("activate: clicked item \(current.windowID) at \(current.frame)")
+                DebugLog.log("activate: CGEvent fallback clicked \(current.windowID) at \(current.frame)")
             } catch {
-                DebugLog.log("activate: click failed for \(current.windowID): \(error) — re-hiding")
+                DebugLog.log("activate: AX + CGEvent both failed for \(current.windowID): \(error) — re-hiding")
                 rehideItems?()
             }
         }
