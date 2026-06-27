@@ -38,35 +38,79 @@ final class IconCaptureService {
     /// Captures images for the given items, returning window id → image for those that
     /// succeeded. A fully empty result when items were requested signals that Screen
     /// Recording is denied or has lapsed.
+    ///
+    /// Hidden menu bar items are pushed off-screen (negative x), and `SCScreenshotManager`
+    /// cannot render off-screen windows — so we use the legacy `CGWindowListCreateImage`
+    /// path (off-screen-capable) first, falling back to ScreenCaptureKit for any that miss.
     func captureIcons(for items: [MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] {
         guard !items.isEmpty else { return [:] }
-        let wantedIDs = Set(items.map(\.windowID))
 
+        var result: [CGWindowID: CGImage] = [:]
+        var legacyFailed: [CGWindowID] = []
+
+        // Primary path: legacy capture, which works for off-screen windows.
+        for item in items {
+            if let image = LegacyWindowCapture.captureImage(windowID: item.windowID) {
+                result[item.windowID] = image
+            } else {
+                legacyFailed.append(item.windowID)
+            }
+        }
+
+        // Fallback path: ScreenCaptureKit for anything the legacy path missed.
+        if !legacyFailed.isEmpty {
+            let sckResults = await captureViaScreenCaptureKit(windowIDs: Set(legacyFailed))
+            for (id, image) in sckResults { result[id] = image }
+            let stillMissing = legacyFailed.filter { result[$0] == nil }
+            DebugLog.log("capture: legacy got \(items.count - legacyFailed.count)/\(items.count), SCK recovered \(sckResults.count), stillMissing=\(stillMissing.sorted()) legacyAvailable=\(LegacyWindowCapture.isAvailable)")
+        }
+        return result
+    }
+
+    /// Captures a rectangular region of the display by cropping a full-display capture.
+    /// Menu bar status-item glyphs are composited by the window server into the menu bar
+    /// layer, not into each item's own window backing — so a per-window capture comes back
+    /// transparent. Capturing the display and cropping to the item's frame gets real pixels.
+    func captureDisplayRegion(_ rect: CGRect, display: SCDisplay, fullDisplayFrame: CGRect) async -> CGImage? {
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let config = SCStreamConfiguration()
+        let scale = 2 // Retina
+        config.width = Int(fullDisplayFrame.width) * scale
+        config.height = Int(fullDisplayFrame.height) * scale
+        config.showsCursor = false
+        // sourceRect is in points with a top-left origin relative to the display.
+        config.sourceRect = rect
+        config.destinationRect = CGRect(x: 0, y: 0, width: rect.width, height: rect.height)
+        config.width = max(Int(rect.width) * scale, 1)
+        config.height = max(Int(rect.height) * scale, 1)
+        return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
+
+    /// The first available shareable display, if any.
+    func firstDisplay() async -> (SCDisplay, CGRect)? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = content.displays.first else { return nil }
+        return (display, CGRect(x: 0, y: 0, width: CGFloat(display.width), height: CGFloat(display.height)))
+    }
+
+    /// ScreenCaptureKit fallback for the given window ids.
+    private func captureViaScreenCaptureKit(windowIDs: Set<CGWindowID>) async -> [CGWindowID: CGImage] {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         } catch {
             return [:]
         }
-
         let windowsByID = Dictionary(
             content.windows.map { (CGWindowID($0.windowID), $0) },
             uniquingKeysWith: { first, _ in first }
         )
-
         var result: [CGWindowID: CGImage] = [:]
-        var notFound: [CGWindowID] = []
-        var captureFailed: [CGWindowID] = []
-        for id in wantedIDs {
-            guard let window = windowsByID[id] else { notFound.append(id); continue }
+        for id in windowIDs {
+            guard let window = windowsByID[id] else { continue }
             if let image = await captureWindow(window) {
                 result[id] = image
-            } else {
-                captureFailed.append(id)
             }
-        }
-        if !notFound.isEmpty || !captureFailed.isEmpty {
-            DebugLog.log("capture: notFoundInSCK=\(notFound.sorted()) captureReturnedNil=\(captureFailed.sorted()) (SCK listed \(content.windows.count) windows)")
         }
         return result
     }

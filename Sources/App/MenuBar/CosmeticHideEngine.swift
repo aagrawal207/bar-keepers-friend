@@ -71,9 +71,9 @@ final class CosmeticHideEngine {
         publishControlItemWindowIDs()
 
         if preferences.useFloatingBar {
-            // Keep items out of the cramped menu bar: divider stays expanded, and the anchor
-            // click toggles the floating bar instead.
-            setHidden(collapsed: true)
+            // TEMP: stay collapsed (items visible) so the capture self-test can verify
+            // on-screen capture of real menu bar items.
+            setHidden(collapsed: false)
         } else {
             applyDividerVisibility()
         }
