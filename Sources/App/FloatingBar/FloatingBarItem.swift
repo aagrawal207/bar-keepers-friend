@@ -10,10 +10,12 @@ struct FloatingBarItem: Identifiable {
     var id: CGWindowID { snapshot.windowID }
 
     /// A human-readable label for the vertical list. Prefers the Accessibility-attributed
-    /// owner name (a real app name); the window title is unreliable on Tahoe (generic
-    /// "Item-0"), so it's only used if it isn't that placeholder.
+    /// name: either the owning app ("Maccy") or, for Control Center modules, the module's own
+    /// title ("Wi-Fi", "Battery"), which attribution now resolves — so "Control Center" is
+    /// trusted here rather than discarded. The window title is unreliable on Tahoe (generic
+    /// "Item-0"), so it's only a fallback when attribution found nothing.
     var displayName: String {
-        if let owner = snapshot.ownerBundleID, !owner.isEmpty, owner != "Control Center" {
+        if let owner = snapshot.ownerBundleID, !owner.isEmpty {
             return owner
         }
         if let title = snapshot.title, !title.isEmpty, !title.hasPrefix("Item-") {

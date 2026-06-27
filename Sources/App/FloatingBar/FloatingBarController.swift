@@ -35,6 +35,9 @@ final class FloatingBarController {
     private var iconCache: [CGWindowID: NSImage] = [:]
     /// The hidden items in display order at the time of the last capture.
     private var cachedHiddenOrder: [MenuBarItemSnapshot] = []
+    /// Maps each cached item's window id to the owning app pid resolved by attribution, so
+    /// activation can query that one app directly instead of sweeping every running app.
+    private var windowIDToPID: [CGWindowID: pid_t] = [:]
     /// The anchor's leading edge from the most recent capture/show, reused when re-hiding
     /// after an activation.
     private var lastAnchorMinX: CGFloat = 0
@@ -87,6 +90,7 @@ final class FloatingBarController {
             iconCache[id] = NSImage(cgImage: cg, size: size)
         }
         cachedHiddenOrder = attributed
+        windowIDToPID = Dictionary(attributed.map { ($0.windowID, $0.ownerPID) }, uniquingKeysWith: { _, new in new })
         DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; cached \(images.count) icons; cache size=\(iconCache.count)")
     }
 
@@ -186,11 +190,15 @@ final class FloatingBarController {
             // do NOT re-capture here (the full attribution sweep mid-activation only adds
             // latency and lets the frame drift). On success the section stays REVEALED so the
             // menu can open; on failure (no AX action) we fall back to a synthesized click.
-            let pressed = await AXActivator.activate(windowID: current.windowID, frame: current.frame)
+            let pid = windowIDToPID[current.windowID] ?? current.ownerPID
+            let pressed = await AXActivator.activate(windowID: current.windowID, pid: pid, frame: current.frame)
             if pressed { return }
             do {
-                try windowServer.click(item: current)
-                DebugLog.log("activate: CGEvent fallback clicked \(current.windowID) at \(current.frame)")
+                // The AX attempt can take a moment; re-read the frame right before posting so
+                // the synthesized click lands on the item's current position, not a stale one.
+                let fresh = (try? windowServer.menuBarItems())?.first { $0.windowID == current.windowID } ?? current
+                try windowServer.click(item: fresh)
+                DebugLog.log("activate: CGEvent fallback clicked \(fresh.windowID) at \(fresh.frame)")
             } catch {
                 DebugLog.log("activate: AX + CGEvent both failed for \(current.windowID): \(error) — re-hiding")
                 rehideItems?()

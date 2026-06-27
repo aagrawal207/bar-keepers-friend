@@ -44,34 +44,53 @@ enum AXAttributionProvider {
         _ snapshots: [MenuBarItemSnapshot],
         apps: [(pid: pid_t, name: String)]
     ) -> [MenuBarItemSnapshot] {
-        // Build a list of (midX, appName) for every menu bar extra of every running app.
-        var extras: [(midX: CGFloat, name: String)] = []
+        // Collect every menu bar extra of every running app: its left edge, a display label,
+        // and the owning pid. The label is the app name, except for Control Center modules
+        // (which all report "Control Center") where we read the element's own title so the
+        // user sees "Wi-Fi", "Battery", etc. instead of a wall of identical names.
+        var extras: [(leftEdge: CGFloat, label: String, pid: pid_t)] = []
         for app in apps {
             let axApp = AXUIElementCreateApplication(app.pid)
             // Cap each app's Accessibility IPC. Without a timeout a single hung or slow app
             // would stretch the sweep to the system default (~6s+) per app.
             AXUIElementSetMessagingTimeout(axApp, 1.5)
             guard let extrasMenu = copyElement(axApp, attribute: "AXExtrasMenuBar") else { continue }
+            let isControlCenter = app.name == "Control Center"
             for child in copyChildren(extrasMenu) {
-                if let position = copyPosition(child) {
-                    extras.append((midX: position.x, name: app.name))
+                guard let position = copyPosition(child) else { continue }
+                var label = app.name
+                if isControlCenter, let title = moduleLabel(child) {
+                    label = title
                 }
+                extras.append((leftEdge: position.x, label: label, pid: app.pid))
             }
         }
         guard !extras.isEmpty else { return snapshots }
 
-        let tolerance: CGFloat = 12
-        return snapshots.map { snapshot in
-            // Match the closest extra whose x is within tolerance of the item's left edge
-            // (AX position is the element's top-left; the window frame minX aligns closely).
-            let best = extras.min { a, b in
-                abs(a.midX - snapshot.frame.minX) < abs(b.midX - snapshot.frame.minX)
-            }
-            if let best, abs(best.midX - snapshot.frame.minX) <= tolerance {
-                return snapshot.attributed(bundleID: best.name, pid: snapshot.ownerPID)
-            }
-            return snapshot
+        // Assign each item to at most one extra (1:1, nearest-wins) so two items near the same
+        // extra don't both claim it — that was the cause of duplicate names in the bar.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: snapshots.map { $0.frame.minX },
+            extraLeftEdges: extras.map { $0.leftEdge }
+        )
+        return snapshots.enumerated().map { index, snapshot in
+            guard let extraIndex = assignment[index] else { return snapshot }
+            let extra = extras[extraIndex]
+            return snapshot.attributed(bundleID: extra.label, pid: extra.pid)
         }
+    }
+
+    /// Reads a human label for a Control Center module from its Accessibility element, trying
+    /// title then description. Returns `nil` if neither is present or it's the generic
+    /// "Item-N" placeholder, so the caller can fall back to the app name.
+    private static func moduleLabel(_ element: AXUIElement) -> String? {
+        for attribute in [kAXTitleAttribute as String, kAXDescriptionAttribute as String] {
+            if let value = copyString(element, attribute: attribute),
+               !value.isEmpty, !value.hasPrefix("Item-") {
+                return value
+            }
+        }
+        return nil
     }
 
     // MARK: - AX helpers
@@ -97,5 +116,11 @@ enum AXAttributionProvider {
         var point = CGPoint.zero
         guard AXValueGetValue(axValue as! AXValue, .cgPoint, &point) else { return nil }
         return point
+    }
+
+    private static func copyString(_ element: AXUIElement, attribute: String) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value as? String
     }
 }
