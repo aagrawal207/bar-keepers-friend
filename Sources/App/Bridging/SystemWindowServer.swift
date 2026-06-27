@@ -92,6 +92,10 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
         let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        // Save the cursor's current position BEFORE warping, in CG global (top-left) space —
+        // the same space as `centre` and the warp, so no coordinate flip and multi-display
+        // safe. (NSEvent.mouseLocation is AppKit bottom-left and would need per-screen flipping.)
+        let savedCursor = CGEvent(source: nil)?.location
         // Status-item hit-testing tracks the real cursor: warp it over the item first, then
         // post via the session tap (the .cghidEventTap HID layer bypasses the dispatcher that
         // the menu bar's tracking loop listens on, which is why the old path silently failed).
@@ -106,5 +110,12 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         up.setIntegerValueField(.mouseEventClickState, value: 1)
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
+        // Return the cursor to where the user left it, so it doesn't stay parked in the menu
+        // bar (the visible "glitch"). The warp emits no move event and the just-opened menu's
+        // modal loop doesn't dismiss on cursor motion, so this is safe with no delay. Restore
+        // only if the pre-warp read succeeded — never warp to a fabricated point.
+        if let savedCursor {
+            CGWarpMouseCursorPosition(savedCursor)
+        }
     }
 }
