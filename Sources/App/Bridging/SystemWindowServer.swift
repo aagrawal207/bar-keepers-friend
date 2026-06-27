@@ -68,10 +68,37 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     }
 
     func move(item: MenuBarItemSnapshot, toX targetX: CGFloat) throws {
-        throw WindowServerError.invalidServerResponse("move() not implemented in read-only foundation")
+        throw WindowServerError.invalidServerResponse("move() not implemented")
     }
 
+    /// Synthesizes a left click at the centre of the item's frame.
+    ///
+    /// The item must be ON-SCREEN: a click at an off-screen point would open the item's menu
+    /// off-screen. The floating bar therefore reveals the hidden section before routing a
+    /// click here. Requires Accessibility permission to post events into other processes.
+    ///
+    /// Menu bar item frames are already in the top-left global coordinate space that
+    /// `CGEvent` mouse positions use, so no flipping is needed.
     func click(item: MenuBarItemSnapshot) throws {
-        throw WindowServerError.invalidServerResponse("click() not implemented in read-only foundation")
+        guard AXIsProcessTrusted() else {
+            throw WindowServerError.missingPermission(.accessibility)
+        }
+        guard item.isClickableOnScreen else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+        let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        guard
+            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
+            let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: centre, mouseButton: .left)
+        else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 }

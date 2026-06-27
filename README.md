@@ -10,11 +10,20 @@ built ground-up for macOS 26 (Tahoe).
 
 Early development. Built in phases, robust core first:
 
-- **Phase 0** — project skeleton, protocol seams, agent-app shell. *(in progress)*
+- **Phase 0** — project skeleton, protocol seams, agent-app shell. ✅
 - **Phase 1** — cosmetic hide/show that needs **zero permissions and zero private APIs**.
-  This is the baseline that keeps working even if Apple changes the private menu-bar internals.
-- **Phase 2+** — per-item control, search, and a notch-overflow bar (these require
-  Accessibility / Screen Recording permissions and private window-server APIs).
+  The baseline that keeps working even if Apple changes the private menu-bar internals. ✅
+- **Phase 2** — floating bar that mirrors hidden icons below the menu bar (horizontal strip
+  or vertical list), so a too-narrow (notched) menu bar isn't relied on to show items.
+  Clicking a mirrored icon reveals the section and triggers the real item. Needs Screen
+  Recording (to capture icon images) + Accessibility (to click). ✅
+
+### How it works
+
+The menu bar can't always fit every icon (especially around the notch), so revealed items
+appear in a floating bar instead. Because a macOS status item can only be captured while
+on-screen — and not at all once pushed off — the app captures each icon's image **before**
+hiding it and shows the cached images in the floating bar.
 
 ## Design
 

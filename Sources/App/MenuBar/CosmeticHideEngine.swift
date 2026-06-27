@@ -70,6 +70,15 @@ final class CosmeticHideEngine {
         // Tell the floating bar which windows are ours, so they're excluded from mirroring.
         publishControlItemWindowIDs()
 
+        // Let the floating bar reveal/re-hide the section so it can click real items
+        // (which must be on-screen to receive a click).
+        floatingBar?.revealHiddenItems = { [weak self] in
+            await self?.revealForActivation()
+        }
+        floatingBar?.rehideItems = { [weak self] in
+            self?.setHidden(collapsed: true)
+        }
+
         if preferences.useFloatingBar {
             // Items must be captured while on-screen (status items can't be captured once
             // off-screen). So: start visible, capture+cache, THEN hide.
@@ -77,12 +86,9 @@ final class CosmeticHideEngine {
             Task { @MainActor in
                 // Let the menu bar settle, then capture the soon-to-be-hidden items.
                 try? await Task.sleep(for: .milliseconds(800))
-                let minX = anchorFrame?.minX ?? 1115
-                DebugLog.log("launch: capturing before hide, anchorMinX=\(minX)")
-                await floatingBar?.captureAndCache(anchorMinX: minX)
+                await floatingBar?.captureAndCache(anchorMinX: anchorFrame?.minX ?? 1115)
                 // Now hide them; the floating bar will show the cached images.
                 setHidden(collapsed: true)
-                DebugLog.log("launch: hidden after capture")
             }
         } else {
             applyDividerVisibility()
@@ -127,14 +133,15 @@ final class CosmeticHideEngine {
     func apply(preferences: Preferences) {
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
-        hiddenDivider?.button?.image = preferences.showSectionDividers ? Self.dividerImage() : Self.dividerImage()
+        // Show the divider glyph only when section dividers are enabled; otherwise keep it
+        // imageless so the boundary is invisible.
+        hiddenDivider?.button?.image = preferences.showSectionDividers ? Self.dividerImage() : nil
     }
 
     // MARK: - Actions
 
     @objc private func anchorClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
-        DebugLog.log("anchor clicked: eventType=\(event?.type.rawValue.description ?? "nil") useFloatingBar=\(preferences.useFloatingBar) hasBar=\(floatingBar != nil)")
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             onOpenSettings?()
             return
@@ -157,6 +164,14 @@ final class CosmeticHideEngine {
         let intents = stateMachine.apply(.toggle(.hidden))
         enact(intents)
         scheduleAutoRehideIfNeeded()
+    }
+
+    /// Reveals the hidden section so a real item can be clicked on-screen. Updates the state
+    /// machine to `.shown` and returns after a short settle delay.
+    func revealForActivation() async {
+        _ = stateMachine.apply(.show(.hidden))
+        setHidden(collapsed: false)
+        try? await Task.sleep(for: .milliseconds(120))
     }
 
     private func enact(_ intents: [HideShowStateMachine.Intent]) {
@@ -206,6 +221,22 @@ final class CosmeticHideEngine {
 
     @objc private func screenParametersChanged() {
         enact(stateMachine.apply(.screenParametersChanged))
+        // The menu bar geometry changed (display added/removed, resolution change). Refresh
+        // the mirror: reveal briefly, re-capture on-screen, then re-hide.
+        guard preferences.useFloatingBar else { return }
+        refreshFloatingBarCache()
+    }
+
+    /// Reveals the section, re-captures the now-on-screen items into the floating bar cache,
+    /// then hides them again. Used after menu bar changes so the mirror stays current.
+    func refreshFloatingBarCache() {
+        guard preferences.useFloatingBar, let bar = floatingBar else { return }
+        Task { @MainActor in
+            setHidden(collapsed: false)
+            try? await Task.sleep(for: .milliseconds(250))
+            await bar.captureAndCache(anchorMinX: anchorFrame?.minX ?? 1115)
+            setHidden(collapsed: true)
+        }
     }
 
     // MARK: - Images

@@ -47,6 +47,12 @@ public extension MenuBarItemSnapshot {
     /// The menu bar lays out right-to-left, so a larger `midX` sits further right.
     var midX: CGFloat { frame.midX }
 
+    /// Whether the item is positioned on-screen and so can receive a synthesized click.
+    /// Items pushed off-screen by the hidden divider (negative x) must be revealed first.
+    var isClickableOnScreen: Bool {
+        frame.minX >= 0 && frame.width > 0
+    }
+
     /// Returns a copy with the owner attribution filled in.
     func attributed(bundleID: String?, pid: pid_t) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(

@@ -20,6 +20,12 @@ final class FloatingBarController {
     /// Current preferences (style, etc.). Updated by the coordinator.
     var preferences: Preferences
 
+    /// Reveals the hidden section (brings items on-screen) and returns once they should be
+    /// laid out. Set by the engine. Needed because an item can only be clicked on-screen.
+    var revealHiddenItems: (() async -> Void)?
+    /// Re-hides the section after an action. Set by the engine.
+    var rehideItems: (() -> Void)?
+
     private(set) var isVisible = false
 
     /// Cached icon images keyed by window id. Status items can only be captured while
@@ -27,6 +33,9 @@ final class FloatingBarController {
     private var iconCache: [CGWindowID: NSImage] = [:]
     /// The hidden items in display order at the time of the last capture.
     private var cachedHiddenOrder: [MenuBarItemSnapshot] = []
+    /// The anchor's leading edge from the most recent capture/show, reused when re-hiding
+    /// after an activation.
+    private var lastAnchorMinX: CGFloat = 0
 
     init(
         windowServer: WindowServer,
@@ -54,6 +63,7 @@ final class FloatingBarController {
     /// status items cannot be captured. The engine calls this just before expanding the
     /// divider, and refreshes it whenever the menu bar changes.
     func captureAndCache(anchorMinX: CGFloat) async {
+        lastAnchorMinX = anchorMinX
         let snapshots = (try? windowServer.menuBarItems()) ?? []
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
@@ -72,12 +82,9 @@ final class FloatingBarController {
         DebugLog.log("floatingbar: cached \(images.count)/\(hidden.count) icons; cache size=\(iconCache.count)")
     }
 
-    /// Builds and presents the panel.
+    /// Builds and presents the panel from the cached icons (items are off-screen when the
+    /// bar is shown, so they can't be re-captured here — the cache is populated before hide).
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
-        DebugLog.log("floatingbar: show(anchorMinX=\(anchorMinX), anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
-        // Try a fresh capture first (covers the case where items are still visible); fall
-        // back to the cache for items that are now off-screen.
-        await captureAndCache(anchorMinX: anchorMinX)
         let items = buildItemsFromCache()
 
         let screen = NSScreen.main ?? NSScreen.screens.first
@@ -117,7 +124,6 @@ final class FloatingBarController {
         panel.orderFrontRegardless()
         self.panel = panel
         isVisible = true
-        DebugLog.log("floatingbar: presented panel with \(items.count) items at \(panelFrame)")
     }
 
     func hide() {
@@ -135,9 +141,38 @@ final class FloatingBarController {
         }
     }
 
-    /// Click routing is implemented in the next step; for now this is a safe no-op.
+    /// Activates the real menu bar item behind a mirrored icon.
+    ///
+    /// The real item is off-screen while hidden, and a status item can only be clicked
+    /// on-screen (its menu would otherwise open off-screen). So: hide our panel, reveal the
+    /// section, re-enumerate to get the item's now-on-screen frame, synthesize a click on
+    /// it, then leave the section revealed (the user is now interacting with the real menus).
     private func activate(_ item: FloatingBarItem) {
-        try? windowServer.click(item: item.snapshot)
+        hide()
+        Task { @MainActor in
+            await revealHiddenItems?()
+            // Give the window server a moment to lay the items back on-screen.
+            try? await Task.sleep(for: .milliseconds(180))
+
+            // Re-find the item by window id to get its current (on-screen) frame.
+            let snapshots = (try? windowServer.menuBarItems()) ?? []
+            let current = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
+            guard current.isClickableOnScreen else {
+                DebugLog.log("activate: item \(item.snapshot.windowID) still off-screen after reveal; aborting click")
+                return
+            }
+            do {
+                try windowServer.click(item: current)
+                DebugLog.log("activate: clicked item \(current.windowID) at \(current.frame)")
+            } catch {
+                DebugLog.log("activate: click failed for \(current.windowID): \(error)")
+            }
+
+            // Refresh the cache while items are on-screen, then re-hide so the menu bar
+            // returns to its tidy state. The item's own menu (if any) stays open.
+            await captureAndCache(anchorMinX: lastAnchorMinX)
+            rehideItems?()
+        }
     }
 
     private func makePanel() -> NSPanel {
