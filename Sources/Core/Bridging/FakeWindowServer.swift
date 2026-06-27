@@ -55,4 +55,7 @@ public final class FakeWindowServer: WindowServer, @unchecked Sendable {
     public func click(item: MenuBarItemSnapshot) throws {
         clickedWindowIDs.append(item.windowID)
     }
+
+    /// Test-controllable permission state; defaults to granted.
+    public var canSynthesizeClicks: Bool = true
 }

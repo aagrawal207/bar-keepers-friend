@@ -79,6 +79,8 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     ///
     /// Menu bar item frames are already in the top-left global coordinate space that
     /// `CGEvent` mouse positions use, so no flipping is needed.
+    var canSynthesizeClicks: Bool { AXIsProcessTrusted() }
+
     func click(item: MenuBarItemSnapshot) throws {
         guard AXIsProcessTrusted() else {
             throw WindowServerError.missingPermission(.accessibility)

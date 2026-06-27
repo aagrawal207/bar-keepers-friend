@@ -25,6 +25,8 @@ final class FloatingBarController {
     var revealHiddenItems: (() async -> Void)?
     /// Re-hides the section after an action. Set by the engine.
     var rehideItems: (() -> Void)?
+    /// Invoked when an activation needs Accessibility permission that isn't granted.
+    var onNeedsAccessibility: (() -> Void)?
 
     private(set) var isVisible = false
 
@@ -71,14 +73,16 @@ final class FloatingBarController {
             excludingControlItems: controlItemWindowIDs
         )
         guard !hidden.isEmpty else { return }
-        let images = await capture.captureIcons(for: hidden)
+        // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
+        let attributed = AXAttributionProvider.attribute(hidden)
+        let images = await capture.captureIcons(for: attributed)
         // Merge into the cache so items briefly off-screen keep their last good image.
         for (id, cg) in images {
-            let item = hidden.first { $0.windowID == id }
+            let item = attributed.first { $0.windowID == id }
             let size = item?.frame.size ?? CGSize(width: 24, height: 24)
             iconCache[id] = NSImage(cgImage: cg, size: size)
         }
-        cachedHiddenOrder = hidden
+        cachedHiddenOrder = attributed
         DebugLog.log("floatingbar: cached \(images.count)/\(hidden.count) icons; cache size=\(iconCache.count)")
     }
 
@@ -145,9 +149,16 @@ final class FloatingBarController {
     ///
     /// The real item is off-screen while hidden, and a status item can only be clicked
     /// on-screen (its menu would otherwise open off-screen). So: hide our panel, reveal the
-    /// section, re-enumerate to get the item's now-on-screen frame, synthesize a click on
-    /// it, then leave the section revealed (the user is now interacting with the real menus).
+    /// section, re-enumerate for the item's now-on-screen frame, synthesize a click, and
+    /// leave the section revealed so the menu can open. Clicking needs Accessibility — if
+    /// it's missing we must NOT reveal (that would strand every icon in the menu bar), so we
+    /// check first and route the user to grant it.
     private func activate(_ item: FloatingBarItem) {
+        guard windowServer.canSynthesizeClicks else {
+            DebugLog.log("activate: Accessibility not granted — requesting, not revealing")
+            onNeedsAccessibility?()
+            return
+        }
         hide()
         Task { @MainActor in
             await revealHiddenItems?()
@@ -158,19 +169,20 @@ final class FloatingBarController {
             let snapshots = (try? windowServer.menuBarItems()) ?? []
             let current = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
             guard current.isClickableOnScreen else {
-                DebugLog.log("activate: item \(item.snapshot.windowID) still off-screen after reveal; aborting click")
+                DebugLog.log("activate: item \(item.snapshot.windowID) still off-screen after reveal; re-hiding")
+                rehideItems?()
                 return
             }
-            // Refresh the cache while the items are on-screen (cheap, keeps mirror fresh),
-            // then click. The section stays REVEALED so the item's menu can open and the
-            // user can interact with it — re-hiding now would dismiss the menu. The section
-            // re-hides on the next anchor toggle or auto-rehide.
+            // Refresh the cache while items are on-screen (keeps the mirror fresh), then
+            // click. On success the section stays REVEALED so the item's menu can open;
+            // on failure we re-hide so icons don't pile up in the menu bar.
             await captureAndCache(anchorMinX: lastAnchorMinX)
             do {
                 try windowServer.click(item: current)
                 DebugLog.log("activate: clicked item \(current.windowID) at \(current.frame)")
             } catch {
-                DebugLog.log("activate: click failed for \(current.windowID): \(error)")
+                DebugLog.log("activate: click failed for \(current.windowID): \(error) — re-hiding")
+                rehideItems?()
             }
         }
     }

@@ -25,6 +25,11 @@ public protocol WindowServer: Sendable {
 
     /// Synthesizes a click on the given status item.
     func click(item: MenuBarItemSnapshot) throws
+
+    /// Whether the app currently has the permission needed to synthesize clicks into other
+    /// processes (Accessibility). Checked before revealing items for an activation, so the
+    /// app never reveals (stranding icons in the menu bar) when the click would fail.
+    var canSynthesizeClicks: Bool { get }
 }
 
 /// Errors a `WindowServer` can surface. Distinguishing these lets the app decide between a

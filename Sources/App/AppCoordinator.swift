@@ -41,6 +41,7 @@ final class AppCoordinator {
         engine.floatingBar = bar
         engine.install()
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
+        bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         hideEngine = engine
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
