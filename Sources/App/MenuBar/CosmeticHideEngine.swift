@@ -82,10 +82,19 @@ final class CosmeticHideEngine {
 
     /// Reports the app's own status-item window numbers to the floating bar so it never
     /// mirrors the anchor or divider.
+    ///
+    /// `windowNumber` is an `Int` and can be 0, negative, or an out-of-range sentinel before
+    /// the status-item window is realized; `CGWindowID` is a `UInt32`, so a force-conversion
+    /// traps. We convert safely and skip any value that doesn't fit. The set is also
+    /// refreshed right before the bar is shown, by which point the windows definitely exist.
     private func publishControlItemWindowIDs() {
         var ids: Set<CGWindowID> = []
-        if let n = anchorItem?.button?.window?.windowNumber, n > 0 { ids.insert(CGWindowID(n)) }
-        if let n = hiddenDivider?.button?.window?.windowNumber, n > 0 { ids.insert(CGWindowID(n)) }
+        for window in [anchorItem?.button?.window, hiddenDivider?.button?.window] {
+            if let number = window?.windowNumber,
+               let id = WindowIDConversion.cgWindowID(fromWindowNumber: number) {
+                ids.insert(id)
+            }
+        }
         floatingBar?.controlItemWindowIDs = ids
     }
 
@@ -122,6 +131,8 @@ final class CosmeticHideEngine {
             return
         }
         if preferences.useFloatingBar, let bar = floatingBar {
+            // Refresh now that the windows are fully realized, so our own items are excluded.
+            publishControlItemWindowIDs()
             let anchorX = anchorRightX
             Task { await bar.toggle(anchorRightX: anchorX) }
         } else {
