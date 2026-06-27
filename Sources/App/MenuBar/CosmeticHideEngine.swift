@@ -87,7 +87,9 @@ final class CosmeticHideEngine {
                 // Let the menu bar settle, then capture the soon-to-be-hidden items.
                 try? await Task.sleep(for: .milliseconds(800))
                 await floatingBar?.captureAndCache(anchorMinX: anchorFrame?.minX ?? 1115)
-                // Now hide them; the floating bar will show the cached images.
+                // Now hide them; the floating bar will show the cached images. Sync the
+                // state machine so the first anchor click toggles from a hidden baseline.
+                _ = stateMachine.apply(.hide(.hidden))
                 setHidden(collapsed: true)
             }
         } else {
@@ -149,6 +151,14 @@ final class CosmeticHideEngine {
         if preferences.useFloatingBar, let bar = floatingBar {
             // Refresh now that the windows are fully realized, so our own items are excluded.
             publishControlItemWindowIDs()
+            // If a prior activation left the section revealed in the menu bar, the anchor
+            // should tidy it back up (re-hide) rather than show a redundant panel.
+            if stateMachine.visibility(of: .hidden) == .shown {
+                _ = stateMachine.apply(.hide(.hidden))
+                bar.hide()
+                setHidden(collapsed: true)
+                return
+            }
             let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
             Task { await bar.toggle(anchorMinX: frame.minX, anchorRightX: frame.maxX) }
         } else {

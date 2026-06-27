@@ -161,17 +161,17 @@ final class FloatingBarController {
                 DebugLog.log("activate: item \(item.snapshot.windowID) still off-screen after reveal; aborting click")
                 return
             }
+            // Refresh the cache while the items are on-screen (cheap, keeps mirror fresh),
+            // then click. The section stays REVEALED so the item's menu can open and the
+            // user can interact with it — re-hiding now would dismiss the menu. The section
+            // re-hides on the next anchor toggle or auto-rehide.
+            await captureAndCache(anchorMinX: lastAnchorMinX)
             do {
                 try windowServer.click(item: current)
                 DebugLog.log("activate: clicked item \(current.windowID) at \(current.frame)")
             } catch {
                 DebugLog.log("activate: click failed for \(current.windowID): \(error)")
             }
-
-            // Refresh the cache while items are on-screen, then re-hide so the menu bar
-            // returns to its tidy state. The item's own menu (if any) stays open.
-            await captureAndCache(anchorMinX: lastAnchorMinX)
-            rehideItems?()
         }
     }
 
