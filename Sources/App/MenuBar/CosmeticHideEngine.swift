@@ -30,7 +30,11 @@ final class CosmeticHideEngine {
         self.onPreferencesChanged = onPreferencesChanged
         self.stateMachine = HideShowStateMachine(
             sections: MenuBarSection.phase1,
-            autoRehideSections: preferences.autoRehide ? [.hidden] : []
+            autoRehideSections: preferences.autoRehide ? [.hidden] : [],
+            // Launch showing everything: the divider stays at its natural width so the
+            // anchor is visible and nothing is hidden until the user clicks. Expanding on
+            // launch would overflow a notched menu bar and drop the items off-screen.
+            initialVisibility: .shown
         )
     }
 

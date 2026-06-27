@@ -45,11 +45,12 @@ public struct HideShowStateMachine: Equatable, Sendable {
 
     public init(
         sections: [MenuBarSection] = MenuBarSection.phase1,
-        autoRehideSections: Set<MenuBarSection> = [.hidden]
+        autoRehideSections: Set<MenuBarSection> = [.hidden],
+        initialVisibility: Visibility = .collapsed
     ) {
         var initial: [MenuBarSection: Visibility] = [:]
         for section in sections where section != .visible {
-            initial[section] = .collapsed
+            initial[section] = initialVisibility
         }
         self.visibilities = initial
         self.autoRehideSections = autoRehideSections

@@ -8,6 +8,13 @@ import Testing
         #expect(machine.visibility(of: .hidden) == .collapsed)
     }
 
+    @Test func initialVisibilityShownLeavesSectionsShown() {
+        // The engine launches with everything shown so a notched menu bar never has an
+        // expanded (overflowing) divider on startup.
+        let machine = HideShowStateMachine(initialVisibility: .shown)
+        #expect(machine.visibility(of: .hidden) == .shown)
+    }
+
     @Test func visibleSectionIsAlwaysShown() {
         var machine = HideShowStateMachine()
         #expect(machine.visibility(of: .visible) == .shown)
