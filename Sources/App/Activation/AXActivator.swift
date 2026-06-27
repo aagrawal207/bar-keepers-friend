@@ -19,6 +19,17 @@ import BarKeepersFriendCore
 /// non-Sendable CF type) never crosses an actor boundary — only `pid_t` in and `Bool` out.
 enum AXActivator {
 
+    /// Outcome of attempting to press the matching extra within a set of apps.
+    private enum PressOutcome {
+        /// An action succeeded — the menu opened.
+        case pressed
+        /// The element was found (or had drifted) but no action worked. Sweeping other apps
+        /// is pointless: the element is right, it just isn't pressable that way.
+        case matchedNoAction
+        /// No extra matched in these apps — a wider sweep may locate it.
+        case noMatch
+    }
+
     /// Attempts to press the menu bar element matching `frame`, preferring the app `pid` when
     /// known. Returns whether a press succeeded. The item must already be on-screen (revealed)
     /// so the app opens its menu in the visible menu bar rather than off-screen.
@@ -27,13 +38,23 @@ enum AXActivator {
 
         // Single-app fast path: query only the owning app.
         if pid > 0 {
-            let pressed = await Task.detached(priority: .userInitiated) {
+            let outcome = await Task.detached(priority: .userInitiated) {
                 pressMatchingChild(in: [pid], windowID: windowID, frame: targetFrame, timeout: 0.5)
             }.value
-            if pressed { return true }
+            switch outcome {
+            case .pressed:
+                return true
+            case .matchedNoAction:
+                // Correct element, unsupported action. Don't sweep (it would re-find and
+                // re-fail the same element, the multi-second slow path); hand off to the
+                // caller's frame-based CGEvent fallback, which also fixes a wrong-pid match.
+                return false
+            case .noMatch:
+                break // attribution gave no/wrong pid — a full sweep may locate it
+            }
         }
 
-        // Fallback: attribution didn't give a usable pid (or the single-app match failed).
+        // Fallback: attribution didn't give a usable pid (or found nothing in it).
         // Sweep all apps, accumulating candidates so the global nearest wins.
         let pids: [pid_t] = await MainActor.run {
             NSWorkspace.shared.runningApplications.compactMap { app in
@@ -42,7 +63,7 @@ enum AXActivator {
             }
         }
         return await Task.detached(priority: .userInitiated) {
-            pressMatchingChild(in: pids, windowID: windowID, frame: targetFrame, timeout: 1.5)
+            pressMatchingChild(in: pids, windowID: windowID, frame: targetFrame, timeout: 1.5) == .pressed
         }.value
     }
 
@@ -54,7 +75,7 @@ enum AXActivator {
         windowID: CGWindowID,
         frame targetFrame: CGRect,
         timeout: Float
-    ) -> Bool {
+    ) -> PressOutcome {
         var candidates: [(leftEdge: CGFloat, value: AXUIElement)] = []
         for pid in pids {
             let axApp = AXUIElementCreateApplication(pid)
@@ -68,22 +89,47 @@ enum AXActivator {
         }
         guard let child = MenuBarExtraMatcher.nearest(to: targetFrame.minX, among: candidates) else {
             DebugLog.log("AXActivator: no actionable element for \(windowID) at \(targetFrame)")
-            return false
+            return .noMatch
         }
         // Re-read the matched element's live position; if it has drifted out of tolerance the
         // frame was stale (or a pid was reused for a different app) — don't press the wrong one.
         if let live = copyPosition(child), abs(live.x - targetFrame.minX) > MenuBarExtraMatcher.tolerance {
             DebugLog.log("AXActivator: matched element drifted for \(windowID) (live \(live.x) vs \(targetFrame.minX))")
-            return false
+            return .matchedNoAction
         }
         for action in [kAXPressAction as String, "AXShowMenu"] {
             if AXUIElementPerformAction(child, action as CFString) == .success {
                 DebugLog.log("AXActivator: \(action) succeeded for \(windowID)")
-                return true
+                return .pressed
+            }
+        }
+        // Some extras (e.g. Control Center module groups) aren't pressable themselves but wrap
+        // a pressable child. Try the position-matched child so we don't press the wrong module.
+        if let pressable = nearestPressableChild(of: child, targetMinX: targetFrame.minX) {
+            for action in [kAXPressAction as String, "AXShowMenu"] {
+                if AXUIElementPerformAction(pressable, action as CFString) == .success {
+                    DebugLog.log("AXActivator: \(action) succeeded on child of \(windowID)")
+                    return .pressed
+                }
             }
         }
         DebugLog.log("AXActivator: element matched but no action succeeded for \(windowID)")
-        return false
+        return .matchedNoAction
+    }
+
+    /// Among `element`'s direct children that advertise a press action, returns the one whose
+    /// left edge is nearest `targetMinX` within tolerance — so a multi-control group (Control
+    /// Center) is never pressed on the wrong child.
+    private static func nearestPressableChild(of element: AXUIElement, targetMinX: CGFloat) -> AXUIElement? {
+        var candidates: [(leftEdge: CGFloat, value: AXUIElement)] = []
+        for child in copyChildren(element) {
+            var actions: CFArray?
+            guard AXUIElementCopyActionNames(child, &actions) == .success,
+                  let names = actions as? [String], names.contains(kAXPressAction as String),
+                  let position = copyPosition(child) else { continue }
+            candidates.append((leftEdge: position.x, value: child))
+        }
+        return MenuBarExtraMatcher.nearest(to: targetMinX, among: candidates)
     }
 
     // MARK: - AX helpers

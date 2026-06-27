@@ -90,6 +90,16 @@ enum AXAttributionProvider {
                 return value
             }
         }
+        // Some Control Center modules wrap their label one level down (the matched extra is a
+        // container). Descend a single level before giving up.
+        for child in copyChildren(element) {
+            for attribute in [kAXTitleAttribute as String, kAXDescriptionAttribute as String] {
+                if let value = copyString(child, attribute: attribute),
+                   !value.isEmpty, !value.hasPrefix("Item-") {
+                    return value
+                }
+            }
+        }
         return nil
     }
 

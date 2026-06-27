@@ -78,6 +78,9 @@ final class CosmeticHideEngine {
         floatingBar?.rehideItems = { [weak self] in
             self?.setHidden(collapsed: true)
         }
+        floatingBar?.scheduleAutoRehideAfterActivation = { [weak self] in
+            self?.scheduleAutoRehideAfterActivation()
+        }
 
         if preferences.useFloatingBar {
             // Items must be captured while on-screen (status items can't be captured once
@@ -215,6 +218,24 @@ final class CosmeticHideEngine {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
+        }
+        autoRehideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
+    }
+
+    /// Arms the user-configured auto-rehide after a floating-bar activation revealed the
+    /// section. After the delay it collapses the hidden section and dismisses the mirror
+    /// panel. No-op when the user disabled auto-rehide; re-arming cancels any prior timer.
+    ///
+    /// This is the floating-bar counterpart to `scheduleAutoRehideIfNeeded` (which only runs
+    /// in the legacy reflow-into-menu-bar mode via `toggleHidden`).
+    func scheduleAutoRehideAfterActivation() {
+        autoRehideWorkItem?.cancel()
+        guard preferences.autoRehide else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.enact(self.stateMachine.apply(.autoRehide))
+            self.floatingBar?.hide()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)

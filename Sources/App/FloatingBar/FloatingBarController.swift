@@ -27,8 +27,18 @@ final class FloatingBarController {
     var rehideItems: (() -> Void)?
     /// Invoked when an activation needs Accessibility permission that isn't granted.
     var onNeedsAccessibility: (() -> Void)?
+    /// Arms the user-configured auto-rehide after an activation revealed the section. Set by
+    /// the engine; honors `preferences.autoRehide`/`autoRehideDelay`.
+    var scheduleAutoRehideAfterActivation: (() -> Void)?
 
     private(set) var isVisible = false
+
+    /// The in-flight activation, so a new click can supersede a previous one. Without this,
+    /// a slow activation finishing late would warp the cursor and click the menu bar after
+    /// the user already moved on.
+    private var currentActivationTask: Task<Void, Never>?
+    /// Abandons an activation that takes longer than this — a backstop against stale clicks.
+    private static let activationDeadline: TimeInterval = 5
 
     /// Cached icon images keyed by window id. Status items can only be captured while
     /// on-screen, so they are captured before being hidden and shown from this cache.
@@ -38,6 +48,9 @@ final class FloatingBarController {
     /// Maps each cached item's window id to the owning app pid resolved by attribution, so
     /// activation can query that one app directly instead of sweeping every running app.
     private var windowIDToPID: [CGWindowID: pid_t] = [:]
+    /// Items whose last activation attempt failed via both AX and synthesized click — shown
+    /// disabled so the user isn't left clicking a dead icon. Rebuilt on each capture.
+    private var unactivatableWindowIDs: Set<CGWindowID> = []
     /// The anchor's leading edge from the most recent capture/show, reused when re-hiding
     /// after an activation.
     private var lastAnchorMinX: CGFloat = 0
@@ -69,6 +82,9 @@ final class FloatingBarController {
     /// divider, and refreshes it whenever the menu bar changes.
     func captureAndCache(anchorMinX: CGFloat) async {
         lastAnchorMinX = anchorMinX
+        // The menu bar may have changed; forget which items were previously unactivatable so
+        // a now-fixed item isn't left disabled.
+        unactivatableWindowIDs.removeAll()
         let snapshots = (try? windowServer.menuBarItems()) ?? []
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
@@ -152,7 +168,11 @@ final class FloatingBarController {
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in
             guard let image = iconCache[snapshot.windowID] else { return nil }
-            return FloatingBarItem(snapshot: snapshot, image: image)
+            return FloatingBarItem(
+                snapshot: snapshot,
+                image: image,
+                isDisabled: unactivatableWindowIDs.contains(snapshot.windowID)
+            )
         }
     }
 
@@ -172,10 +192,21 @@ final class FloatingBarController {
             return
         }
         hide()
-        Task { @MainActor in
+        // Supersede any in-flight activation so a slow earlier one can't fire its
+        // cursor-warping click late. Capture a per-task deadline as a second backstop.
+        currentActivationTask?.cancel()
+        let deadline = Date().addingTimeInterval(Self.activationDeadline)
+        currentActivationTask = Task { @MainActor in
             await revealHiddenItems?()
-            // Give the window server a moment to lay the items back on-screen.
-            try? await Task.sleep(for: .milliseconds(250))
+            // revealForActivation already settles ~120ms; a short extra wait covers reflow.
+            try? await Task.sleep(for: .milliseconds(60))
+
+            // Superseded by a newer click, or this task is ancient. Don't re-hide — the
+            // successor task (or the anchor) owns the divider's state.
+            guard !Task.isCancelled, Date() < deadline else {
+                DebugLog.log("activate: superseded/stale before press for \(item.snapshot.windowID)")
+                return
+            }
 
             // Re-find the item by window id to get its current (on-screen) frame.
             let snapshots = (try? windowServer.menuBarItems()) ?? []
@@ -189,18 +220,29 @@ final class FloatingBarController {
             // menu natively. The frame is already fresh from the re-enumeration above, so we
             // do NOT re-capture here (the full attribution sweep mid-activation only adds
             // latency and lets the frame drift). On success the section stays REVEALED so the
-            // menu can open; on failure (no AX action) we fall back to a synthesized click.
+            // menu can open, and we arm auto-rehide to tidy it away after the delay.
             let pid = windowIDToPID[current.windowID] ?? current.ownerPID
             let pressed = await AXActivator.activate(windowID: current.windowID, pid: pid, frame: current.frame)
-            if pressed { return }
+            if pressed {
+                scheduleAutoRehideAfterActivation?()
+                return
+            }
+            // Last gate before the synchronous, cursor-warping CGEvent: a stale/superseded
+            // task abandons silently here. This is what stops the seconds-late teleport.
+            guard !Task.isCancelled, Date() < deadline else {
+                DebugLog.log("activate: superseded/stale before CGEvent fallback for \(item.snapshot.windowID)")
+                return
+            }
             do {
                 // The AX attempt can take a moment; re-read the frame right before posting so
                 // the synthesized click lands on the item's current position, not a stale one.
                 let fresh = (try? windowServer.menuBarItems())?.first { $0.windowID == current.windowID } ?? current
                 try windowServer.click(item: fresh)
                 DebugLog.log("activate: CGEvent fallback clicked \(fresh.windowID) at \(fresh.frame)")
+                scheduleAutoRehideAfterActivation?()
             } catch {
-                DebugLog.log("activate: AX + CGEvent both failed for \(current.windowID): \(error) — re-hiding")
+                DebugLog.log("activate: AX + CGEvent both failed for \(current.windowID): \(error) — disabling + re-hiding")
+                unactivatableWindowIDs.insert(current.windowID)
                 rehideItems?()
             }
         }

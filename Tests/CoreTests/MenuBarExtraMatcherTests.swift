@@ -36,6 +36,21 @@ import Testing
         #expect(MenuBarExtraMatcher.nearest(to: 100, among: candidates) == nil)
     }
 
+    @Test func nearestAmongManyPicksTrueClosest() {
+        // Guards the child-press path: among several pressable children of a Control Center
+        // group, the one nearest the clicked position must win — never just the first.
+        let candidates: [(leftEdge: CGFloat, value: String)] = [
+            (1000, "a"), (1030, "b"), (1058, "c"), (1090, "d"),
+        ]
+        #expect(MenuBarExtraMatcher.nearest(to: 1060, among: candidates) == "c")
+    }
+
+    @Test func nearestAtExactToleranceBoundaryMatches() {
+        let candidates: [(leftEdge: CGFloat, value: String)] = [(1000, "a")]
+        // Exactly `tolerance` away is still a match (inclusive bound).
+        #expect(MenuBarExtraMatcher.nearest(to: 1000 + MenuBarExtraMatcher.tolerance, among: candidates) == "a")
+    }
+
     // MARK: - assignGreedy
 
     @Test func greedyDoesNotDoubleClaimOneExtra() {

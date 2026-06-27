@@ -70,6 +70,9 @@ struct FloatingBarView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(item.isDisabled)
+                        .opacity(item.isDisabled ? 0.4 : 1)
+                        .help(item.isDisabled ? "This item can't be activated" : item.displayName)
                     }
                 }
                 .padding(8)
@@ -90,6 +93,8 @@ struct FloatingBarView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(item.displayName)
+        .disabled(item.isDisabled)
+        .opacity(item.isDisabled ? 0.4 : 1)
+        .help(item.isDisabled ? "This item can't be activated" : item.displayName)
     }
 }

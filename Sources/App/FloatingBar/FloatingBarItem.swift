@@ -6,6 +6,9 @@ import BarKeepersFriendCore
 struct FloatingBarItem: Identifiable {
     let snapshot: MenuBarItemSnapshot
     let image: NSImage
+    /// True when the last activation attempt failed via both AX and synthesized click, so the
+    /// row is shown dimmed and non-interactive instead of looking clickable but doing nothing.
+    var isDisabled: Bool = false
 
     var id: CGWindowID { snapshot.windowID }
 
