@@ -51,6 +51,24 @@ import Testing
         #expect(hidden.map(\.windowID) == [2, 3, 1])
     }
 
+    @Test func excludesOwnControlItemsByName() {
+        // On Tahoe our items report owner=Control Center, so window-id exclusion can be
+        // stale; the name prefix is the robust signal.
+        let items = [
+            item(id: 1, x: 100, title: "Dropbox"),
+            item(id: 2, x: 200, title: "BKFHidden"),    // our divider
+            item(id: 3, x: 300, title: "BKFAnchor"),     // our anchor
+        ]
+        let hidden = HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 1000)
+        #expect(hidden.map(\.windowID) == [1])
+    }
+
+    @Test func isOwnControlItemMatchesPrefix() {
+        #expect(HiddenItemsResolver.isOwnControlItem(item(id: 1, x: 0, title: "BKFHidden")))
+        #expect(!HiddenItemsResolver.isOwnControlItem(item(id: 2, x: 0, title: "Slack")))
+        #expect(!HiddenItemsResolver.isOwnControlItem(item(id: 3, x: 0, title: nil)))
+    }
+
     @Test func handlesOffScreenNegativeXItems() {
         // When the divider has pushed items off-screen to negative x, they're still left
         // of the anchor and must be picked up.

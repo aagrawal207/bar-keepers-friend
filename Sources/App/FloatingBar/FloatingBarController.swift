@@ -102,11 +102,14 @@ final class FloatingBarController {
             leftOfAnchorX: anchorMinX,
             excludingControlItems: controlItemWindowIDs
         )
-        DebugLog.log("floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden (off-screen left of x=0). screenRecording=\(capture.hasScreenRecordingAccess)")
+        DebugLog.log("floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden left of anchor. screenRecording=\(capture.hasScreenRecordingAccess)")
+        for h in hidden {
+            DebugLog.log("  hidden item: windowID=\(h.windowID) title=\(h.title ?? "nil") owner=\(h.ownerBundleID ?? "nil") frame=\(h.frame)")
+        }
         guard !hidden.isEmpty else { return [] }
 
         let images = await capture.captureIcons(for: hidden)
-        DebugLog.log("floatingbar: captured \(images.count)/\(hidden.count) icon images")
+        DebugLog.log("floatingbar: captured \(images.count)/\(hidden.count) icon images for windowIDs \(images.keys.sorted())")
         return hidden.compactMap { snapshot in
             guard let cg = images[snapshot.windowID] else { return nil }
             return FloatingBarItem(snapshot: snapshot, image: NSImage(cgImage: cg, size: snapshot.frame.size))

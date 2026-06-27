@@ -55,11 +55,18 @@ final class IconCaptureService {
         )
 
         var result: [CGWindowID: CGImage] = [:]
+        var notFound: [CGWindowID] = []
+        var captureFailed: [CGWindowID] = []
         for id in wantedIDs {
-            guard let window = windowsByID[id] else { continue }
+            guard let window = windowsByID[id] else { notFound.append(id); continue }
             if let image = await captureWindow(window) {
                 result[id] = image
+            } else {
+                captureFailed.append(id)
             }
+        }
+        if !notFound.isEmpty || !captureFailed.isEmpty {
+            DebugLog.log("capture: notFoundInSCK=\(notFound.sorted()) captureReturnedNil=\(captureFailed.sorted()) (SCK listed \(content.windows.count) windows)")
         }
         return result
     }
