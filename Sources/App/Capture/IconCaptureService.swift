@@ -40,8 +40,14 @@ final class IconCaptureService {
     func captureIcons(for items: [MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] {
         let onScreen = items.filter { $0.frame.minX >= 0 }
         guard !onScreen.isEmpty else { return [:] }
-        guard let (display, displayBounds) = await display(containing: onScreen) else { return [:] }
-        guard let full = await captureFullDisplay(display, displayBounds) else {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              !content.displays.isEmpty else { return [:] }
+
+        let probe = onScreen.first.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) }
+        let display = displayContaining(probe, in: content.displays) ?? content.displays[0]
+        let displayBounds = CGDisplayBounds(display.displayID)
+
+        guard let full = await captureFullDisplay(display, displayBounds, allWindows: content.windows) else {
             DebugLog.log("capture: full-display capture failed")
             return [:]
         }
@@ -66,8 +72,9 @@ final class IconCaptureService {
             result[item.windowID] = cropped
         }
 
+        let frames = onScreen.map { "\($0.windowID)=\(Int($0.frame.width))x\(Int($0.frame.height))@\(Int($0.frame.minX))" }.joined(separator: ",")
         let opacity = result.map { "\($0.key)=\(opaquePixelCount($0.value))" }.joined(separator: ",")
-        DebugLog.log("capture: strip-cropped \(result.count)/\(onScreen.count) on-screen items; scale=\(scale); opaque[\(opacity)]")
+        DebugLog.log("capture: strip-cropped \(result.count)/\(onScreen.count) on-screen items; scale=\(scale); frames[\(frames)]; opaque[\(opacity)]")
         return result
     }
 
@@ -75,32 +82,33 @@ final class IconCaptureService {
 
     /// Captures the entire display as a single image (no `sourceRect`/`destinationRect`, so
     /// there is no point/pixel unit ambiguity — the output is the whole display in pixels).
-    private func captureFullDisplay(_ display: SCDisplay, _ displayBounds: CGRect) async -> CGImage? {
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+    ///
+    /// The desktop/wallpaper windows are excluded so the translucent Tahoe menu bar isn't
+    /// captured with the wallpaper showing through behind the glyphs.
+    private func captureFullDisplay(_ display: SCDisplay, _ displayBounds: CGRect, allWindows: [SCWindow]) async -> CGImage? {
+        // The wallpaper/desktop sit below the normal window layer (layer < 0). Excluding them
+        // removes the desktop image from behind the menu bar's translucency; the status glyphs
+        // live at a high (positive) layer and are untouched.
+        let backdrop = allWindows.filter { $0.windowLayer < 0 }
+        let filter = SCContentFilter(display: display, excludingWindows: backdrop)
         let config = SCStreamConfiguration()
         config.showsCursor = false
-        // Request native pixels. `display.width/height` are already pixel dimensions.
-        config.width = display.width
-        config.height = display.height
+        // `display.width/height` are in POINTS. Scale to native pixels using the matching
+        // screen's backing scale, found by displayID (no coordinate-space mixing).
+        let scale = NSScreen.screens.first {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID
+        }?.backingScaleFactor ?? 2
+        config.width = Int(CGFloat(display.width) * scale)
+        config.height = Int(CGFloat(display.height) * scale)
+        DebugLog.log("capture: excluding \(backdrop.count) backdrop windows; requested \(config.width)x\(config.height) px (scale \(scale))")
         return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
 
-    /// The shareable display whose global bounds contain the items, with its global bounds
-    /// (top-left origin, points). Falls back to the first shareable display.
-    private func display(containing items: [MenuBarItemSnapshot]) async -> (SCDisplay, CGRect)? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
-              !content.displays.isEmpty else { return nil }
-        // Match the display whose bounds contain an item's midpoint (the menu bar lives on the
-        // display the items belong to, which may not be the first one on a multi-display rig).
-        let probe = items.first.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) }
-        for display in content.displays {
-            let bounds = CGDisplayBounds(display.displayID)
-            if let probe, bounds.contains(probe) {
-                return (display, bounds)
-            }
-        }
-        let first = content.displays[0]
-        return (first, CGDisplayBounds(first.displayID))
+    /// The shareable display whose bounds contain the probe point (the menu bar lives on the
+    /// display the items belong to, which may not be the first one on a multi-display rig).
+    private func displayContaining(_ point: CGPoint?, in displays: [SCDisplay]) -> SCDisplay? {
+        guard let point else { return nil }
+        return displays.first { CGDisplayBounds($0.displayID).contains(point) }
     }
 
     // MARK: - Diagnostics

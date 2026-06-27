@@ -16,22 +16,45 @@ enum AXAttributionProvider {
 
     /// Returns the snapshots with `ownerBundleID` filled in with the real app's display
     /// name wherever a confident frame match is found.
-    static func attribute(_ snapshots: [MenuBarItemSnapshot]) -> [MenuBarItemSnapshot] {
+    ///
+    /// The Accessibility IPC sweep runs off the main thread: each app's `AXUIElement` query
+    /// is synchronous and, even with a per-app timeout, the whole pass can take noticeable
+    /// time — running it on the main actor stalled the run loop and blocked the floating
+    /// bar's clicks. The list of running apps is read on the main actor first (NSWorkspace's
+    /// KVO-backed properties are main-affined), then only the C-level AX calls go off-main.
+    static func attribute(_ snapshots: [MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] {
         guard AXIsProcessTrusted() else { return snapshots }
 
+        let apps: [(pid: pid_t, name: String)] = await MainActor.run {
+            NSWorkspace.shared.runningApplications.compactMap { app in
+                guard app.activationPolicy != .prohibited || app.bundleIdentifier != nil,
+                      let name = app.localizedName else { return nil }
+                return (app.processIdentifier, name)
+            }
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            attributeSync(snapshots, apps: apps)
+        }.value
+    }
+
+    /// The synchronous AX sweep + frame match. Safe to run off the main thread (AX C-APIs are
+    /// thread-agnostic). Called only by `attribute`.
+    private static func attributeSync(
+        _ snapshots: [MenuBarItemSnapshot],
+        apps: [(pid: pid_t, name: String)]
+    ) -> [MenuBarItemSnapshot] {
         // Build a list of (midX, appName) for every menu bar extra of every running app.
         var extras: [(midX: CGFloat, name: String)] = []
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy != .prohibited || app.bundleIdentifier != nil {
-            guard let name = app.localizedName else { continue }
-            let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        for app in apps {
+            let axApp = AXUIElementCreateApplication(app.pid)
             // Cap each app's Accessibility IPC. Without a timeout a single hung or slow app
-            // blocks this synchronous sweep (and the main thread) for the system default
-            // (~6s+), which is the cause of the floating bar being slow to open.
+            // would stretch the sweep to the system default (~6s+) per app.
             AXUIElementSetMessagingTimeout(axApp, 1.5)
             guard let extrasMenu = copyElement(axApp, attribute: "AXExtrasMenuBar") else { continue }
             for child in copyChildren(extrasMenu) {
                 if let position = copyPosition(child) {
-                    extras.append((midX: position.x, name: name))
+                    extras.append((midX: position.x, name: app.name))
                 }
             }
         }

@@ -77,7 +77,8 @@ final class FloatingBarController {
         // backing + glyph window per item), which otherwise duplicates rows in the bar.
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
-        let attributed = AXAttributionProvider.attribute(deduped)
+        // Runs off the main thread so it can't stall the run loop (and block bar clicks).
+        let attributed = await AXAttributionProvider.attribute(deduped)
         let images = await capture.captureIcons(for: attributed)
         // Merge into the cache so items briefly off-screen keep their last good image.
         for (id, cg) in images {
@@ -128,7 +129,10 @@ final class FloatingBarController {
         let panel = panel ?? makePanel()
         panel.contentViewController = NSHostingController(rootView: root)
         panel.setFrame(panelFrame, display: true)
-        panel.orderFrontRegardless()
+        // Become key so the hosted SwiftUI buttons receive clicks. The panel is a
+        // .nonactivatingPanel, so this does NOT activate the app or steal focus from the
+        // user's frontmost window — it just lets our own controls handle mouse events.
+        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
         isVisible = true
     }
@@ -157,6 +161,7 @@ final class FloatingBarController {
     /// it's missing we must NOT reveal (that would strand every icon in the menu bar), so we
     /// check first and route the user to grant it.
     private func activate(_ item: FloatingBarItem) {
+        DebugLog.log("activate: onActivate fired for \(item.snapshot.windowID)")
         guard windowServer.canSynthesizeClicks else {
             DebugLog.log("activate: Accessibility not granted — requesting, not revealing")
             onNeedsAccessibility?()
@@ -191,7 +196,7 @@ final class FloatingBarController {
     }
 
     private func makePanel() -> NSPanel {
-        let panel = NSPanel(
+        let panel = KeyablePanel(
             contentRect: .zero,
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered,
@@ -207,4 +212,14 @@ final class FloatingBarController {
         panel.isMovable = false
         return panel
     }
+}
+
+/// A borderless panel that can still become key. Borderless `NSWindow`s return
+/// `canBecomeKey == false` by default, which prevents the hosted SwiftUI buttons from
+/// receiving clicks. As a `.nonactivatingPanel` it can take key status without activating the
+/// app, so our controls work while the user's frontmost app keeps its focus. It declines to
+/// become *main* so it never looks like the app's primary window.
+private final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
