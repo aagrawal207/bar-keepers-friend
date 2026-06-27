@@ -73,8 +73,11 @@ final class FloatingBarController {
             excludingControlItems: controlItemWindowIDs
         )
         guard !hidden.isEmpty else { return }
+        // Collapse co-located windows that back the same visible icon (Tahoe returns a
+        // backing + glyph window per item), which otherwise duplicates rows in the bar.
+        let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
-        let attributed = AXAttributionProvider.attribute(hidden)
+        let attributed = AXAttributionProvider.attribute(deduped)
         let images = await capture.captureIcons(for: attributed)
         // Merge into the cache so items briefly off-screen keep their last good image.
         for (id, cg) in images {
@@ -83,7 +86,7 @@ final class FloatingBarController {
             iconCache[id] = NSImage(cgImage: cg, size: size)
         }
         cachedHiddenOrder = attributed
-        DebugLog.log("floatingbar: cached \(images.count)/\(hidden.count) icons; cache size=\(iconCache.count)")
+        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; cached \(images.count) icons; cache size=\(iconCache.count)")
     }
 
     /// Builds and presents the panel from the cached icons (items are off-screen when the

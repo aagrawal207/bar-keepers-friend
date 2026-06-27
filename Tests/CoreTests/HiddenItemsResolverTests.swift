@@ -76,4 +76,31 @@ import Testing
         let hidden = HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 1000)
         #expect(hidden.map(\.windowID) == [1, 2])
     }
+
+    @Test func deduplicatesCoLocatedWindowsKeepingFirst() {
+        // Two windows backing the same visible icon share a midpoint; only the first survives.
+        let items = [
+            item(id: 1, x: 100, w: 24),  // midX 112
+            item(id: 2, x: 101, w: 22),  // midX 112 — duplicate of #1, dropped
+            item(id: 3, x: 200, w: 24),  // distinct
+        ]
+        let deduped = HiddenItemsResolver.deduplicateByMidXProximity(items)
+        #expect(deduped.map(\.windowID) == [1, 3])
+    }
+
+    @Test func keepsDistinctAdjacentNeighborsThatOverlapSlightly() {
+        // 24 pt apart, 26 pt wide → frames overlap 2 pt, but midpoints differ by 24 > 7,
+        // so genuine neighbours must NOT be merged.
+        let items = [item(id: 1, x: 100, w: 26), item(id: 2, x: 124, w: 26)]
+        let deduped = HiddenItemsResolver.deduplicateByMidXProximity(items)
+        #expect(deduped.map(\.windowID) == [1, 2])
+    }
+
+    @Test func deduplicationPreservesOrderAndIsIdempotent() {
+        let items = [item(id: 1, x: 50), item(id: 2, x: 200), item(id: 3, x: 350)]
+        let once = HiddenItemsResolver.deduplicateByMidXProximity(items)
+        let twice = HiddenItemsResolver.deduplicateByMidXProximity(once)
+        #expect(once.map(\.windowID) == [1, 2, 3])
+        #expect(twice == once)
+    }
 }

@@ -43,4 +43,31 @@ public enum HiddenItemsResolver {
         guard let title = item.title else { return false }
         return title.hasPrefix(controlItemNamePrefix)
     }
+
+    /// Collapses co-located windows that back the same visible status item into one.
+    ///
+    /// On Tahoe `CGWindowListCopyWindowInfo` can return more than one status-layer window at
+    /// effectively the same position for a single visible icon (a backing window plus the
+    /// glyph window), which otherwise shows up as a duplicate row in the floating bar
+    /// (e.g. "Maccy" / "Maccy"). Items whose horizontal midpoints fall within `tolerance`
+    /// points of an already-kept item are treated as duplicates and dropped.
+    ///
+    /// The first item in the input order wins. Callers pass the list already ordered
+    /// left-to-right, and the sort is stable, so co-located windows keep their enumeration
+    /// (front-to-back) order — the frontmost, interactive window is retained.
+    ///
+    /// `tolerance` is deliberately small: genuine duplicates share a midpoint to within a
+    /// pixel or two, while distinct neighbouring icons sit ~24 pt apart, so a 7 pt window
+    /// separates the two cases without ever merging real neighbours.
+    public static func deduplicateByMidXProximity(
+        _ items: [MenuBarItemSnapshot],
+        tolerance: CGFloat = 7
+    ) -> [MenuBarItemSnapshot] {
+        var kept: [MenuBarItemSnapshot] = []
+        for item in items {
+            let isDuplicate = kept.contains { abs($0.frame.midX - item.frame.midX) <= tolerance }
+            if !isDuplicate { kept.append(item) }
+        }
+        return kept
+    }
 }

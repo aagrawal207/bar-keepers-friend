@@ -24,6 +24,10 @@ enum AXAttributionProvider {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy != .prohibited || app.bundleIdentifier != nil {
             guard let name = app.localizedName else { continue }
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
+            // Cap each app's Accessibility IPC. Without a timeout a single hung or slow app
+            // blocks this synchronous sweep (and the main thread) for the system default
+            // (~6s+), which is the cause of the floating bar being slow to open.
+            AXUIElementSetMessagingTimeout(axApp, 1.5)
             guard let extrasMenu = copyElement(axApp, attribute: "AXExtrasMenuBar") else { continue }
             for child in copyChildren(extrasMenu) {
                 if let position = copyPosition(child) {
