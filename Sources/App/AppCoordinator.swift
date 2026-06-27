@@ -15,6 +15,9 @@ final class AppCoordinator {
     private let capture = IconCaptureService()
     private var floatingBar: FloatingBarController?
 
+    /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
+    private var diagnosticsSignalSource: DispatchSourceSignal?
+
     init() {
         preferences = preferencesStore.load()
     }
@@ -49,6 +52,23 @@ final class AppCoordinator {
         if preferences.useFloatingBar, !capture.hasScreenRecordingAccess {
             Task { await capture.requestScreenRecordingAccess() }
         }
+
+        installDiagnosticsSignalHandler()
+    }
+
+    /// Dumps a read-only diagnostics report on `kill -USR1 <pid>`. Development aid: lets the
+    /// app's full Accessibility view of the hidden items be inspected without driving the UI.
+    private func installDiagnosticsSignalHandler() {
+        signal(SIGUSR1, SIG_IGN) // ignore default-terminate; the dispatch source handles it
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                guard let report = await self?.floatingBar?.makeDiagnosticsReport() else { return }
+                report.write()
+            }
+        }
+        source.resume()
+        diagnosticsSignalSource = source
     }
 
     func stop() {

@@ -98,10 +98,12 @@ enum AXActivator {
             return .matchedNoAction
         }
         for action in [kAXPressAction as String, "AXShowMenu"] {
-            if AXUIElementPerformAction(child, action as CFString) == .success {
+            let err = AXUIElementPerformAction(child, action as CFString)
+            if err == .success {
                 DebugLog.log("AXActivator: \(action) succeeded for \(windowID)")
                 return .pressed
             }
+            DebugLog.log("AXActivator: \(action) on \(windowID) returned AXError \(err.rawValue)")
         }
         // Some extras (e.g. Control Center module groups) aren't pressable themselves but wrap
         // a pressable child. Try the position-matched child so we don't press the wrong module.

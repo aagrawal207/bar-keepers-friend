@@ -133,4 +133,23 @@ import Testing
         #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(item(id: 2, x: 0, w: 1, h: 1)))
         #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(item(id: 3, x: 0, w: 450, h: 800)))
     }
+
+    @Test func rejectsWindowBelowTheMenuBar() {
+        // A menu-bar-sized window far down the screen (e.g. an app's notification window at
+        // y≈916 sharing the status layer) is not a menu bar item.
+        let lowItem = MenuBarItemSnapshot(
+            windowID: 13833, ownerPID: 1, ownerBundleID: nil, title: nil,
+            frame: CGRect(x: 1094, y: 916, width: 24, height: 24)
+        )
+        #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(lowItem))
+        #expect(HiddenItemsResolver.hiddenItems(from: [lowItem], leftOfAnchorX: 2000).isEmpty)
+    }
+
+    @Test func keepsItemAtTopOfScreen() {
+        let topItem = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: nil, title: nil,
+            frame: CGRect(x: 100, y: 0, width: 30, height: 33)
+        )
+        #expect(HiddenItemsResolver.isPlausibleMenuBarItem(topItem))
+    }
 }

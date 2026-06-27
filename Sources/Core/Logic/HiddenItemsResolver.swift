@@ -52,9 +52,16 @@ public enum HiddenItemsResolver {
         let minHeight: CGFloat = 18
         let maxHeight: CGFloat = 40
         let minWidth: CGFloat = 6
+        // The menu bar sits at the top of the display (global top-left origin → y ≈ 0). A
+        // status-layer window far down the screen is not a menu bar item — e.g. an app's
+        // transient notification window (observed at y≈916) that shares the status layer.
+        // (Single-display assumption, matching the rest of the app; a display positioned
+        // below the primary would need the per-display menu-bar y instead of this constant.)
+        let maxTop: CGFloat = 40
         return item.frame.height >= minHeight
             && item.frame.height <= maxHeight
             && item.frame.width >= minWidth
+            && item.frame.minY <= maxTop
     }
 
     /// Whether a snapshot is one of the app's own control items, identified by its window

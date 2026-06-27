@@ -162,6 +162,47 @@ final class FloatingBarController {
         isVisible = false
     }
 
+    // MARK: - Diagnostics
+
+    /// Builds a read-only diagnostics report of the current hidden-item understanding: the
+    /// cached attribution plus a deep Accessibility dump of each item's extra element. Presses
+    /// nothing, mutates no state. Triggered by SIGUSR1 for inspection during development.
+    func makeDiagnosticsReport() async -> DiagnosticsReport {
+        // Refresh the cache first so the report reflects the live menu bar (this reveals and
+        // re-hides briefly via captureAndCache's callers; here we just re-enumerate + attribute
+        // without touching the divider, to stay read-only).
+        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let hidden = HiddenItemsResolver.hiddenItems(
+            from: snapshots,
+            leftOfAnchorX: lastAnchorMinX,
+            excludingControlItems: controlItemWindowIDs
+        )
+        let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
+        let attributed = await AXAttributionProvider.attribute(deduped)
+
+        let axInfo = await AXInspector.inspect(
+            targets: attributed.map { ($0.windowID, $0.frame.minX, $0.frame.width) }
+        )
+
+        let items = attributed.map { snapshot in
+            DiagnosticsReport.Item(
+                windowID: snapshot.windowID,
+                displayName: FloatingBarItem(snapshot: snapshot, image: NSImage()).displayName,
+                attributedOwner: snapshot.ownerBundleID,
+                ownerPID: snapshot.ownerPID,
+                rawTitle: snapshot.title,
+                frame: [snapshot.frame.minX, snapshot.frame.minY, snapshot.frame.width, snapshot.frame.height].map(Double.init),
+                isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
+                axElement: axInfo[snapshot.windowID]
+            )
+        }
+        return DiagnosticsReport(
+            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            anchorMinX: Double(lastAnchorMinX),
+            items: items
+        )
+    }
+
     // MARK: - Internals
 
     /// Builds the items to show from the cached order + cached images.
