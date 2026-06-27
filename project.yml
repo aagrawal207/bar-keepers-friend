@@ -61,6 +61,9 @@ targets:
         LSUIElement: true
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: "Copyright © 2026 Abhishek Agrawal. MIT licensed."
+        # Shown in the Screen Recording permission prompt — required to capture images of
+        # hidden menu bar icons for the floating bar.
+        NSScreenCaptureUsageDescription: "Bar Keeper's Friend captures images of your hidden menu bar icons so it can show them in a floating bar."
     entitlements:
       path: Sources/App/BarKeepersFriend.entitlements
       properties:

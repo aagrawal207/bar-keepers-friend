@@ -16,6 +16,13 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Launch the app at login.
     public var launchAtLogin: Bool
 
+    /// When revealing hidden items, show them in a floating bar below the menu bar instead
+    /// of expanding them back into the (possibly too-narrow) menu bar.
+    public var useFloatingBar: Bool
+
+    /// The floating bar's presentation.
+    public var floatingBarStyle: FloatingBarStyle
+
     /// Persisted on-screen positions of the control items, keyed by autosave name. This
     /// mirrors the values AppKit stores under "NSStatusItem Preferred Position <name>";
     /// we cache them ourselves because removing a status item deletes AppKit's copy.
@@ -26,12 +33,16 @@ public struct Preferences: Equatable, Sendable, Codable {
         autoRehideDelay: TimeInterval = 15,
         showSectionDividers: Bool = false,
         launchAtLogin: Bool = false,
+        useFloatingBar: Bool = true,
+        floatingBarStyle: FloatingBarStyle = .horizontal,
         controlItemPositions: [String: Double] = [:]
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = autoRehideDelay
         self.showSectionDividers = showSectionDividers
         self.launchAtLogin = launchAtLogin
+        self.useFloatingBar = useFloatingBar
+        self.floatingBarStyle = floatingBarStyle
         self.controlItemPositions = controlItemPositions
     }
 
@@ -43,6 +54,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         case autoRehideDelay
         case showSectionDividers
         case launchAtLogin
+        case useFloatingBar
+        case floatingBarStyle
         case controlItemPositions
     }
 
@@ -55,6 +68,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         autoRehideDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .autoRehideDelay) ?? d.autoRehideDelay
         showSectionDividers = try container.decodeIfPresent(Bool.self, forKey: .showSectionDividers) ?? d.showSectionDividers
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
+        useFloatingBar = try container.decodeIfPresent(Bool.self, forKey: .useFloatingBar) ?? d.useFloatingBar
+        floatingBarStyle = try container.decodeIfPresent(FloatingBarStyle.self, forKey: .floatingBarStyle) ?? d.floatingBarStyle
         controlItemPositions = try container.decodeIfPresent([String: Double].self, forKey: .controlItemPositions) ?? d.controlItemPositions
     }
 }

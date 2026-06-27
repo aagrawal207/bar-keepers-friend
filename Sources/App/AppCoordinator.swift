@@ -11,6 +11,10 @@ final class AppCoordinator {
     private var settingsWindowController: SettingsWindowController?
     private let loginItem = LoginItemService()
 
+    private let windowServer: WindowServer = SystemWindowServer()
+    private let capture = IconCaptureService()
+    private var floatingBar: FloatingBarController?
+
     init() {
         preferences = preferencesStore.load()
     }
@@ -24,12 +28,26 @@ final class AppCoordinator {
     }
 
     func start() {
+        let bar = FloatingBarController(
+            windowServer: windowServer,
+            capture: capture,
+            preferences: preferences
+        )
+        floatingBar = bar
+
         let engine = CosmeticHideEngine(preferences: preferences) { [weak self] updated in
             self?.persist(updated)
         }
+        engine.floatingBar = bar
         engine.install()
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
         hideEngine = engine
+
+        // Prompt for Screen Recording up front when the floating bar is enabled, since it
+        // needs capture to show icons. Permission-free hide/show still works without it.
+        if preferences.useFloatingBar, !capture.hasScreenRecordingAccess {
+            Task { await capture.requestScreenRecordingAccess() }
+        }
     }
 
     func stop() {
@@ -44,6 +62,7 @@ final class AppCoordinator {
             ) { [weak self] updated in
                 self?.persist(updated)
                 self?.hideEngine?.apply(preferences: updated)
+                self?.floatingBar?.preferences = updated
             }
         }
         settingsWindowController?.show()

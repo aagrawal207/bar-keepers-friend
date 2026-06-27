@@ -10,11 +10,20 @@ import Testing
         prefs.autoRehideDelay = 30
         prefs.showSectionDividers = true
         prefs.launchAtLogin = true
+        prefs.useFloatingBar = false
+        prefs.floatingBarStyle = .vertical
         prefs.controlItemPositions = ["BKFAnchor": 0, "BKFHidden": 1.5]
 
         let data = try JSONEncoder().encode(prefs)
         let decoded = try JSONDecoder().decode(Preferences.self, from: data)
         #expect(decoded == prefs)
+    }
+
+    @Test func floatingBarDefaultsAreSensible() {
+        // The whole reason for this feature: default to the floating bar so a too-narrow
+        // (notched) menu bar isn't relied upon to display revealed items.
+        #expect(Preferences.default.useFloatingBar)
+        #expect(Preferences.default.floatingBarStyle == .horizontal)
     }
 
     @Test func missingKeysFallBackToDefaults() throws {

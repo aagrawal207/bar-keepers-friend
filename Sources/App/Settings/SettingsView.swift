@@ -13,7 +13,18 @@ struct SettingsView: View {
                 Toggle("Show section dividers", isOn: $model.preferences.showSectionDividers)
             }
 
-            Section("Hidden section") {
+            Section("Hidden items") {
+                Toggle("Show hidden items in a floating bar", isOn: $model.preferences.useFloatingBar)
+                if model.preferences.useFloatingBar {
+                    Picker("Floating bar style", selection: $model.preferences.floatingBarStyle) {
+                        Text("Horizontal strip").tag(FloatingBarStyle.horizontal)
+                        Text("Vertical list").tag(FloatingBarStyle.vertical)
+                    }
+                    .pickerStyle(.radioGroup)
+                }
+            }
+
+            Section("Auto re-hide") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
                 if model.preferences.autoRehide {
                     LabeledContent("Re-hide after") {

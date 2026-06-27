@@ -16,6 +16,11 @@ final class CosmeticHideEngine {
     /// Called when settings should open (anchor right-click / menu).
     var onOpenSettings: (() -> Void)?
 
+    /// The floating bar that mirrors hidden items below the menu bar. When set and enabled
+    /// in preferences, the anchor click toggles this panel instead of reflowing items back
+    /// into the (possibly too-narrow) menu bar.
+    var floatingBar: FloatingBarController?
+
     private var anchorItem: NSStatusItem?
     private var hiddenDivider: NSStatusItem?
 
@@ -62,8 +67,34 @@ final class CosmeticHideEngine {
         }
         hiddenDivider = divider
 
-        applyDividerVisibility()
+        // Tell the floating bar which windows are ours, so they're excluded from mirroring.
+        publishControlItemWindowIDs()
+
+        if preferences.useFloatingBar {
+            // Keep items out of the cramped menu bar: divider stays expanded, and the anchor
+            // click toggles the floating bar instead.
+            setHidden(collapsed: true)
+        } else {
+            applyDividerVisibility()
+        }
         observeScreenChanges()
+    }
+
+    /// Reports the app's own status-item window numbers to the floating bar so it never
+    /// mirrors the anchor or divider.
+    private func publishControlItemWindowIDs() {
+        var ids: Set<CGWindowID> = []
+        if let n = anchorItem?.button?.window?.windowNumber, n > 0 { ids.insert(CGWindowID(n)) }
+        if let n = hiddenDivider?.button?.window?.windowNumber, n > 0 { ids.insert(CGWindowID(n)) }
+        floatingBar?.controlItemWindowIDs = ids
+    }
+
+    /// The global x of the anchor's right edge, used to align the floating bar beneath it.
+    private var anchorRightX: CGFloat {
+        guard let window = anchorItem?.button?.window else {
+            return NSScreen.main?.frame.maxX ?? 1440
+        }
+        return window.frame.maxX
     }
 
     func uninstall() {
@@ -90,11 +121,16 @@ final class CosmeticHideEngine {
             onOpenSettings?()
             return
         }
-        toggleHidden()
+        if preferences.useFloatingBar, let bar = floatingBar {
+            let anchorX = anchorRightX
+            Task { await bar.toggle(anchorRightX: anchorX) }
+        } else {
+            toggleHidden()
+        }
     }
 
     @objc private func dividerClicked(_ sender: NSStatusBarButton) {
-        toggleHidden()
+        anchorClicked(sender)
     }
 
     func toggleHidden() {
