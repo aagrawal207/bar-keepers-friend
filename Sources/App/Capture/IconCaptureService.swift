@@ -35,35 +35,25 @@ final class IconCaptureService {
         }
     }
 
-    /// Captures images for the given items, returning window id → image for those that
-    /// succeeded. A fully empty result when items were requested signals that Screen
-    /// Recording is denied or has lapsed.
+    /// Captures images for the given items by their on-screen display region, returning
+    /// window id → image for those that succeeded.
     ///
-    /// Hidden menu bar items are pushed off-screen (negative x), and `SCScreenshotManager`
-    /// cannot render off-screen windows — so we use the legacy `CGWindowListCreateImage`
-    /// path (off-screen-capable) first, falling back to ScreenCaptureKit for any that miss.
+    /// IMPORTANT: this only works for items currently ON-SCREEN. A status item's glyph is
+    /// composited into the menu bar layer, not its own window backing, so per-window capture
+    /// returns a transparent image; and once an item is pushed off-screen nothing can capture
+    /// it. Callers must therefore capture while items are visible and cache the result.
     func captureIcons(for items: [MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] {
         guard !items.isEmpty else { return [:] }
+        guard let (display, displayFrame) = await firstDisplay() else { return [:] }
 
         var result: [CGWindowID: CGImage] = [:]
-        var legacyFailed: [CGWindowID] = []
-
-        // Primary path: legacy capture, which works for off-screen windows.
-        for item in items {
-            if let image = LegacyWindowCapture.captureImage(windowID: item.windowID) {
+        for item in items where item.frame.minX >= 0 {
+            let rect = CGRect(x: item.frame.minX, y: 0, width: item.frame.width, height: max(item.frame.height, 24))
+            if let image = await captureDisplayRegion(rect, display: display, fullDisplayFrame: displayFrame) {
                 result[item.windowID] = image
-            } else {
-                legacyFailed.append(item.windowID)
             }
         }
-
-        // Fallback path: ScreenCaptureKit for anything the legacy path missed.
-        if !legacyFailed.isEmpty {
-            let sckResults = await captureViaScreenCaptureKit(windowIDs: Set(legacyFailed))
-            for (id, image) in sckResults { result[id] = image }
-            let stillMissing = legacyFailed.filter { result[$0] == nil }
-            DebugLog.log("capture: legacy got \(items.count - legacyFailed.count)/\(items.count), SCK recovered \(sckResults.count), stillMissing=\(stillMissing.sorted()) legacyAvailable=\(LegacyWindowCapture.isAvailable)")
-        }
+        DebugLog.log("capture: rect-captured \(result.count)/\(items.count) on-screen items")
         return result
     }
 

@@ -71,9 +71,19 @@ final class CosmeticHideEngine {
         publishControlItemWindowIDs()
 
         if preferences.useFloatingBar {
-            // TEMP: stay collapsed (items visible) so the capture self-test can verify
-            // on-screen capture of real menu bar items.
+            // Items must be captured while on-screen (status items can't be captured once
+            // off-screen). So: start visible, capture+cache, THEN hide.
             setHidden(collapsed: false)
+            Task { @MainActor in
+                // Let the menu bar settle, then capture the soon-to-be-hidden items.
+                try? await Task.sleep(for: .milliseconds(800))
+                let minX = anchorFrame?.minX ?? 1115
+                DebugLog.log("launch: capturing before hide, anchorMinX=\(minX)")
+                await floatingBar?.captureAndCache(anchorMinX: minX)
+                // Now hide them; the floating bar will show the cached images.
+                setHidden(collapsed: true)
+                DebugLog.log("launch: hidden after capture")
+            }
         } else {
             applyDividerVisibility()
         }

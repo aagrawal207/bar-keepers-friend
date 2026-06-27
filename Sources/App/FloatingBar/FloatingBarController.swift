@@ -22,6 +22,12 @@ final class FloatingBarController {
 
     private(set) var isVisible = false
 
+    /// Cached icon images keyed by window id. Status items can only be captured while
+    /// on-screen, so they are captured before being hidden and shown from this cache.
+    private var iconCache: [CGWindowID: NSImage] = [:]
+    /// The hidden items in display order at the time of the last capture.
+    private var cachedHiddenOrder: [MenuBarItemSnapshot] = []
+
     init(
         windowServer: WindowServer,
         capture: IconCaptureService,
@@ -43,10 +49,36 @@ final class FloatingBarController {
         return isVisible
     }
 
+    /// Captures the icons of items left of the anchor and caches them. Must be called while
+    /// those items are still ON-SCREEN (before the divider hides them), because off-screen
+    /// status items cannot be captured. The engine calls this just before expanding the
+    /// divider, and refreshes it whenever the menu bar changes.
+    func captureAndCache(anchorMinX: CGFloat) async {
+        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let hidden = HiddenItemsResolver.hiddenItems(
+            from: snapshots,
+            leftOfAnchorX: anchorMinX,
+            excludingControlItems: controlItemWindowIDs
+        )
+        guard !hidden.isEmpty else { return }
+        let images = await capture.captureIcons(for: hidden)
+        // Merge into the cache so items briefly off-screen keep their last good image.
+        for (id, cg) in images {
+            let item = hidden.first { $0.windowID == id }
+            let size = item?.frame.size ?? CGSize(width: 24, height: 24)
+            iconCache[id] = NSImage(cgImage: cg, size: size)
+        }
+        cachedHiddenOrder = hidden
+        DebugLog.log("floatingbar: cached \(images.count)/\(hidden.count) icons; cache size=\(iconCache.count)")
+    }
+
     /// Builds and presents the panel.
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
         DebugLog.log("floatingbar: show(anchorMinX=\(anchorMinX), anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
-        let items = await buildItems(anchorMinX: anchorMinX)
+        // Try a fresh capture first (covers the case where items are still visible); fall
+        // back to the cache for items that are now off-screen.
+        await captureAndCache(anchorMinX: anchorMinX)
+        let items = buildItemsFromCache()
 
         let screen = NSScreen.main ?? NSScreen.screens.first
         let displayFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -95,24 +127,11 @@ final class FloatingBarController {
 
     // MARK: - Internals
 
-    private func buildItems(anchorMinX: CGFloat) async -> [FloatingBarItem] {
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
-        let hidden = HiddenItemsResolver.hiddenItems(
-            from: snapshots,
-            leftOfAnchorX: anchorMinX,
-            excludingControlItems: controlItemWindowIDs
-        )
-        DebugLog.log("floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden left of anchor. screenRecording=\(capture.hasScreenRecordingAccess)")
-        for h in hidden {
-            DebugLog.log("  hidden item: windowID=\(h.windowID) title=\(h.title ?? "nil") owner=\(h.ownerBundleID ?? "nil") frame=\(h.frame)")
-        }
-        guard !hidden.isEmpty else { return [] }
-
-        let images = await capture.captureIcons(for: hidden)
-        DebugLog.log("floatingbar: captured \(images.count)/\(hidden.count) icon images for windowIDs \(images.keys.sorted())")
-        return hidden.compactMap { snapshot in
-            guard let cg = images[snapshot.windowID] else { return nil }
-            return FloatingBarItem(snapshot: snapshot, image: NSImage(cgImage: cg, size: snapshot.frame.size))
+    /// Builds the items to show from the cached order + cached images.
+    private func buildItemsFromCache() -> [FloatingBarItem] {
+        cachedHiddenOrder.compactMap { snapshot in
+            guard let image = iconCache[snapshot.windowID] else { return nil }
+            return FloatingBarItem(snapshot: snapshot, image: image)
         }
     }
 
