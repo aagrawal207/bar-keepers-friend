@@ -18,10 +18,15 @@ schemes:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    # Local development uses ad-hoc signing ("sign to run locally"). Switch to a
-    # Developer ID identity + automatic team for notarized release builds.
+    # Sign with a stable Apple Development identity (by exact cert SHA-1) so the code
+    # signature — and therefore granted TCC permissions like Screen Recording — persists
+    # across rebuilds. Ad-hoc signing ("-") changes identity every build, making macOS
+    # treat each build as a new app and re-prompt. Manual style + explicit identity avoids
+    # needing a registered Xcode account / provisioning profile for local runs.
+    # Switch to a Developer ID identity for notarized release builds.
     CODE_SIGN_STYLE: Manual
-    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_IDENTITY: "F66C8809749BA58077F838EEB22DB884A58DD0B0"
+    PROVISIONING_PROFILE_SPECIFIER: ""
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_STRICT_CONCURRENCY: complete
