@@ -15,6 +15,32 @@ struct FloatingBarView: View {
 
     var body: some View {
         Group {
+            if items.isEmpty {
+                emptyState
+            } else {
+                content
+            }
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        )
+        .fixedSize()
+    }
+
+    private var emptyState: some View {
+        Text("No hidden items.\nDrag menu bar icons to the left of the anchor to hide them.")
+            .font(.callout)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.secondary)
+            .padding(12)
+            .frame(width: 240)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        Group {
             switch style {
             case .horizontal:
                 HStack(spacing: 6) {
@@ -50,12 +76,6 @@ struct FloatingBarView: View {
                 .frame(width: 200)
             }
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-        )
-        .fixedSize()
     }
 
     private func iconButton(_ item: FloatingBarItem) -> some View {

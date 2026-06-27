@@ -45,23 +45,18 @@ final class FloatingBarController {
 
     /// Builds and presents the panel.
     func show(anchorRightX: CGFloat) async {
-        NSLog("BKF floatingbar: show(anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
+        DebugLog.log("floatingbar: show(anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
         let items = await buildItems()
-        guard !items.isEmpty else {
-            NSLog("BKF floatingbar: nothing to show — panel not presented (drag icons to the LEFT of the anchor to hide them)")
-            // Nothing to show (no hidden items, or capture unavailable). Don't pop an
-            // empty panel — leave any existing one hidden.
-            hide()
-            return
-        }
 
         let screen = NSScreen.main ?? NSScreen.screens.first
         let displayFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let menuBarHeight = NSStatusBar.system.thickness
 
+        // When empty, lay out as if for one item so the "no hidden items" message has a
+        // sensibly-sized panel. This gives visible feedback that the click registered.
         let layout = FloatingBarLayout.layout(
             style: preferences.floatingBarStyle,
-            itemCount: items.count,
+            itemCount: max(items.count, 1),
             anchorRightX: anchorRightX,
             menuBarHeight: menuBarHeight,
             displayFrame: CGRect(origin: .zero, size: displayFrame.size),
@@ -90,7 +85,7 @@ final class FloatingBarController {
         panel.orderFrontRegardless()
         self.panel = panel
         isVisible = true
-        NSLog("BKF floatingbar: presented panel with \(items.count) items at \(panelFrame)")
+        DebugLog.log("floatingbar: presented panel with \(items.count) items at \(panelFrame)")
     }
 
     func hide() {
@@ -107,11 +102,11 @@ final class FloatingBarController {
             visibleMinX: 0,
             excludingControlItems: controlItemWindowIDs
         )
-        NSLog("BKF floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden (off-screen left of x=0). screenRecording=\(capture.hasScreenRecordingAccess)")
+        DebugLog.log("floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden (off-screen left of x=0). screenRecording=\(capture.hasScreenRecordingAccess)")
         guard !hidden.isEmpty else { return [] }
 
         let images = await capture.captureIcons(for: hidden)
-        NSLog("BKF floatingbar: captured \(images.count)/\(hidden.count) icon images")
+        DebugLog.log("floatingbar: captured \(images.count)/\(hidden.count) icon images")
         return hidden.compactMap { snapshot in
             guard let cg = images[snapshot.windowID] else { return nil }
             return FloatingBarItem(snapshot: snapshot, image: NSImage(cgImage: cg, size: snapshot.frame.size))

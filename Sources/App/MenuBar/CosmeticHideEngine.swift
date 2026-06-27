@@ -126,6 +126,7 @@ final class CosmeticHideEngine {
 
     @objc private func anchorClicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
+        DebugLog.log("anchor clicked: eventType=\(event?.type.rawValue.description ?? "nil") useFloatingBar=\(preferences.useFloatingBar) hasBar=\(floatingBar != nil)")
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             onOpenSettings?()
             return
