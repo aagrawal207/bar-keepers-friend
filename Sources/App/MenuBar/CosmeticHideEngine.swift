@@ -30,6 +30,30 @@ final class CosmeticHideEngine {
 
     private var autoRehideWorkItem: DispatchWorkItem?
 
+    /// Serializes reveal → capture → hide sequences. Both the launch capture and any refresh
+    /// (menu-bar change, anchor open) drive the shared divider, so running two concurrently
+    /// makes them fight over its collapsed state across `await` points — the launch capture
+    /// could hide the section out from under a refresh mid-capture, yielding 0 glyphs. Chaining
+    /// each sequence onto the previous one guarantees they run one at a time.
+    private var captureChain: Task<Void, Never> = Task {}
+
+    /// Reveals the section, runs `body` (which captures), then hides — never overlapping another
+    /// such sequence. Returns a task the caller can await if it needs the result before showing.
+    @discardableResult
+    private func runCaptureSequence(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let previous = captureChain
+        let task = Task { @MainActor in
+            _ = await previous.value
+            setHidden(collapsed: false)
+            try? await Task.sleep(for: .milliseconds(350))
+            await body()
+            _ = stateMachine.apply(.hide(.hidden))
+            setHidden(collapsed: true)
+        }
+        captureChain = task
+        return task
+    }
+
     init(preferences: Preferences, onPreferencesChanged: @escaping (Preferences) -> Void) {
         self.preferences = preferences
         self.onPreferencesChanged = onPreferencesChanged
@@ -84,16 +108,11 @@ final class CosmeticHideEngine {
 
         if preferences.useFloatingBar {
             // Items must be captured while on-screen (status items can't be captured once
-            // off-screen). So: start visible, capture+cache, THEN hide.
-            setHidden(collapsed: false)
-            Task { @MainActor in
-                // Let the menu bar settle, then capture the soon-to-be-hidden items.
-                try? await Task.sleep(for: .milliseconds(800))
-                await floatingBar?.captureAndCache(anchorMinX: anchorFrame?.minX ?? 1115)
-                // Now hide them; the floating bar will show the cached images. Sync the
-                // state machine so the first anchor click toggles from a hidden baseline.
-                _ = stateMachine.apply(.hide(.hidden))
-                setHidden(collapsed: true)
+            // off-screen). Reveal → capture+cache → hide, serialized so a later refresh can't
+            // race this launch capture for the divider state.
+            runCaptureSequence { [weak self] in
+                guard let self else { return }
+                await self.floatingBar?.captureAndCache(anchorMinX: self.anchorFrame?.minX ?? 1115)
             }
         } else {
             applyDividerVisibility()
@@ -179,13 +198,13 @@ final class CosmeticHideEngine {
         // Refresh the mirror right before showing it: reveal the items on-screen, re-capture
         // their icons and re-attribute names (Accessibility is unreliable at launch, so the
         // launch-time cache can show stale "Control Center" names and blank icons), then hide
-        // them and show the panel from the fresh cache.
+        // them and show the panel from the fresh cache. The capture is serialized behind any
+        // in-flight one; we await that sequence, then show.
+        let sequence = runCaptureSequence { [weak self] in
+            await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
+        }
         Task { @MainActor in
-            setHidden(collapsed: false)
-            try? await Task.sleep(for: .milliseconds(250))
-            let anchorMinX = anchorFrame?.minX ?? 1115
-            await bar.captureAndCache(anchorMinX: anchorMinX)
-            setHidden(collapsed: true)
+            _ = await sequence.value
             let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
             await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX)
         }
@@ -292,11 +311,11 @@ final class CosmeticHideEngine {
     /// then hides them again. Used after menu bar changes so the mirror stays current.
     func refreshFloatingBarCache() {
         guard preferences.useFloatingBar, let bar = floatingBar else { return }
-        Task { @MainActor in
-            setHidden(collapsed: false)
-            try? await Task.sleep(for: .milliseconds(250))
-            await bar.captureAndCache(anchorMinX: anchorFrame?.minX ?? 1115)
-            setHidden(collapsed: true)
+        // Reveal → capture → hide, serialized behind any in-flight capture (e.g. the launch
+        // one) so they can't fight over the divider. captureAndCache retries internally until
+        // the revealed glyphs have composited in.
+        runCaptureSequence { [weak self] in
+            await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
         }
     }
 

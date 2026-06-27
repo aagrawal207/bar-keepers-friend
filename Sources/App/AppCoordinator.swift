@@ -67,8 +67,16 @@ final class AppCoordinator {
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         source.setEventHandler { [weak self] in
             Task { @MainActor in
-                guard let report = await self?.floatingBar?.makeDiagnosticsReport() else { return }
+                // Refresh the mirror from the live menu bar first so both the report and the
+                // rendered snapshot reflect current state, not a stale cache.
+                self?.hideEngine?.refreshFloatingBarCache()
+                try? await Task.sleep(for: .milliseconds(600))
+                guard let bar = self?.floatingBar else { return }
+                let report = await bar.makeDiagnosticsReport()
                 report.write()
+                let logs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("Logs", isDirectory: true)
+                bar.renderDiagnosticSnapshot(to: logs.appendingPathComponent("BKF-bar.png"))
             }
         }
         source.resume()

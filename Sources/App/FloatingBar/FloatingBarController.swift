@@ -98,17 +98,37 @@ final class FloatingBarController {
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
         // Runs off the main thread so it can't stall the run loop (and block bar clicks).
         let attributed = await AXAttributionProvider.attribute(deduped)
+
         // Mirror the REAL menu bar glyph (Bartender-style) by capturing it while on-screen.
-        let images = await capture.captureIcons(for: attributed)
+        // The capture can race the section's reveal: if the screenshot lands before the glyphs
+        // have composited into the (translucent) menu bar, the crops come back as bare
+        // wallpaper and `captureIcons` returns nothing for them. So retry until every item has
+        // a real glyph (or we exhaust the attempts and fall back to app icons), re-capturing on
+        // a fresh frame each time. Items stay revealed across attempts (the caller hides after).
+        var images: [CGWindowID: CGImage] = [:]
+        for attempt in 1...Self.maxCaptureAttempts {
+            let fresh = await capture.captureIcons(for: attributed)
+            for (id, cg) in fresh where images[id] == nil { images[id] = cg }
+            let got = attributed.filter { images[$0.windowID] != nil }.count
+            if got == attributed.count { break }
+            if attempt < Self.maxCaptureAttempts {
+                DebugLog.log("floatingbar: capture attempt \(attempt) got \(got)/\(attributed.count) glyphs; retrying")
+                try? await Task.sleep(for: .milliseconds(Self.captureRetryDelayMs))
+            }
+        }
+
         var captured = 0, fellBack = 0
         for item in attributed {
             if let cg = images[item.windowID], !Self.isBlank(cg) {
-                let size = item.frame.size.width > 0 ? item.frame.size : CGSize(width: 24, height: 24)
+                // The captured glyph is trimmed to its bounding box; size the NSImage from the
+                // glyph's own pixel dimensions so its aspect ratio is preserved when the view
+                // scales it to fit the icon frame.
+                let size = CGSize(width: cg.width, height: cg.height)
                 iconCache[item.windowID] = NSImage(cgImage: cg, size: size)
                 captured += 1
             } else {
-                // Capturing the translucent Tahoe menu bar sometimes returns a blank/black
-                // crop; fall back to the owning app's real icon so we never show an empty box.
+                // No glyph after all attempts (rare): fall back to the owning app's real icon
+                // so we never show an empty box or a wallpaper tile.
                 iconCache[item.windowID] = AppIconProvider.icon(forPID: item.ownerPID)
                 fellBack += 1
             }
@@ -117,6 +137,12 @@ final class FloatingBarController {
         windowIDToPID = Dictionary(attributed.map { ($0.windowID, $0.ownerPID) }, uniquingKeysWith: { _, new in new })
         DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack); cache size=\(iconCache.count)")
     }
+
+    /// How many times `captureAndCache` re-captures while waiting for the revealed glyphs to
+    /// composite in, and the pause between attempts. Covers the reveal/reflow race without a
+    /// single over-long fixed delay.
+    private static let maxCaptureAttempts = 6
+    private static let captureRetryDelayMs = 180
 
     /// Builds and presents the panel from the cached icons (items are off-screen when the
     /// bar is shown, so they can't be re-captured here — the cache is populated before hide).
@@ -209,6 +235,41 @@ final class FloatingBarController {
             anchorMinX: Double(lastAnchorMinX),
             items: items
         )
+    }
+
+    /// Renders the current floating-bar contents to a PNG on disk for visual inspection during
+    /// development. Deterministic, unlike screenshotting the live panel (which races the
+    /// show/hide toggle). Composites over a neutral backdrop so the translucent material reads
+    /// the way it would over a wallpaper. Triggered alongside the SIGUSR1 report.
+    func renderDiagnosticSnapshot(to url: URL) {
+        let items = buildItemsFromCache()
+        let content = FloatingBarView(
+            items: items,
+            style: preferences.floatingBarStyle,
+            onActivate: { _ in }
+        )
+        let hosting = NSHostingView(rootView: content)
+        hosting.layoutSubtreeIfNeeded()
+        let size = hosting.fittingSize
+        guard size.width > 0, size.height > 0 else {
+            DebugLog.log("diag: bar snapshot skipped — zero-size content (\(items.count) items)")
+            return
+        }
+
+        // Backdrop so .ultraThinMaterial isn't rendered over transparency (which would make the
+        // PNG unreadable). Mid-gray approximates a wallpaper behind the Liquid Glass panel.
+        let pad: CGFloat = 24
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: size.width + pad * 2, height: size.height + pad * 2))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(calibratedWhite: 0.20, alpha: 1).cgColor
+        hosting.frame = CGRect(origin: CGPoint(x: pad, y: pad), size: size)
+        container.addSubview(hosting)
+
+        guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else { return }
+        container.cacheDisplay(in: container.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: url)
+        DebugLog.log("diag: wrote bar snapshot \(Int(size.width))x\(Int(size.height)) (\(items.count) items) to \(url.lastPathComponent)")
     }
 
     // MARK: - Internals
