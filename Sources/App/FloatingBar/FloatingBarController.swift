@@ -34,19 +34,19 @@ final class FloatingBarController {
 
     /// Toggles the floating bar. Returns the new visibility.
     @discardableResult
-    func toggle(anchorRightX: CGFloat) async -> Bool {
+    func toggle(anchorMinX: CGFloat, anchorRightX: CGFloat) async -> Bool {
         if isVisible {
             hide()
             return false
         }
-        await show(anchorRightX: anchorRightX)
+        await show(anchorMinX: anchorMinX, anchorRightX: anchorRightX)
         return isVisible
     }
 
     /// Builds and presents the panel.
-    func show(anchorRightX: CGFloat) async {
-        DebugLog.log("floatingbar: show(anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
-        let items = await buildItems()
+    func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
+        DebugLog.log("floatingbar: show(anchorMinX=\(anchorMinX), anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
+        let items = await buildItems(anchorMinX: anchorMinX)
 
         let screen = NSScreen.main ?? NSScreen.screens.first
         let displayFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -95,11 +95,11 @@ final class FloatingBarController {
 
     // MARK: - Internals
 
-    private func buildItems() async -> [FloatingBarItem] {
+    private func buildItems(anchorMinX: CGFloat) async -> [FloatingBarItem] {
         let snapshots = (try? windowServer.menuBarItems()) ?? []
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
-            visibleMinX: 0,
+            leftOfAnchorX: anchorMinX,
             excludingControlItems: controlItemWindowIDs
         )
         DebugLog.log("floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden (off-screen left of x=0). screenRecording=\(capture.hasScreenRecordingAccess)")

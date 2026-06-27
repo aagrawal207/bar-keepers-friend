@@ -19,7 +19,10 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     private static let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
 
     func menuBarItems() throws -> [MenuBarItemSnapshot] {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        // Must NOT use .optionOnScreenOnly: the hidden items we care about are pushed
+        // off-screen (negative x) by the expanded divider, and on-screen-only enumeration
+        // would exclude exactly those. Enumerate all windows and filter to the status layer.
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             throw WindowServerError.invalidServerResponse("CGWindowListCopyWindowInfo returned nil")
         }

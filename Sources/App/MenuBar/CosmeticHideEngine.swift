@@ -98,12 +98,10 @@ final class CosmeticHideEngine {
         floatingBar?.controlItemWindowIDs = ids
     }
 
-    /// The global x of the anchor's right edge, used to align the floating bar beneath it.
-    private var anchorRightX: CGFloat {
-        guard let window = anchorItem?.button?.window else {
-            return NSScreen.main?.frame.maxX ?? 1440
-        }
-        return window.frame.maxX
+    /// The anchor window's global frame, used to align the floating bar and to determine
+    /// which items count as "hidden" (those left of the anchor).
+    private var anchorFrame: CGRect? {
+        anchorItem?.button?.window?.frame
     }
 
     func uninstall() {
@@ -134,8 +132,8 @@ final class CosmeticHideEngine {
         if preferences.useFloatingBar, let bar = floatingBar {
             // Refresh now that the windows are fully realized, so our own items are excluded.
             publishControlItemWindowIDs()
-            let anchorX = anchorRightX
-            Task { await bar.toggle(anchorRightX: anchorX) }
+            let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
+            Task { await bar.toggle(anchorMinX: frame.minX, anchorRightX: frame.maxX) }
         } else {
             toggleHidden()
         }

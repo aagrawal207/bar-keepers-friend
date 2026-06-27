@@ -1,30 +1,33 @@
 import CoreGraphics
 import Foundation
 
-/// Determines which menu bar items are currently hidden — i.e. pushed off the visible menu
-/// bar by an expanded divider — so the floating bar can mirror them.
+/// Determines which menu bar items belong to the hidden section — those positioned to the
+/// left of the anchor control item — so the floating bar can mirror them.
 ///
-/// Pure: given the enumerated status-item snapshots and where the visible menu bar starts,
-/// it returns the off-screen items in their natural left-to-right order. No window-server
-/// access, so it is fully unit-testable from fixtures.
+/// "Hidden" is defined by position relative to the anchor, not by being fully off-screen.
+/// This is robust to how far the expanded divider has pushed items (off-screen at negative
+/// x when expanded, or just left of the anchor when not) and naturally excludes the
+/// always-visible right-side system items (clock, Control Center).
+///
+/// Pure: given the enumerated snapshots and the anchor's leading edge, it returns the
+/// hidden items in left-to-right order. No window-server access, fully unit-testable.
 public enum HiddenItemsResolver {
 
-    /// Returns the hidden items: those lying entirely to the left of `visibleMinX`
-    /// (the left edge of the on-screen menu bar, normally `0`). The app's own control
-    /// items are excluded by window id, and system items that must not be touched are
-    /// dropped via the immovable denylist.
+    /// Returns the hidden items: those lying entirely to the left of `anchorMinX` (the
+    /// anchor control item's leading edge). The app's own control items are excluded by
+    /// window id, and system items that must not be touched are dropped via the immovable
+    /// denylist.
     ///
-    /// Results are ordered left-to-right by their original on-screen position, which is the
-    /// order the user is used to seeing in the menu bar.
+    /// Results are ordered left-to-right by position, the order the user sees in the menu bar.
     public static func hiddenItems(
         from items: [MenuBarItemSnapshot],
-        visibleMinX: CGFloat = 0,
+        leftOfAnchorX anchorMinX: CGFloat,
         excludingControlItems controlItemWindowIDs: Set<CGWindowID> = []
     ) -> [MenuBarItemSnapshot] {
         items
             .filter { !controlItemWindowIDs.contains($0.windowID) }
             .filter { !ImmovableItems.isImmovable($0) }
-            .filter { $0.frame.maxX <= visibleMinX }
+            .filter { $0.frame.maxX <= anchorMinX }
             .sorted { $0.frame.minX < $1.frame.minX }
     }
 }
