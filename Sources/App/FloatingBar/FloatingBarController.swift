@@ -45,8 +45,10 @@ final class FloatingBarController {
 
     /// Builds and presents the panel.
     func show(anchorRightX: CGFloat) async {
+        NSLog("BKF floatingbar: show(anchorRightX=\(anchorRightX)) style=\(preferences.floatingBarStyle.rawValue)")
         let items = await buildItems()
         guard !items.isEmpty else {
+            NSLog("BKF floatingbar: nothing to show — panel not presented (drag icons to the LEFT of the anchor to hide them)")
             // Nothing to show (no hidden items, or capture unavailable). Don't pop an
             // empty panel — leave any existing one hidden.
             hide()
@@ -88,6 +90,7 @@ final class FloatingBarController {
         panel.orderFrontRegardless()
         self.panel = panel
         isVisible = true
+        NSLog("BKF floatingbar: presented panel with \(items.count) items at \(panelFrame)")
     }
 
     func hide() {
@@ -104,9 +107,11 @@ final class FloatingBarController {
             visibleMinX: 0,
             excludingControlItems: controlItemWindowIDs
         )
+        NSLog("BKF floatingbar: enumerated \(snapshots.count) status items, \(hidden.count) hidden (off-screen left of x=0). screenRecording=\(capture.hasScreenRecordingAccess)")
         guard !hidden.isEmpty else { return [] }
 
         let images = await capture.captureIcons(for: hidden)
+        NSLog("BKF floatingbar: captured \(images.count)/\(hidden.count) icon images")
         return hidden.compactMap { snapshot in
             guard let cg = images[snapshot.windowID] else { return nil }
             return FloatingBarItem(snapshot: snapshot, image: NSImage(cgImage: cg, size: snapshot.frame.size))
