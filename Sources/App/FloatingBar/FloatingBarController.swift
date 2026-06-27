@@ -105,14 +105,21 @@ final class FloatingBarController {
         // wallpaper and `captureIcons` returns nothing for them. So retry until every item has
         // a real glyph (or we exhaust the attempts and fall back to app icons), re-capturing on
         // a fresh frame each time. Items stay revealed across attempts (the caller hides after).
+        // Only items whose (frozen) frame is on-screen can be captured — `captureIcons` filters
+        // on exactly this. Gate the retry loop on that subset so an item that's off-screen after
+        // the reveal (and thus never capturable this pass) doesn't force every attempt to be
+        // burned; it falls through to the app-icon fallback instead.
+        let capturable = attributed.filter { $0.frame.minX >= 0 }
         var images: [CGWindowID: CGImage] = [:]
         for attempt in 1...Self.maxCaptureAttempts {
+            // Each call takes a fresh screenshot, so retrying recovers glyphs that hadn't yet
+            // composited into the (translucent) menu bar on an earlier attempt.
             let fresh = await capture.captureIcons(for: attributed)
             for (id, cg) in fresh where images[id] == nil { images[id] = cg }
-            let got = attributed.filter { images[$0.windowID] != nil }.count
-            if got == attributed.count { break }
+            let got = capturable.filter { images[$0.windowID] != nil }.count
+            if capturable.isEmpty || got >= capturable.count { break }
             if attempt < Self.maxCaptureAttempts {
-                DebugLog.log("floatingbar: capture attempt \(attempt) got \(got)/\(attributed.count) glyphs; retrying")
+                DebugLog.log("floatingbar: capture attempt \(attempt) got \(got)/\(capturable.count) capturable glyphs; retrying")
                 try? await Task.sleep(for: .milliseconds(Self.captureRetryDelayMs))
             }
         }

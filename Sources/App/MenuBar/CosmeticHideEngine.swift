@@ -37,21 +37,73 @@ final class CosmeticHideEngine {
     /// each sequence onto the previous one guarantees they run one at a time.
     private var captureChain: Task<Void, Never> = Task {}
 
-    /// Reveals the section, runs `body` (which captures), then hides — never overlapping another
-    /// such sequence. Returns a task the caller can await if it needs the result before showing.
+    /// True while a capture sequence is revealing/capturing. Lets the anchor click ignore the
+    /// transient reveal (the divider is physically open for capture but not for the user), so a
+    /// click during the launch capture window can't misread that state and eat the toggle.
+    private(set) var captureInFlight = false
+
+    /// Upper bound on a single capture sequence so a wedged ScreenCaptureKit call can't stall
+    /// the chain forever (the next sequence waits on this one). Generous vs. the ~1s happy path.
+    private static let captureSequenceTimeout: TimeInterval = 8
+
+    /// Whether the hidden section is currently in active use and must not be disturbed by an
+    /// opportunistic refresh: the mirror panel is showing, or an activation revealed the section
+    /// so a real item's menu can stay open (state is `.shown` only via reveal-for-activation in
+    /// floating-bar mode). A refresh that ignored this would collapse the divider out from under
+    /// the open menu, or reveal the real items behind the visible panel (duplicated icons).
+    private var sectionInUse: Bool {
+        (floatingBar?.isVisible ?? false) || stateMachine.visibility(of: .hidden) == .shown
+    }
+
+    /// Reveals the section, runs `body` (which captures), then restores the divider — never
+    /// overlapping another such sequence. The physical reveal is transient and does NOT change
+    /// the state machine; on completion the divider is set to match the state machine, unless
+    /// `forceCollapseAfter` is set (launch / open-panel), which both collapses the state machine
+    /// and the divider. Restoring-to-state (rather than always collapsing) is what keeps a
+    /// refresh from slamming shut a section an activation revealed for an open menu.
+    /// Returns a task the caller can await if it needs the capture done before showing the panel.
     @discardableResult
-    private func runCaptureSequence(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+    private func runCaptureSequence(
+        forceCollapseAfter: Bool,
+        _ body: @escaping @MainActor () async -> Void
+    ) -> Task<Void, Never> {
         let previous = captureChain
         let task = Task { @MainActor in
-            _ = await previous.value
+            // Wait for the predecessor, but don't let a wedged one (e.g. a hung ScreenCaptureKit
+            // call) block this sequence forever — proceed after a bound. The orphaned
+            // predecessor finishes on its own; the worst case is a brief divider overlap, not a
+            // permanent stall that prevents the bar from ever showing.
+            await awaitBounded(previous, seconds: Self.captureSequenceTimeout)
+            captureInFlight = true
+            defer { captureInFlight = false }
             setHidden(collapsed: false)
             try? await Task.sleep(for: .milliseconds(350))
+            // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
+            // shifted capture timing and produced wallpaper-only crops).
             await body()
-            _ = stateMachine.apply(.hide(.hidden))
-            setHidden(collapsed: true)
+            if forceCollapseAfter {
+                _ = stateMachine.apply(.hide(.hidden))
+                setHidden(collapsed: true)
+            } else {
+                // Restore the divider to whatever the state machine now says — preserves a
+                // reveal an activation established while we were capturing.
+                setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+            }
         }
         captureChain = task
         return task
+    }
+
+    /// Awaits `task`, giving up after `seconds` so a wedged predecessor can't stall the chain.
+    /// `task` is `Sendable`, so racing it against a sleep in a task group is fine here (unlike
+    /// passing our non-Sendable `@MainActor` capture closure, which trips region isolation).
+    private func awaitBounded(_ task: Task<Void, Never>, seconds: TimeInterval) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { _ = await task.value }
+            group.addTask { try? await Task.sleep(for: .seconds(seconds)) }
+            _ = await group.next()
+            group.cancelAll()
+        }
     }
 
     init(preferences: Preferences, onPreferencesChanged: @escaping (Preferences) -> Void) {
@@ -109,8 +161,9 @@ final class CosmeticHideEngine {
         if preferences.useFloatingBar {
             // Items must be captured while on-screen (status items can't be captured once
             // off-screen). Reveal → capture+cache → hide, serialized so a later refresh can't
-            // race this launch capture for the divider state.
-            runCaptureSequence { [weak self] in
+            // race this launch capture for the divider state. Force-collapse after: launch
+            // establishes the hidden baseline.
+            runCaptureSequence(forceCollapseAfter: true) { [weak self] in
                 guard let self else { return }
                 await self.floatingBar?.captureAndCache(anchorMinX: self.anchorFrame?.minX ?? 1115)
             }
@@ -181,6 +234,11 @@ final class CosmeticHideEngine {
     /// re-attribute) so names and icons are current rather than the stale launch-time cache.
     private func toggleFloatingBar() {
         guard let bar = floatingBar else { return }
+        // Ignore a click while a capture sequence is mid-flight (e.g. the one-time launch
+        // capture): the divider is transiently revealed for capture but the state machine
+        // hasn't settled, so acting now would misread it — collapsing the section and eating
+        // the click, and stacking a duplicate capture. The launch window is ~1s and one-time.
+        guard !captureInFlight else { return }
         // Refresh now that the windows are fully realized, so our own items are excluded.
         publishControlItemWindowIDs()
         // If a prior activation left the section revealed in the menu bar, the anchor should
@@ -197,10 +255,11 @@ final class CosmeticHideEngine {
         }
         // Refresh the mirror right before showing it: reveal the items on-screen, re-capture
         // their icons and re-attribute names (Accessibility is unreliable at launch, so the
-        // launch-time cache can show stale "Control Center" names and blank icons), then hide
-        // them and show the panel from the fresh cache. The capture is serialized behind any
-        // in-flight one; we await that sequence, then show.
-        let sequence = runCaptureSequence { [weak self] in
+        // launch-time cache can show stale "Control Center" names and blank icons), then
+        // collapse the divider and show the panel from the fresh cache. Force-collapse after:
+        // the panel (not the in-bar items) is what the user sees. Serialized behind any
+        // in-flight capture; we await it, then show.
+        let sequence = runCaptureSequence(forceCollapseAfter: true) { [weak self] in
             await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
         }
         Task { @MainActor in
@@ -300,21 +359,28 @@ final class CosmeticHideEngine {
     }
 
     @objc private func screenParametersChanged() {
+        // The menu bar geometry changed (display added/removed, resolution change). If the
+        // section is in active use (panel showing, or an activation revealed it for an open
+        // menu), don't disturb it — collapsing or revealing now would slam an open menu shut or
+        // show the real items behind the panel as duplicates. Refresh opportunistically only
+        // when idle.
+        guard !sectionInUse else { return }
         enact(stateMachine.apply(.screenParametersChanged))
-        // The menu bar geometry changed (display added/removed, resolution change). Refresh
-        // the mirror: reveal briefly, re-capture on-screen, then re-hide.
         guard preferences.useFloatingBar else { return }
         refreshFloatingBarCache()
     }
 
     /// Reveals the section, re-captures the now-on-screen items into the floating bar cache,
-    /// then hides them again. Used after menu bar changes so the mirror stays current.
+    /// then hides them again. Used after menu bar changes so the mirror stays current. A no-op
+    /// while the section is in active use, so it never disrupts an open menu or the visible
+    /// panel; the next idle refresh (or panel open) picks up the change.
     func refreshFloatingBarCache() {
-        guard preferences.useFloatingBar, let bar = floatingBar else { return }
-        // Reveal → capture → hide, serialized behind any in-flight capture (e.g. the launch
+        guard preferences.useFloatingBar, let bar = floatingBar, !sectionInUse else { return }
+        // Reveal → capture → restore, serialized behind any in-flight capture (e.g. the launch
         // one) so they can't fight over the divider. captureAndCache retries internally until
-        // the revealed glyphs have composited in.
-        runCaptureSequence { [weak self] in
+        // the revealed glyphs have composited in. Not a force-collapse: restore to state so we
+        // don't fight an activation that begins while we capture.
+        runCaptureSequence(forceCollapseAfter: false) { [weak self] in
             await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
         }
     }

@@ -185,7 +185,12 @@ final class IconCaptureService {
         let band = max(2, h / 12)
         var sr = 0, sg = 0, sb = 0, n = 0
         for row in 0..<band {
-            for edge in [row, h - 1 - row] {
+            let mirrored = h - 1 - row
+            // Skip the mirrored bottom row when it coincides with (or falls inside) the top
+            // band — otherwise a center row is summed twice and skews the estimate. Only the
+            // degenerate h==3 crop hits this, but the guard is cheap and exact.
+            let edges = mirrored > row ? [row, mirrored] : [row]
+            for edge in edges {
                 let base = edge * w * 4
                 for col in 0..<w {
                     let p = base + col * 4
