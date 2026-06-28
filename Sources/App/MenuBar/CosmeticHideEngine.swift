@@ -57,6 +57,14 @@ final class CosmeticHideEngine {
     /// each sequence onto the previous one guarantees they run one at a time.
     private var captureChain: Task<Void, Never> = Task {}
 
+    /// Monotonic id stamped onto each capture sequence. A sequence's tail (which drives the shared
+    /// divider/state-machine) only acts while it is still the LATEST sequence — i.e. its id equals
+    /// `latestCaptureEpoch`. This is the epoch check that stops an orphaned, late-returning
+    /// predecessor (one `awaitBounded` overtook after an >8s wedge) from collapsing the divider out
+    /// from under the successor that has since taken over. `Task` is a value type so it can't be
+    /// compared by identity; a synchronously-bumped counter is the reliable substitute.
+    private var latestCaptureEpoch = 0
+
     /// Number of capture sequences currently revealing/capturing. A COUNTER, not a bool: when a
     /// wedged predecessor is overtaken via `awaitBounded`'s timeout, predecessor and successor run
     /// concurrently for a moment. With a bool, the orphaned predecessor's `defer` would clear the
@@ -96,6 +104,10 @@ final class CosmeticHideEngine {
         _ body: @escaping @MainActor () async -> Void
     ) -> Task<Void, Never> {
         let previous = captureChain
+        // Stamp this sequence with the next epoch (synchronously, before the task suspends), so its
+        // tail can tell whether it's still the latest sequence when its body returns.
+        latestCaptureEpoch += 1
+        let epoch = latestCaptureEpoch
         let task = Task { @MainActor in
             // Wait for the predecessor, but don't let a wedged one (e.g. a hung ScreenCaptureKit
             // call) block this sequence forever — proceed after a bound. The orphaned
@@ -113,6 +125,12 @@ final class CosmeticHideEngine {
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
             // shifted capture timing and produced wallpaper-only crops).
             await body()
+            // Only the most-recent sequence owns the divider/state-machine. If `awaitBounded` timed
+            // out an >8s-wedged predecessor, a SUCCESSOR has already started and now owns the bar;
+            // when this (orphaned) sequence's body finally returns, its tail must NOT collapse the
+            // divider out from under that successor (the flicker / wallpaper-crop bug). The
+            // synchronously-bumped epoch makes this a sound "am I still the latest?" check.
+            guard epoch == latestCaptureEpoch else { return }
             if forceCollapseAfter {
                 _ = stateMachine.apply(.hide(.hidden))
                 setHidden(collapsed: true)
@@ -587,9 +605,15 @@ final class CosmeticHideEngine {
     /// single-display default. Used to make the plausibility filter's top-edge test relative to
     /// the anchor's display, so items on a display stacked above/below the primary aren't rejected.
     private var anchorDisplayMenuBarTop: CGFloat {
-        guard let anchorScreen,
-              let primaryHeight = NSScreen.screens.first?.frame.maxY else { return 0 }
-        return primaryHeight - anchorScreen.frame.maxY
+        guard let anchorScreen else { return 0 }
+        // Resolve against the TRUE primary (the zero-origin display), not `screens.first` — the
+        // array order isn't guaranteed to lead with the primary, and trusting it skewed the y-flip
+        // on a multi-display rig. The pure helper finds the zero-origin screen and no-ops to 0 if
+        // none is present (transient reconfiguration), matching the single-display default.
+        return DisplayGeometry.menuBarTopY(
+            of: anchorScreen.frame,
+            allScreenFrames: NSScreen.screens.map(\.frame)
+        )
     }
 
     private func applyDividerVisibility() {

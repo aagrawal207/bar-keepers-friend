@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **172 tests, 20 suites**).
+- Test: same command with `test` (currently **180 tests, 21 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -122,24 +122,27 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   the real invariant (`expanded(w) > w` for 1512…6016). Found by an adversarial audit workflow.
   *Caveat:* the 9000 ceiling is the largest value comfortably under 10000; if on-device probing on
   Tahoe ever shows window-server memory growth before then, lower it (but keep it > widest display).
-- **[MEDIUM, open] `anchorDisplayMenuBarTop` assumes `NSScreen.screens.first` is the primary.**
-  (`CosmeticHideEngine.swift` ~L589) The AppKit→CG y-flip uses `NSScreen.screens.first?.frame.maxY`
-  as the primary's height, but `screens.first` is not guaranteed to be the zero-origin primary. When
-  it isn't, the menu-bar-top offset is wrong and the plausibility filter mis-scopes items on a
-  stacked display. Fix (App target, review-only without NSScreen injection): use
-  `NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height`, matching the precedent in
-  `IconCaptureService`. Confirmed by the audit; best of the remaining backlog.
-- **[MEDIUM, open] Overtaken capture sequence's tail block fights its successor.** After an ~8s
+- **[RESOLVED 2026-06-28] `anchorDisplayMenuBarTop` assumed `NSScreen.screens.first` is the primary.**
+  The AppKit→CG y-flip needs the *primary* (zero-origin) display's height, but used
+  `NSScreen.screens.first?.frame.maxY` — and the array isn't guaranteed to lead with the primary.
+  When it didn't, the menu-bar-top offset was wrong and the plausibility filter mis-scoped items on a
+  stacked display. Fixed by extracting the conversion into a pure, tested Core helper
+  (`DisplayGeometry`: `primaryHeight` finds the zero-origin frame; `menuBarTopY` no-ops to 0 if none
+  is present); the engine passes the live `NSScreen` frames in. 8 new tests cover the
+  non-primary-first arrangement and stacked-above/below displays.
+- **[RESOLVED 2026-06-28] Overtaken capture sequence's tail fought its successor.** After an ~8s
   wedged ScreenCaptureKit call, `awaitBounded` lets a successor start while the orphaned predecessor
-  is still live; when the predecessor finally returns, its tail block (`CosmeticHideEngine.swift`
-  ~L116-123) still drives the shared divider/state-machine, so it can collapse the section out from
-  under the successor (visible flicker / wallpaper crop). Fix: guard the tail on
-  `self.captureChain === thisTask` (the chain is reassigned synchronously, so identity is a valid
-  epoch check). This also subsumes the next item. Hard to unit-test (async interleaving) — verify
-  on-device. Confirmed by the audit.
-- **[LOW, open] `awaitBounded` leaves the orphaned predecessor uncancelled** (`CosmeticHideEngine`
-  ~L132). Only bites on a genuine >8s ScreenCaptureKit wedge; its reliable fix IS the tail-guard
-  above, so don't schedule separately — close it when the tail guard lands. Confirmed by the audit.
+  is still live; when the predecessor finally returned, its tail still drove the shared
+  divider/state-machine, collapsing the section out from under the successor (flicker / wallpaper
+  crop). Fixed: each sequence is stamped with a synchronously-incremented `latestCaptureEpoch`, and
+  the tail no-ops unless it's still the latest (`epoch == latestCaptureEpoch`). (`Task` is a value
+  type, so identity comparison is impossible — the epoch is the substitute; it's bumped at the exact
+  point `captureChain` is reassigned, so it's an equivalent, compiling check.) This also closes the
+  `awaitBounded`-non-cancellation finding (the evicted predecessor now backs off harmlessly and
+  unblocks the successor faster). Adversarially reviewed; async path, so not unit-tested. NOTE (pre-
+  existing, not changed): `reconcileHiddenItems` guards only on `!(floatingBar.isVisible)`, not the
+  broader `sectionInUse`, so a user item-toggle can still collapse a section an activation revealed
+  for an open menu — by design (reconcile owns its reveal→move→collapse), but worth revisiting.
 - **[LOW, open] `colorAlpha` bbox test skips the first/last crop columns** (`IconCaptureService`
   ~L225): a thin colored badge touching the crop edge can lose its outer column, and `p-4` at `x==0`
   is a latent out-of-bounds-row neighbor read. Impact bounded by the 2pt pad. Cleanup; hard to
