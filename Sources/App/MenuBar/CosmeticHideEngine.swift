@@ -310,7 +310,11 @@ final class CosmeticHideEngine {
 
     /// Shows or hides the floating bar from the cached mirror — instantly, with no capture on
     /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
-    private func toggleFloatingBar() {
+    ///
+    /// `persistUntilToggled` is passed through to the bar's auto-dismiss policy: a keyboard toggle
+    /// (⌥⌘B) sets it so an opened bar the user never mouses onto stays put until they toggle again;
+    /// pointer-driven opens (anchor click, hover) leave it false so an abandoned bar tidies away.
+    private func toggleFloatingBar(persistUntilToggled: Bool = false) {
         guard let bar = floatingBar else { return }
         // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
         // timer armed by an earlier activation (default 15s) could fire later and yank shut a bar
@@ -329,7 +333,7 @@ final class CosmeticHideEngine {
                 bar.hide()
             } else {
                 let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
-                Task { @MainActor in await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX) }
+                Task { @MainActor in await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled) }
             }
             return
         }
@@ -353,7 +357,7 @@ final class CosmeticHideEngine {
         // each screen-parameter change. So opening is just "lay out the cached icons + show".
         let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
         Task { @MainActor in
-            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX)
+            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled)
         }
         // If the live menu bar gained/lost items since the cache was built (an app added or
         // removed its status item while we were idle), refresh in the BACKGROUND. The bar is
@@ -378,7 +382,10 @@ final class CosmeticHideEngine {
     /// shortcut does the right thing either way. A keypress *toggling* is expected behavior.
     func toggleFromShortcut() {
         if preferences.useFloatingBar, floatingBar != nil {
-            toggleFloatingBar()
+            // A keyboard toggle is deliberate: keep the bar open until the user presses the
+            // shortcut again (or interacts with it), rather than auto-dismissing a bar they never
+            // moused onto — a vanishing bar would make the shortcut feel like it did nothing.
+            toggleFloatingBar(persistUntilToggled: true)
         } else {
             toggleHidden()
         }

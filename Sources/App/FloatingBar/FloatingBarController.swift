@@ -122,6 +122,13 @@ final class FloatingBarController {
     private static let preEntryGracePeriod: TimeInterval = 3
     /// When the current bar became visible, for the pre-entry backstop above. Set in show().
     private var shownAt: Date?
+    /// Whether THIS open should auto-dismiss if the pointer never lands on it (the pre-entry
+    /// backstop). True for pointer-driven opens (anchor click, hover) where an abandoned bar
+    /// should tidy away; FALSE for a deliberate keyboard toggle (⌥⌘B), which should stay put until
+    /// the user toggles it again or moves onto it and leaves — a keypress isn't a "glance", so a
+    /// bar that silently vanished a few seconds after the shortcut would read as "the shortcut
+    /// doesn't work". Set only on a fresh open; a re-layout show() leaves it untouched.
+    private var autoDismissWhenAbandoned = true
 
     init(
         windowServer: WindowServer,
@@ -268,7 +275,11 @@ final class FloatingBarController {
 
     /// Builds and presents the panel from the cached icons (items are off-screen when the
     /// bar is shown, so they can't be re-captured here — the cache is populated before hide).
-    func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
+    ///
+    /// `autoDismissWhenAbandoned` controls only the pre-entry backstop for THIS open (ignored on a
+    /// re-layout show() while already visible): pointer-driven opens pass `true` so a bar the user
+    /// never moves onto tidies away; a keyboard toggle passes `false` so it stays until re-toggled.
+    func show(anchorMinX: CGFloat, anchorRightX: CGFloat, autoDismissWhenAbandoned: Bool = true) async {
         lastAnchorMinX = anchorMinX
         lastAnchorRightX = anchorRightX
         // The BAR renders the filtered + reordered set (suppressed items dropped, pinned items
@@ -335,6 +346,7 @@ final class FloatingBarController {
         if !isVisible {
             pointerHasEnteredPanel = false
             shownAt = Date()
+            self.autoDismissWhenAbandoned = autoDismissWhenAbandoned
         }
         // Set visible up front so the engine's toggle logic and the `if isVisible { await show }`
         // re-layout path in captureAndCache both see the bar as open the instant we commit to it,
@@ -751,12 +763,14 @@ final class FloatingBarController {
 
         // Pointer is OUTSIDE the panel. Only arm the exit dismissal once the pointer has actually
         // been on the bar — otherwise a bar revealed under a pointer that's elsewhere (hover over
-        // the anchor, or the ⌥⌘B shortcut) would dismiss itself ~0.4s after appearing. The backstop
-        // is a generous pre-entry window: a bar the user never moves onto still tidies away rather
-        // than lingering forever.
-        guard pointerHasEnteredPanel || Date().timeIntervalSince(shownAt ?? Date()) >= Self.preEntryGracePeriod else {
-            return
-        }
+        // the anchor, or the ⌥⌘B shortcut) would dismiss itself ~0.4s after appearing. Once the
+        // pointer HAS entered, normal exit-dismissal applies regardless of how the bar opened (a
+        // deliberate move-away closes it). The pre-entry backstop — closing a bar the user never
+        // touched — fires only for pointer-driven opens; a keyboard toggle stays put until the user
+        // toggles it again, since a vanishing bar would make the shortcut feel broken.
+        let preEntryExpired = autoDismissWhenAbandoned
+            && Date().timeIntervalSince(shownAt ?? Date()) >= Self.preEntryGracePeriod
+        guard pointerHasEnteredPanel || preEntryExpired else { return }
 
         if dismissWorkItem == nil {
             // Nothing scheduled yet — arm the grace countdown. (If one is already pending we let it
