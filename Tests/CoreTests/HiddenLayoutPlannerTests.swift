@@ -121,6 +121,37 @@ import Testing
         #expect(Set(result.map { $0.item.windowID }) == [1])
     }
 
+    @Test func itemsOnOtherDisplaysAreNeverMovedWhenDisplayRangeIsGiven() {
+        // Multi-display: the enumeration includes the OTHER display's mirror copy of an item at a
+        // far-away x. Only the copy on the anchor's display (here x∈[0,1512]) is movable. With a
+        // display range pinned, the off-display copy (x≈3100) must be skipped, not retried-and-failed.
+        var controls = ItemControlStore()
+        let onDisplay = item("com.a.app", x: 1100, id: 1)    // anchor's display, shown, wants hidden
+        let offDisplay = item("com.a.app", x: 3100, id: 2)   // secondary display mirror, same intent
+        controls.setHidden(true, for: onDisplay)
+
+        let result = HiddenLayoutPlanner.moves(
+            for: [onDisplay, offDisplay],
+            anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls, excludingWindowIDs: [],
+            displayXRange: 0...1512
+        )
+        #expect(result.map { $0.item.windowID } == [1]) // only the on-display copy is planned
+    }
+
+    @Test func nilDisplayRangePlansAcrossAllItems() {
+        // Single-display callers (and the FakeWindowServer tests) pass no range → no display filter,
+        // so behavior is unchanged: both wrong-side copies are planned.
+        var controls = ItemControlStore()
+        let a = item("com.a.app", x: 1100, id: 1)
+        let b = item("com.b.app", x: 3100, id: 2)
+        controls.setHidden(true, for: a)
+        controls.setHidden(true, for: b)
+
+        let result = moves([a, b], controls) // moves() passes no displayXRange
+        #expect(Set(result.map { $0.item.windowID }) == [1, 2])
+    }
+
     @Test func transientStatusLayerWindowIsNeverMovedEvenSharingAnAppKey() {
         // An app can park a transient window (e.g. Karabiner's notification window, seen far down
         // the screen) at the status layer. It shares its app's owner key, so a "hide that app"

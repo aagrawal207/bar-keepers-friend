@@ -34,6 +34,13 @@ public enum HiddenLayoutPlanner {
     ///   - anchorMaxX: the trailing (right) edge of our anchor.
     ///   - controls: the user's per-item hide intent (`hiddenInMenuBar`).
     ///   - excludingWindowIDs: our own control items (anchor + divider), never moved.
+    ///   - displayXRange: the global x-range of the display the anchor currently lives on. On a
+    ///     multi-display rig each display has its own menu bar, so `menuBarItems()` enumerates the
+    ///     status windows of ALL of them — but only the copy on the anchor's display is movable
+    ///     (the others are static mirrors at far-away x). When provided, items whose midpoint falls
+    ///     outside this range are skipped, so a reconcile never burns the retry budget failing on an
+    ///     off-display window. `nil` (the default) disables the filter for single-display callers
+    ///     and the `FakeWindowServer` tests, whose fixtures are all on one notional display.
     ///
     /// An item is left alone unless three things hold: it has a stable identity (so intent can be
     /// keyed to it), it isn't a system item we must not move, and it's currently on the WRONG side
@@ -44,7 +51,8 @@ public enum HiddenLayoutPlanner {
         anchorMinX: CGFloat,
         anchorMaxX: CGFloat,
         controls: ItemControlStore,
-        excludingWindowIDs: Set<CGWindowID> = []
+        excludingWindowIDs: Set<CGWindowID> = [],
+        displayXRange: ClosedRange<CGFloat>? = nil
     ) -> [Move] {
         // Targets just past each anchor edge. The window server snaps a dragged item into the
         // nearest real slot, so these need only land unambiguously on the correct side — a small
@@ -55,6 +63,11 @@ public enum HiddenLayoutPlanner {
         var result: [Move] = []
         for item in items {
             guard !excludingWindowIDs.contains(item.windowID) else { continue }
+            // Skip items on a different display than the anchor. Each display has its own menu bar,
+            // so the enumeration includes mirror copies at the other displays' coordinates; only the
+            // copy sharing the anchor's display is movable. Filtering here keeps the move from
+            // failing-and-retrying against an off-display window (the multi-display flakiness).
+            if let range = displayXRange, !range.contains(item.frame.midX) { continue }
             // Not a real menu bar glyph → never try to move it. Some apps park transient windows at
             // the status-window layer (e.g. Karabiner's notification window, observed far down the
             // screen, and tall popover panels). These share their app's owner key, so without this

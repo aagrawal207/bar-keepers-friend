@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **165 tests, 20 suites**).
+- Test: same command with `test` (currently **167 tests, 20 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -119,12 +119,18 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Fixed: `ControlItemOrder.repairedDividerPosition` (pure, tested) + `repairControlItemOrderIfNeeded()`
   in `CosmeticHideEngine.install()`, run *before* the items are created (AppKit reads the slot at
   creation), rewrites the divider to just-left-of-anchor when inverted. Self-heals on every launch.
-- **[MEDIUM] Synthesized move is flaky on a multi-display setup.** When the menu-bar display
-  changes (this machine gains/loses a second display), a planned move can fail — observed a single
-  `Karabiner-Menu` move fail with the anchor on the secondary display (anchorMinX jumped 1106 →
-  3021 between reconciles). The geometry/windowID is per-display, and the reconcile can run against
-  a stale display. Needs: pin the move to the anchor's *current* display, and/or re-resolve the
-  item's live windowID for the active display before moving. `killall ControlCenter` unsticks.
+- **[RESOLVED 2026-06-28] Synthesized move was flaky on a multi-display setup.** Each display has
+  its own menu bar, so `menuBarItems()` enumerates the status windows of ALL displays — the same
+  logical item appears as a mirror copy at each display's coordinates (confirmed live: Control
+  Center items at both x≈1106 and x≈3069). Only the copy on the anchor's display is movable; a move
+  targeting an off-display mirror failed and burned the retry budget. Plus, when the menu-bar
+  display changed (anchor jumped 1106 → 3021), the saved intent was never re-applied on the new
+  display. Fixed: `HiddenLayoutPlanner.moves` takes an optional `displayXRange` and skips items
+  whose midpoint is off the anchor's display; `CosmeticHideEngine.anchorDisplayXRange` supplies it
+  from the anchor's current screen; and `screenParametersChanged` now re-reconciles (not just
+  re-captures) when there's saved Hidden intent, so a display change re-applies it on the active
+  display. Pure + tested (2 new planner tests). `killall ControlCenter` is still the manual unstick
+  if the window server itself goes sluggish.
 - **[LOW] Cursor moves during a multi-item reconcile.** With the move now succeeding on attempt 1,
   a single toggle is near-instant, but a large multi-item reconcile (or one with stubborn items
   that retry) still warps the cursor per move via the `defer` in `SystemWindowServer.move`. A

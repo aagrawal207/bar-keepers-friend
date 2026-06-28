@@ -57,10 +57,12 @@ final class HiddenItemController {
     /// anchor for its intent is moved to the correct side. Returns what happened.
     ///
     /// `anchorMinX`/`anchorMaxX` are the anchor's current global edges (the hide/show boundary).
-    /// No-op (empty result) when nothing needs moving, so it's cheap to call on every settings
-    /// change or menu-bar refresh.
+    /// `displayXRange`, when set, scopes moves to the display the anchor lives on — essential on a
+    /// multi-display rig, where the enumeration includes the other displays' (immovable) mirror
+    /// copies of each item. No-op (empty result) when nothing needs moving, so it's cheap to call on
+    /// every settings change or menu-bar refresh.
     @discardableResult
-    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore) async -> ReconcileResult {
+    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore, displayXRange: ClosedRange<CGFloat>? = nil) async -> ReconcileResult {
         var result = ReconcileResult()
 
         // Attribute first so each snapshot carries its REAL owning pid (not Tahoe's broken
@@ -73,7 +75,8 @@ final class HiddenItemController {
             anchorMinX: anchorMinX,
             anchorMaxX: anchorMaxX,
             controls: controls,
-            excludingWindowIDs: controlItemWindowIDs
+            excludingWindowIDs: controlItemWindowIDs,
+            displayXRange: displayXRange
         )
         result.planned = plan.count
         DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(anchorMinX) hidden=\(controls.hiddenInMenuBar)")

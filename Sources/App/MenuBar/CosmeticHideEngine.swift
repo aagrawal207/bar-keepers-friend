@@ -359,7 +359,8 @@ final class CosmeticHideEngine {
                 _ = await controller.reconcile(
                     anchorMinX: anchor.minX,
                     anchorMaxX: anchor.maxX,
-                    controls: self.preferences.itemControls
+                    controls: self.preferences.itemControls,
+                    displayXRange: self.anchorDisplayXRange
                 )
             }
             // Re-capture so the mirror reflects whatever moved. If the bar is open it re-lays-out.
@@ -540,9 +541,24 @@ final class CosmeticHideEngine {
     /// the wrong, narrower screen left hidden items un-pushed past the edge, so hiding silently
     /// failed. Prefer the anchor's own screen; fall back to main, then a safe default.
     private var menuBarScreenWidth: CGFloat {
-        let anchorScreen = anchorItem?.button?.window?.screen
-            ?? anchorFrame.flatMap { f in NSScreen.screens.first { $0.frame.intersects(f) } }
         return (anchorScreen ?? NSScreen.main)?.frame.width ?? 1440
+    }
+
+    /// The display the anchor (and therefore the live menu bar we manage) currently sits on.
+    /// Prefer the status-item window's own screen; fall back to whichever screen the anchor frame
+    /// intersects, then main. On a multi-display rig the menu-bar display can change at runtime.
+    private var anchorScreen: NSScreen? {
+        anchorItem?.button?.window?.screen
+            ?? anchorFrame.flatMap { f in NSScreen.screens.first { $0.frame.intersects(f) } }
+    }
+
+    /// The global x-range of the anchor's display, used to scope per-item moves to that display.
+    /// AppKit and CoreGraphics share the same x-axis (only y is flipped), so the screen frame's
+    /// x-range is valid in the CG-global space the snapshots' frames use. `nil` when the anchor's
+    /// screen can't be resolved yet, which disables the filter (single-display behavior).
+    private var anchorDisplayXRange: ClosedRange<CGFloat>? {
+        guard let frame = anchorScreen?.frame else { return nil }
+        return frame.minX...frame.maxX
     }
 
     private func applyDividerVisibility() {
@@ -614,7 +630,16 @@ final class CosmeticHideEngine {
             setHidden(collapsed: true)
         }
         guard preferences.useFloatingBar else { return }
-        refreshFloatingBarCache()
+        // The menu-bar display may have changed (e.g. the anchor jumped to a newly-attached
+        // screen). The per-item Hidden intent was realized on the OLD display's items; re-apply it
+        // so the items on the now-current display land on the right side of the anchor. No-op when
+        // nothing is marked hidden. The planner is display-scoped (see `anchorDisplayXRange`), so
+        // this only touches the active display's items, never the other display's mirror copies.
+        if !preferences.itemControls.hiddenInMenuBar.isEmpty {
+            reconcileHiddenItems()
+        } else {
+            refreshFloatingBarCache()
+        }
     }
 
     /// Reveals the section, re-captures the now-on-screen items into the floating bar cache,
