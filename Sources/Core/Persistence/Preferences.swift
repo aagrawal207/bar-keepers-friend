@@ -34,6 +34,32 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// we cache them ourselves because removing a status item deletes AppKit's copy.
     public var controlItemPositions: [String: Double]
 
+    // MARK: - Global hotkey (toggle the floating bar)
+
+    /// Whether the global keyboard shortcut to toggle the floating bar is active.
+    public var enableGlobalHotkey: Bool
+
+    /// The toggle-bar shortcut. `keyCode` is a virtual key code (`kVK_*`); `modifiers` is an
+    /// `NSEvent.ModifierFlags` raw value (device-independent flags only). Default ⌥⌘B.
+    public var toggleHotkey: HotkeyCombo
+
+    // MARK: - Search
+
+    /// Whether the fuzzy search panel (and its shortcut) is enabled.
+    public var enableSearch: Bool
+
+    /// The shortcut that opens the search panel. Default ⌥⌘F.
+    public var searchHotkey: HotkeyCombo
+
+    // MARK: - Hover to reveal
+
+    /// Reveal the floating bar when the pointer hovers over the menu bar anchor, without a
+    /// click (Bartender-style). Off by default — opt-in, since it can surprise users.
+    public var hoverToReveal: Bool
+
+    /// Seconds the pointer must dwell over the anchor before the bar reveals on hover.
+    public var hoverRevealDelay: TimeInterval
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -42,7 +68,13 @@ public struct Preferences: Equatable, Sendable, Codable {
         useFloatingBar: Bool = true,
         floatingBarStyle: FloatingBarStyle = .horizontal,
         useAXActivation: Bool = false,
-        controlItemPositions: [String: Double] = [:]
+        controlItemPositions: [String: Double] = [:],
+        enableGlobalHotkey: Bool = true,
+        toggleHotkey: HotkeyCombo = .defaultToggle,
+        enableSearch: Bool = true,
+        searchHotkey: HotkeyCombo = .defaultSearch,
+        hoverToReveal: Bool = false,
+        hoverRevealDelay: TimeInterval = 0.25
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = autoRehideDelay
@@ -52,6 +84,12 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.floatingBarStyle = floatingBarStyle
         self.useAXActivation = useAXActivation
         self.controlItemPositions = controlItemPositions
+        self.enableGlobalHotkey = enableGlobalHotkey
+        self.toggleHotkey = toggleHotkey
+        self.enableSearch = enableSearch
+        self.searchHotkey = searchHotkey
+        self.hoverToReveal = hoverToReveal
+        self.hoverRevealDelay = hoverRevealDelay
     }
 
     public static let `default` = Preferences()
@@ -66,6 +104,12 @@ public struct Preferences: Equatable, Sendable, Codable {
         case floatingBarStyle
         case useAXActivation
         case controlItemPositions
+        case enableGlobalHotkey
+        case toggleHotkey
+        case enableSearch
+        case searchHotkey
+        case hoverToReveal
+        case hoverRevealDelay
     }
 
     /// Decodes leniently: any missing key falls back to its default, so adding a new
@@ -81,5 +125,43 @@ public struct Preferences: Equatable, Sendable, Codable {
         floatingBarStyle = try container.decodeIfPresent(FloatingBarStyle.self, forKey: .floatingBarStyle) ?? d.floatingBarStyle
         useAXActivation = try container.decodeIfPresent(Bool.self, forKey: .useAXActivation) ?? d.useAXActivation
         controlItemPositions = try container.decodeIfPresent([String: Double].self, forKey: .controlItemPositions) ?? d.controlItemPositions
+        enableGlobalHotkey = try container.decodeIfPresent(Bool.self, forKey: .enableGlobalHotkey) ?? d.enableGlobalHotkey
+        toggleHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .toggleHotkey) ?? d.toggleHotkey
+        enableSearch = try container.decodeIfPresent(Bool.self, forKey: .enableSearch) ?? d.enableSearch
+        searchHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .searchHotkey) ?? d.searchHotkey
+        hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
+        hoverRevealDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .hoverRevealDelay) ?? d.hoverRevealDelay
     }
+}
+
+/// A keyboard shortcut as a virtual key code plus device-independent modifier flags. Kept in
+/// Core as a pure value type so the hotkey registration (Carbon) and the recorder UI agree on
+/// one representation, and so it round-trips through Codable for persistence and layout export.
+public struct HotkeyCombo: Equatable, Sendable, Codable, Hashable {
+    /// A `kVK_*` virtual key code (e.g. `kVK_ANSI_B == 11`).
+    public var keyCode: Int
+    /// `NSEvent.ModifierFlags` raw value, masked to the device-independent flags
+    /// (command/option/control/shift). Stored as `UInt` so it's Codable and platform-agnostic.
+    public var modifiers: UInt
+
+    public init(keyCode: Int, modifiers: UInt) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+    }
+
+    /// Whether this combo is a usable shortcut (a key plus at least one modifier). A bare key
+    /// with no modifiers would clash with normal typing, so it's treated as "unset".
+    public var isValid: Bool { keyCode >= 0 && modifiers != 0 }
+
+    // Device-independent modifier raw values (mirror of NSEvent.ModifierFlags, kept here so
+    // Core doesn't import AppKit): shift 1<<17, control 1<<18, option 1<<19, command 1<<20.
+    public static let shift: UInt = 1 << 17
+    public static let control: UInt = 1 << 18
+    public static let option: UInt = 1 << 19
+    public static let command: UInt = 1 << 20
+
+    /// Default toggle-bar shortcut: ⌥⌘B (kVK_ANSI_B = 11).
+    public static let defaultToggle = HotkeyCombo(keyCode: 11, modifiers: command | option)
+    /// Default search shortcut: ⌥⌘F (kVK_ANSI_F = 3).
+    public static let defaultSearch = HotkeyCombo(keyCode: 3, modifiers: command | option)
 }

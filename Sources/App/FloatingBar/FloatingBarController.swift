@@ -371,6 +371,28 @@ final class FloatingBarController {
         return live != cached
     }
 
+    // MARK: - Shared accessors (used by the search panel)
+
+    /// The current mirrored items (cached snapshot + image + disabled state), in display order.
+    /// Exposed so the search panel can list and filter the same items the bar shows, without
+    /// re-capturing. Empty until the first capture completes.
+    func currentItems() -> [FloatingBarItem] {
+        buildItemsFromCache()
+    }
+
+    /// Activates the real menu bar item with the given window id from the cached order — the
+    /// same path a click on the mirrored icon takes. Used by the search panel so selecting a
+    /// result behaves identically to clicking the bar. No-op if the id isn't currently cached.
+    func activate(windowID: CGWindowID) {
+        guard let snapshot = cachedHiddenOrder.first(where: { $0.windowID == windowID }) else { return }
+        let image = iconCache[windowID] ?? NSImage()
+        activate(FloatingBarItem(
+            snapshot: snapshot,
+            image: image,
+            isDisabled: unactivatableWindowIDs.contains(windowID)
+        ))
+    }
+
     /// Builds the items to show from the cached order + cached images.
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in

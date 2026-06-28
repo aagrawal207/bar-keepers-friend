@@ -15,6 +15,10 @@ final class AppCoordinator {
     private let capture = IconCaptureService()
     private var floatingBar: FloatingBarController?
 
+    private let hotkeys = HotkeyService()
+    private let search = SearchController()
+    private let hoverMonitor = HoverRevealMonitor()
+
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
     /// Listens for SIGUSR2 to toggle the floating bar so it can be screenshotted (dev aid).
@@ -49,6 +53,20 @@ final class AppCoordinator {
         engine.onQuit = { NSApp.terminate(nil) }
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         hideEngine = engine
+
+        // Global hotkeys: toggle the bar, open search. Carbon-based, so no Accessibility prompt.
+        hotkeys.onToggle = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
+        hotkeys.onSearch = { [weak self] in self?.search.toggle() }
+        hotkeys.apply(preferences: preferences)
+
+        // Search panel shares the floating bar's item set and activation path.
+        search.itemsProvider = { [weak self] in self?.floatingBar?.currentItems() ?? [] }
+        search.onActivate = { [weak self] windowID in self?.floatingBar?.activate(windowID: windowID) }
+
+        // Hover-to-reveal (opt-in): reveal the bar when the pointer dwells over the anchor.
+        hoverMonitor.anchorFrameProvider = { [weak self] in self?.hideEngine?.anchorWindowFrame }
+        hoverMonitor.onReveal = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
+        hoverMonitor.apply(preferences: preferences)
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
         // needs capture to show icons. Permission-free hide/show still works without it.
@@ -94,6 +112,8 @@ final class AppCoordinator {
 
     func stop() {
         hideEngine?.uninstall()
+        hotkeys.teardown()
+        hoverMonitor.teardown()
     }
 
     func showSettings() {
@@ -105,6 +125,8 @@ final class AppCoordinator {
                 self?.persist(updated)
                 self?.hideEngine?.apply(preferences: updated)
                 self?.floatingBar?.preferences = updated
+                self?.hotkeys.apply(preferences: updated)
+                self?.hoverMonitor.apply(preferences: updated)
             }
         }
         settingsWindowController?.show()

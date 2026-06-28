@@ -325,6 +325,21 @@ final class CosmeticHideEngine {
         toggleFloatingBar()
     }
 
+    /// Toggles the floating bar from a global hotkey or a hover reveal. Routes through the same
+    /// path as an anchor click in floating-bar mode; in reflow mode it toggles the hidden
+    /// section instead, so the shortcut does the right thing either way.
+    func toggleFromShortcut() {
+        if preferences.useFloatingBar, floatingBar != nil {
+            toggleFloatingBar()
+        } else {
+            toggleHidden()
+        }
+    }
+
+    /// The anchor's current global (AppKit, bottom-left origin) frame, for the hover monitor and
+    /// anyone aligning UI to the anchor. Nil until the status item's window is realized.
+    var anchorWindowFrame: CGRect? { anchorFrame }
+
     @objc private func dividerClicked(_ sender: NSStatusBarButton) {
         anchorClicked(sender)
     }
