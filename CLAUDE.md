@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **180 tests, 21 suites**).
+- Test: same command with `test` (currently **186 tests, 21 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -110,6 +110,51 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-28] Click-activation was dead on a display left-of/above the primary.**
+  `MenuBarItemSnapshot.isClickableOnScreen` tested `frame.minX >= 0` (absolute). A display with a
+  negative global x-origin (positioned left of, or above, the primary) has all its on-screen items
+  at `minX < 0`, so every activation was rejected and the "click a mirrored item to open its menu"
+  feature was 100% dead there — and confusingly so, since the bar still *showed* the items. Fixed:
+  `isClickableOnScreen(displayMinX:)` tests against the item's own display origin (default 0 = primary
+  / single-display, unchanged); both App call sites resolve the origin from the item's midpoint.
+  Pure + tests (incl. the negative-origin case). Same display-relative class as the y/x fixes above.
+- **[RESOLVED 2026-06-28] A corrupt/hostile hotkey keyCode crashed the app on every launch.**
+  `HotkeyService.register` does a *trapping* `UInt32(combo.keyCode)`, but `HotkeyCombo.isValid` only
+  bounded `keyCode >= 0` — a persisted or imported keyCode > 0xFFFF would trap at startup (the
+  registration runs in `start()`). Fixed: `isValid` now also requires `keyCode <= 0xFFFF`, so an
+  out-of-range code is treated as "unset" and skipped (matching the hotkey layer's never-fatal
+  contract). Pure + tests.
+- **[RESOLVED 2026-06-28] An imported layout with `version: 0`/negative was accepted silently.**
+  `LayoutConfig.decode` checked `version <= currentVersion` but had no lower bound, so a hand-edited
+  or corrupt file with a nonsensical version imported as if valid. Fixed: also require `version >= 1`
+  (a real export always stamps ≥ 1). Pure + tests.
+- **[MEDIUM, open] Cross-display attribution drops `position.y`** (`AXAttributionProvider.swift:65`).
+  Attribution matches AX extras to item windows on x only; on a multi-display rig two displays' bars
+  share x-ranges, so an item can be labeled with (and moved as) the wrong app. Fix: carry `position.y`
+  and reject matches on a different display band — ideally pushed into the tested `MenuBarExtraMatcher`.
+  Confirmed by audit-2; App-target (not pure) so review-only without a seam.
+- **[MEDIUM, open] No startup login-item reconciliation** (`AppCoordinator.start` ~L68). The app
+  never calls `loginItem.setEnabled(preferences.launchAtLogin)` at launch, so if the SMAppService
+  registration is lost (OS update, manual removal) it's never restored to match the saved pref.
+  Confirmed by audit-2; needs a `LoginItem` protocol seam to be Core-testable.
+- **[MEDIUM, open] `launchAtLogin` setter ignores SMAppService failure** (`SettingsWindowController`
+  ~L71). `setEnabled` is `@discardableResult` and the toggle ignores a thrown/failed result, so the
+  UI can show "on" when registration actually failed. Confirmed by audit-2; App-target.
+- **[LOW, open] Superseded activation's AX sweep isn't cancelled** (`AXActivator` detached task has
+  no `Task.isCancelled` checks). A superseded sweep runs to completion (~1.5s) wasting work; it can't
+  fire a stale click (the caller's task is cancelled) but it's wasteful. Confirmed by audit-2.
+- **[LOW, open] `click()` can warp the cursor to the item and not restore it** if the pre-warp
+  `CGEvent(source:nil)?.location` read returns nil (`SystemWindowServer.swift` ~L257/290). Rare;
+  leaves the pointer parked in the menu bar. Fix: skip the warp entirely when the save read failed.
+  Confirmed by audit-2.
+- **[LOW, open] Attribution AX IPC is serial with per-app timeouts** (`AXAttributionProvider` ~L52)
+  — N unresponsive apps cost N×timeout on the attribution path. Parallelize with a TaskGroup.
+  Confirmed by audit-2.
+- **[LOW, open] Import has no file-size cap** (`LayoutTransferService` ~L68) — `Data(contentsOf:)`
+  then full `JSONDecoder` on a user-chosen file; a huge file is read whole. Cap the read size.
+  Confirmed by audit-2.
+- **[LOW, open] `controlItemPositions`/sets serialize via array encoding** with `.sortedKeys` not
+  guaranteeing set element order — export diffs can be noisy across runs. Cosmetic. Confirmed by audit-2.
 - **[RESOLVED 2026-06-28] Hide silently, partially failed on a wide (5K/6K/ultrawide) display.**
   `ControlItemLength.expanded` clamped the divider width to `[500, 4000]`. The hide mechanism works
   by making the divider WIDER than the display so left-neighbors are pushed off-screen — but on any

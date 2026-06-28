@@ -681,7 +681,11 @@ final class FloatingBarController {
             // Re-find the item by window id to get its current (on-screen) frame.
             let snapshots = (try? windowServer.menuBarItems()) ?? []
             let current = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
-            guard current.isClickableOnScreen else {
+            // On-screen is relative to the item's OWN display: a display left of/above the primary
+            // has a negative global x-origin, so a revealed item there has minX < 0 yet is fully
+            // on-screen. Resolve the display origin from the item's (now-revealed) midpoint.
+            let displayMinX = Self.screenContaining(globalX: current.frame.midX)?.frame.minX ?? 0
+            guard current.isClickableOnScreen(displayMinX: displayMinX) else {
                 DebugLog.log("activate: item \(item.snapshot.windowID) still off-screen after reveal; re-hiding")
                 rehideItems?()
                 return

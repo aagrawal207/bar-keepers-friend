@@ -74,4 +74,15 @@ import Testing
             _ = try LayoutConfig.decode(from: data)
         }
     }
+
+    @Test func decodeThrowsUnsupportedVersionOnZeroOrNegative() throws {
+        // A hand-edited or corrupt file with a nonsensical low version must NOT import silently as
+        // if valid — a real export always stamps a version >= 1. Reject 0 and negative.
+        for badVersion in [0, -1, -100] {
+            let data = try LayoutConfig(version: badVersion, preferences: .default).encoded()
+            #expect(throws: LayoutConfigError.unsupportedVersion(badVersion)) {
+                _ = try LayoutConfig.decode(from: data)
+            }
+        }
+    }
 }

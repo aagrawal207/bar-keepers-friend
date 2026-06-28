@@ -138,7 +138,14 @@ public struct HotkeyCombo: Equatable, Sendable, Codable, Hashable {
 
     /// Whether this combo is a usable shortcut (a key plus at least one modifier). A bare key
     /// with no modifiers would clash with normal typing, so it's treated as "unset".
-    public var isValid: Bool { keyCode >= 0 && modifiers != 0 }
+    ///
+    /// The upper bound matters for safety, not just sanity: a virtual key code is a 16-bit value,
+    /// and the Carbon registration does a *trapping* `UInt32(keyCode)`. A corrupt or hostile
+    /// persisted/imported `keyCode` outside `0...0xFFFF` would crash the app on every launch (the
+    /// registration runs at startup). Treating an out-of-range code as "unset" makes the combo
+    /// simply not register — matching the hotkey layer's "skip an unusable combo, never fatal"
+    /// contract — instead of trapping.
+    public var isValid: Bool { keyCode >= 0 && keyCode <= 0xFFFF && modifiers != 0 }
 
     // Device-independent modifier raw values (mirror of NSEvent.ModifierFlags, kept here so
     // Core doesn't import AppKit): shift 1<<17, control 1<<18, option 1<<19, command 1<<20.

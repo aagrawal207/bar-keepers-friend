@@ -63,6 +63,30 @@ import Testing
         #expect(HotkeyCarbon.keyName(for: 999) == nil)
     }
 
+    // MARK: - HotkeyCombo.isValid
+
+    @Test func validComboHasKeyAndModifier() {
+        #expect(HotkeyCombo.defaultToggle.isValid)
+        #expect(HotkeyCombo(keyCode: 0, modifiers: HotkeyCombo.command).isValid)
+    }
+
+    @Test func comboWithoutModifierIsInvalid() {
+        #expect(!HotkeyCombo(keyCode: 11, modifiers: 0).isValid)
+    }
+
+    @Test func negativeKeyCodeIsInvalid() {
+        #expect(!HotkeyCombo(keyCode: -1, modifiers: HotkeyCombo.command).isValid)
+    }
+
+    @Test func outOfRangeKeyCodeIsInvalidNotFatal() {
+        // A virtual key code is 16-bit, and the Carbon registration does a TRAPPING UInt32(keyCode)
+        // at startup. A corrupt/hostile persisted or imported keyCode beyond 0xFFFF must be treated
+        // as "unset" (so registration skips it) rather than crashing the app on every launch.
+        #expect(!HotkeyCombo(keyCode: 0x1_0000, modifiers: HotkeyCombo.command).isValid)
+        #expect(!HotkeyCombo(keyCode: Int.max, modifiers: HotkeyCombo.command).isValid)
+        #expect(HotkeyCombo(keyCode: 0xFFFF, modifiers: HotkeyCombo.command).isValid) // top valid
+    }
+
     // MARK: - Helpers
 
     /// A valid combo using `keyCode` 11 ("B") and a single device-independent modifier flag.

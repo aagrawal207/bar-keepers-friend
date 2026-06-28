@@ -47,10 +47,16 @@ public extension MenuBarItemSnapshot {
     /// The menu bar lays out right-to-left, so a larger `midX` sits further right.
     var midX: CGFloat { frame.midX }
 
-    /// Whether the item is positioned on-screen and so can receive a synthesized click.
-    /// Items pushed off-screen by the hidden divider (negative x) must be revealed first.
-    var isClickableOnScreen: Bool {
-        frame.minX >= 0 && frame.width > 0
+    /// Whether the item is positioned on-screen on its OWN display and so can receive a
+    /// synthesized click. `displayMinX` is the global x-origin of the item's display — 0 for the
+    /// primary, and the single-display default. The hide mechanism pushes hidden items left of
+    /// their display's leading edge (off-screen), so a clickable item is one at or right of that
+    /// edge. A plain `minX >= 0` test was wrong on a display positioned left of / above the primary
+    /// (negative global x-origin): every legitimate item there has `minX < 0`, so activation was
+    /// rejected and the whole "click a mirrored item" feature was dead on that display. Mirrors the
+    /// display-relative fixes already applied to the plausibility filter and the move planner.
+    func isClickableOnScreen(displayMinX: CGFloat = 0) -> Bool {
+        frame.minX >= displayMinX && frame.width > 0
     }
 
     /// Returns a copy with the owner attribution filled in.

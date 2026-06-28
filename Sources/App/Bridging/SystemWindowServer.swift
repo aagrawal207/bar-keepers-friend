@@ -244,7 +244,13 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         guard AXIsProcessTrusted() else {
             throw WindowServerError.missingPermission(.accessibility)
         }
-        guard item.isClickableOnScreen else {
+        // On-screen is relative to the item's own display: a display left of/above the primary has
+        // a negative global x-origin, so a legitimately-revealed item there has minX < 0. Resolve
+        // the display origin from the item's midpoint (x is identical in AppKit and CG space).
+        let displayMinX = NSScreen.screens.first {
+            $0.frame.minX <= item.frame.midX && item.frame.midX <= $0.frame.maxX
+        }?.frame.minX ?? 0
+        guard item.isClickableOnScreen(displayMinX: displayMinX) else {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
         guard let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .privateState) else {

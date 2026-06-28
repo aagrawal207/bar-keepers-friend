@@ -42,7 +42,10 @@ public struct LayoutConfig: Equatable, Sendable, Codable {
         } catch {
             throw LayoutConfigError.malformed
         }
-        guard config.version <= currentVersion else {
+        // Reject both a newer version we can't read AND a nonsensical low one (0 / negative): a
+        // hand-edited or corrupt file with `version: 0` would otherwise import silently as if it
+        // were valid. A real export always stamps `currentVersion` (≥ 1).
+        guard config.version >= 1, config.version <= currentVersion else {
             throw LayoutConfigError.unsupportedVersion(config.version)
         }
         return config
