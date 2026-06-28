@@ -49,7 +49,7 @@ struct FloatingBarView: View {
     }
 
     private var emptyState: some View {
-        Text("No hidden items.\nDrag menu bar icons to the left of the anchor to hide them.")
+        Text("No hidden items.\nOpen Settings → Items and switch items to “Hidden” to keep them here.")
             .font(.callout)
             .multilineTextAlignment(.center)
             .foregroundStyle(.secondary)
