@@ -96,10 +96,11 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         // the same space as `centre` and the warp, so no coordinate flip and multi-display
         // safe. (NSEvent.mouseLocation is AppKit bottom-left and would need per-screen flipping.)
         let savedCursor = CGEvent(source: nil)?.location
-        // Status-item hit-testing tracks the real cursor: warp it over the item first, then
-        // post via the session tap (the .cghidEventTap HID layer bypasses the dispatcher that
-        // the menu bar's tracking loop listens on, which is why the old path silently failed).
-        CGWarpMouseCursorPosition(centre)
+
+        // Build the click events BEFORE touching the cursor, so the pointer spends the absolute
+        // minimum time displaced (warp → post → restore with no allocation in between). This
+        // shrinks the visible jump to a sub-frame blip on its own — and on the throw path we
+        // never moved the cursor at all.
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
             let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: centre, mouseButton: .left)
@@ -108,12 +109,28 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         }
         down.setIntegerValueField(.mouseEventClickState, value: 1)
         up.setIntegerValueField(.mouseEventClickState, value: 1)
+
+        // Hide the cursor across the warp→click→restore so the user never SEES it dart into the
+        // menu bar and back — the jarring part of activation. We still physically move the pointer
+        // (status-item hit-testing tracks the REAL cursor, so the warp is unavoidable), but it's
+        // hidden. `CGDisplayHideCursor`/`ShowCursor` are reference-counted; `defer` balances the
+        // show on every exit so we can never strand a hidden cursor. NOTE: `CGDisplayHideCursor`
+        // is honored only while the calling app is foreground, and our panel is a
+        // .nonactivatingPanel (we don't steal focus), so the hide may no-op — which is exactly why
+        // the events are pre-built and the cursor is restored immediately, bounding any still-
+        // visible motion to a single-frame flicker rather than a travel-and-return.
+        CGDisplayHideCursor(kCGNullDirectDisplay)
+        defer { CGDisplayShowCursor(kCGNullDirectDisplay) }
+
+        // Warp onto the item, post via the session tap (the .cghidEventTap HID layer bypasses the
+        // dispatcher the menu bar's tracking loop listens on, which is why the old path silently
+        // failed), then immediately warp back to where the user left it so the pointer doesn't
+        // stay parked in the menu bar. The warp emits no move event and the just-opened menu's
+        // modal loop doesn't dismiss on cursor motion, so the restore is safe with no delay.
+        // Restore only if the pre-warp read succeeded — never warp to a fabricated point.
+        CGWarpMouseCursorPosition(centre)
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
-        // Return the cursor to where the user left it, so it doesn't stay parked in the menu
-        // bar (the visible "glitch"). The warp emits no move event and the just-opened menu's
-        // modal loop doesn't dismiss on cursor motion, so this is safe with no delay. Restore
-        // only if the pre-warp read succeeded — never warp to a fabricated point.
         if let savedCursor {
             CGWarpMouseCursorPosition(savedCursor)
         }
