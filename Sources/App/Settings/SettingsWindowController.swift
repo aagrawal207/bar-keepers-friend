@@ -65,4 +65,42 @@ final class SettingsModel {
             preferences.launchAtLogin = newValue
         }
     }
+
+    // MARK: - Layout export/import
+
+    /// A short status line shown under the Backup buttons after an export/import. `nil` when
+    /// there's nothing to report; `transferFailed` colors it as an error.
+    private(set) var transferMessage: String?
+    private(set) var transferFailed = false
+
+    /// Writes the current settings to a user-chosen JSON file.
+    func exportLayout() {
+        if let url = LayoutTransferService.exportLayout(preferences) {
+            transferFailed = false
+            transferMessage = "Exported to \(url.lastPathComponent)."
+        } else {
+            // Nil means the user cancelled or the write failed; treat a cancel as no-news.
+            transferMessage = nil
+        }
+    }
+
+    /// Reads settings from a user-chosen JSON file and applies them. A malformed/incompatible
+    /// file surfaces an error line instead of throwing into the UI. Assigning `preferences`
+    /// triggers `onChange`, so the whole app (engine, bar, hotkeys, hover) re-applies at once.
+    func importLayout() {
+        do {
+            if let imported = try LayoutTransferService.importLayout() {
+                // Keep the login-item registration in sync with the imported flag.
+                loginItem.setEnabled(imported.launchAtLogin)
+                preferences = imported
+                transferFailed = false
+                transferMessage = "Imported settings."
+            } else {
+                transferMessage = nil // cancelled
+            }
+        } catch {
+            transferFailed = true
+            transferMessage = "Couldn't import that file — it isn't a valid layout."
+        }
+    }
 }
