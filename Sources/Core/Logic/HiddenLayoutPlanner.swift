@@ -55,6 +55,13 @@ public enum HiddenLayoutPlanner {
         var result: [Move] = []
         for item in items {
             guard !excludingWindowIDs.contains(item.windowID) else { continue }
+            // Not a real menu bar glyph → never try to move it. Some apps park transient windows at
+            // the status-window layer (e.g. Karabiner's notification window, observed far down the
+            // screen, and tall popover panels). These share their app's owner key, so without this
+            // guard a "hide Karabiner" intent would also target the notification window, which can't
+            // move — burning the full retry budget per stray window. `isPlausibleMenuBarItem`
+            // (height/width/top-edge bounds) is the same filter the floating-bar resolver uses.
+            guard HiddenItemsResolver.isPlausibleMenuBarItem(item) else { continue }
             // No stable identity → intent can't be keyed to it → leave it where the user put it.
             guard ItemControlStore.key(for: item) != nil else { continue }
             // System items that corrupt the layout if moved are never targeted.

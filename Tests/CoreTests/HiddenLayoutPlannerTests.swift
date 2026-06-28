@@ -120,4 +120,23 @@ import Testing
         let result = moves([a, b, c], controls)
         #expect(Set(result.map { $0.item.windowID }) == [1])
     }
+
+    @Test func transientStatusLayerWindowIsNeverMovedEvenSharingAnAppKey() {
+        // An app can park a transient window (e.g. Karabiner's notification window, seen far down
+        // the screen) at the status layer. It shares its app's owner key, so a "hide that app"
+        // intent reaches it too — but it isn't a real menu bar glyph and the move always fails,
+        // burning the full retry budget. The planner must skip it on shape (`isPlausibleMenuBarItem`)
+        // and move only the real menu bar item. Regression for the on-device 17/24 → fewer-failures.
+        var controls = ItemControlStore()
+        let realItem = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 9, ownerBundleID: "org.pqrs.Karabiner",
+            title: nil, frame: CGRect(x: 1100, y: 0, width: 24, height: 22)) // genuine, right of anchor
+        let notification = MenuBarItemSnapshot(
+            windowID: 2, ownerPID: 9, ownerBundleID: "org.pqrs.Karabiner",
+            title: nil, frame: CGRect(x: 1100, y: 916, width: 360, height: 120)) // transient, low + huge
+        controls.setHidden(true, forKey: "org.pqrs.Karabiner") // intent reaches BOTH (shared key)
+
+        let result = moves([realItem, notification], controls)
+        #expect(result.map { $0.item.windowID } == [1]) // only the real glyph is planned
+    }
 }

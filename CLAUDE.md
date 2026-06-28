@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **161 tests, 19 suites**).
+- Test: same command with `test` (currently **162 tests, 19 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -75,7 +75,7 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   old guard skipped the move every time). **Only moves items the user explicitly toggled** —
   `ItemControlStore` tracks `hiddenInMenuBar` + `shownInMenuBar`; an un-configured item has no
   intent and is left exactly where it sits (hiding one item never rearranges the rest). Pure
-  `HiddenLayoutPlanner` decides moves; tested against `FakeWindowServer` (161 tests).
+  `HiddenLayoutPlanner` decides moves; tested against `FakeWindowServer` (162 tests).
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
 - **Auto re-hide**, **dismiss-on-mouse-exit** (gated on the pointer having first entered the
@@ -110,18 +110,24 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
-- **[MEDIUM] A few items still won't move (transient/system windows).** After the scromble fix the
-  reconcile relocates the large majority (17/24 in the verification run), but some fail: notably
-  `Karabiner-NotificationWindow` (a transient notification window that lives at the status layer
-  but isn't a real movable status item), Xcode, and the odd Control Center module. The planner
-  should pre-filter these (broaden `ImmovableItems` / skip non-status transient windows) so it
-  doesn't attempt+fail+retry on them — each failed item burns 5 retries (~1s) and a `wakeUp` click.
+- **[MEDIUM] Synthesized move is flaky on a multi-display setup.** When the menu-bar display
+  changes (this machine gains/loses a second display), a planned move can fail — observed a single
+  `Karabiner-Menu` move fail with the anchor on the secondary display (anchorMinX jumped 1106 →
+  3021 between reconciles). The geometry/windowID is per-display, and the reconcile can run against
+  a stale display. Needs: pin the move to the anchor's *current* display, and/or re-resolve the
+  item's live windowID for the active display before moving. `killall ControlCenter` unsticks.
 - **[LOW] Cursor moves during a multi-item reconcile.** With the move now succeeding on attempt 1,
   a single toggle is near-instant, but a large multi-item reconcile (or one with stubborn items
   that retry) still warps the cursor per move via the `defer` in `SystemWindowServer.move`. A
   batch-scoped cursor guard (disassociate + hide + ONE warp-back around the whole reconcile,
   keeping `.cgSessionEventTap`; `postToPid` ruled out as unsafe) would smooth it. Lower priority
   now that moves don't burn 5 failed retries each. Design is in memory `bkf-private-api-direction`.
+- **[RESOLVED 2026-06-28] Reconcile attempted (and failed on) transient status-layer windows.**
+  Some apps park non-glyph windows at the status layer (Karabiner's notification window, low on
+  screen; tall popovers). They share their app's owner key, so a "hide that app" intent reached
+  them and the move burned the full retry budget failing on each. Fixed: the planner now skips any
+  item failing `HiddenItemsResolver.isPlausibleMenuBarItem` (height/width/top-edge bounds) — the
+  same filter the floating-bar resolver uses. Verified on-device: 4 NotificationWindow attempts → 0.
 - **[RESOLVED 2026-06-28] The synthesized per-item move failed 100% (0/12).** Root cause: a direct
   `.cgSessionEventTap` post is inert against another app's status item on Tahoe; plus reconcile fed
   the move the broken Control-Center pid; plus the launch guard always skipped. Fixed via the
