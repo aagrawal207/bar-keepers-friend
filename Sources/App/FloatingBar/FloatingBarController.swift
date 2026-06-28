@@ -282,13 +282,12 @@ final class FloatingBarController {
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat, autoDismissWhenAbandoned: Bool = true) async {
         lastAnchorMinX = anchorMinX
         lastAnchorRightX = anchorRightX
-        // The BAR renders the filtered + reordered set (suppressed items dropped, pinned items
-        // first). Search and currentItems() deliberately use the FULL set, so a suppressed item
-        // stays findable — that split is the whole point of "show in search only".
+        // The BAR renders the filtered set (any suppressed-from-bar items dropped, explicit order
+        // applied). buildItemsFromCache() is the full mirrored set behind that filter.
         let items = barItems()
         // "Preparing" is about the capture warm-up, so gate it on the full cache, not the
-        // (possibly all-suppressed) bar set: if everything hidden is suppressed we want the real
-        // empty state, not a spinner.
+        // (possibly all-suppressed) bar set: if everything is filtered out we want the real empty
+        // state, not a spinner.
         let isPreparing = !hasCapturedOnce && buildItemsFromCache().isEmpty
 
         // Place the panel on the display the ANCHOR lives on, not NSScreen.main. For a menu-bar
@@ -557,19 +556,12 @@ final class FloatingBarController {
         return live != cached
     }
 
-    // MARK: - Shared accessors (used by the search panel)
-
-    /// The current mirrored items (cached snapshot + image + disabled state), in display order.
-    /// Exposed so the search panel can list and filter the same items the bar shows, without
-    /// re-capturing. Empty until the first capture completes.
-    func currentItems() -> [FloatingBarItem] {
-        buildItemsFromCache()
-    }
+    // MARK: - Shared accessors
 
     /// Enumerates EVERY manageable menu bar item — both currently-shown (right of the anchor) and
     /// hidden (left) — for the Settings Items list, where the user toggles each item Shown/Hidden.
-    /// This is broader than `currentItems()` (which is only the hidden, mirrored set): the picker
-    /// must show items on both sides so a shown item can be hidden and vice-versa.
+    /// This is broader than the mirrored (left-of-anchor) set: the picker must show items on both
+    /// sides so a shown item can be hidden and vice-versa.
     ///
     /// Read-only and non-disruptive: it enumerates + attributes without revealing or moving
     /// anything. Each item gets its cached glyph if we have one (hidden items, captured earlier),
@@ -606,9 +598,8 @@ final class FloatingBarController {
         ))
     }
 
-    /// Builds the FULL item set from the cached order + cached images, tagging each with the
-    /// user's alias. This is the search/`currentItems()` view: it includes items the user marked
-    /// "search only", so they remain findable. The BAR uses `barItems()` instead.
+    /// Builds the full mirrored set from the cached order + cached images, tagging each with the
+    /// user's display nickname. The BAR render derives from this via `barItems()`.
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in
             guard let image = iconCache[snapshot.windowID] else { return nil }
@@ -621,12 +612,11 @@ final class FloatingBarController {
         }
     }
 
-    /// The items the floating bar should RENDER: the full cached set with suppressed ("search
-    /// only") items dropped and the user's explicit bar order applied. The filter/sort is the
-    /// pure `ItemControlStore.visibleBarItems` so it's unit-tested in Core; here we just map the
-    /// chosen snapshots back to their cached `FloatingBarItem`s. Kept SEPARATE from
-    /// `buildItemsFromCache()` so search (which calls `currentItems()`) never loses a suppressed
-    /// item — the load-bearing honesty guard for "search only".
+    /// The items the floating bar should RENDER: the full mirrored set passed through the pure
+    /// `ItemControlStore.visibleBarItems` (drops any suppressed-from-bar items, applies any
+    /// explicit order). Both controls are dormant in the current UI but the filter is retained so
+    /// a persisted store still applies; here we just map the chosen snapshots back to their cached
+    /// `FloatingBarItem`s.
     private func barItems() -> [FloatingBarItem] {
         let full = buildItemsFromCache()
         let byID = Dictionary(full.map { ($0.snapshot.windowID, $0) }, uniquingKeysWith: { a, _ in a })

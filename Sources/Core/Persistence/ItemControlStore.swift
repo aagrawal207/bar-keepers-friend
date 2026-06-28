@@ -146,12 +146,9 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     /// index (ascending), and the rest keep their incoming (positional, left-to-right) order
     /// after them.
     ///
-    /// This is the load-bearing honesty/correctness boundary: it operates ONLY on what the bar
-    /// draws. Search and `currentItems()` must use the UNfiltered list so a suppressed item stays
-    /// findable — that's why this lives here as a pure function rather than inside the shared
-    /// cache builder. Stable: items with equal ordering keep their input order (Swift's
-    /// `sorted(by:)` is not guaranteed stable, so we sort on a composite key that preserves the
-    /// original index for ties).
+    /// It operates ONLY on what the bar draws, leaving the full mirrored set intact upstream.
+    /// Stable: items with equal ordering keep their input order (Swift's `sorted(by:)` is not
+    /// guaranteed stable, so we sort on a composite key that preserves the original index for ties).
     public static func visibleBarItems(
         from positionalOrder: [MenuBarItemSnapshot],
         controls: ItemControlStore
