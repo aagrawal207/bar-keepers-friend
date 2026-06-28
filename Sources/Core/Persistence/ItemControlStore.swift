@@ -1,19 +1,19 @@
 import Foundation
 
-/// Per-item presentation controls for the floating bar, persisted as Codable JSON.
+/// Per-item controls for the menu bar and the floating bar, persisted as Codable JSON.
 ///
-/// ## What this controls — and what it deliberately does NOT
+/// ## What this controls
 ///
-/// Bar Keeper's Friend never *moves* another app's menu bar item (that needs the fragile
-/// private window-server APIs we refuse to call — see `SystemWindowServer.move`). So whether an
-/// item is *visible* or *hidden* in the real macOS menu bar is positional and OS-owned: the user
-/// sets it by ⌘-dragging the icon across our anchor. This store does NOT pretend to change that.
+/// The user picks, per item, whether it is **Hidden** or **Shown** in the real macOS menu bar.
+/// "Hidden" means the app physically moves that item to the left of our anchor (via the private
+/// window-server move — see `SystemWindowServer.move`), where the divider tucks it off-screen and
+/// the floating bar mirrors it; "Shown" moves it back to the right of the anchor. That intent is
+/// `hiddenInMenuBar`, and `HiddenLayoutPlanner` turns it into the concrete moves to apply.
 ///
-/// What it genuinely owns is how OUR OWN floating bar presents the items it mirrors:
-///   - `suppressedFromBar` — "show in search only": the item is still mirrored, still findable in
-///     search, still activatable, but we don't draw its row in the floating bar. This is the one
-///     tier we can honestly offer; calling it "Always-Hidden" would imply a positional section we
-///     can't create, so the UI labels it "Show in bar" / "Search only".
+/// On top of that menu-bar placement, this store also owns how OUR OWN floating bar presents the
+/// items it mirrors:
+///   - `suppressedFromBar` — a hidden item the user doesn't even want drawn in the floating bar
+///     (still mirrored/activatable, just not rendered). A secondary, rarely-needed tier.
 ///   - `barOrder` — an explicit left-to-right order for rows within our panel, overriding the
 ///     default positional order for the items the user pinned.
 ///
@@ -26,7 +26,12 @@ import Foundation
 /// as a SEPARATE store from `ItemAliasStore` (not merged) so each stays single-purpose.
 public struct ItemControlStore: Equatable, Sendable, Codable {
 
-    /// Owner identities (see `key(for:)`) the user has chosen to suppress from the bar render.
+    /// Owner identities (see `key(for:)`) the user has chosen to HIDE in the real menu bar — the
+    /// app moves these left of the anchor so the divider tucks them away. The primary control.
+    /// Exposed read-only; mutate via `setHidden`.
+    public private(set) var hiddenInMenuBar: Set<String>
+
+    /// Owner identities the user has chosen to suppress from the bar render.
     /// Exposed read-only; mutate via `setSuppressed`.
     public private(set) var suppressedFromBar: Set<String>
 
@@ -34,9 +39,28 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     /// items without an entry keep their positional order, AFTER any explicitly-ordered ones.
     public private(set) var barOrder: [String: Int]
 
-    public init(suppressedFromBar: Set<String> = [], barOrder: [String: Int] = [:]) {
+    public init(
+        hiddenInMenuBar: Set<String> = [],
+        suppressedFromBar: Set<String> = [],
+        barOrder: [String: Int] = [:]
+    ) {
+        self.hiddenInMenuBar = hiddenInMenuBar
         self.suppressedFromBar = suppressedFromBar
         self.barOrder = barOrder
+    }
+
+    // Lenient decode so adding `hiddenInMenuBar` doesn't fail to load an older saved store.
+    enum CodingKeys: String, CodingKey {
+        case hiddenInMenuBar
+        case suppressedFromBar
+        case barOrder
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hiddenInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenInMenuBar) ?? []
+        suppressedFromBar = try container.decodeIfPresent(Set<String>.self, forKey: .suppressedFromBar) ?? []
+        barOrder = try container.decodeIfPresent([String: Int].self, forKey: .barOrder) ?? [:]
     }
 
     // MARK: - Key derivation
@@ -48,9 +72,24 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         return bundleID
     }
 
+    // MARK: - Menu-bar hide intent (snapshot-keyed)
+
+    /// Whether `snapshot` is marked Hidden in the real menu bar (moved left of the anchor).
+    /// An item with no derivable key can't be controlled, so it's never hidden.
+    public func isHidden(_ snapshot: MenuBarItemSnapshot) -> Bool {
+        guard let key = Self.key(for: snapshot) else { return false }
+        return isHidden(forKey: key)
+    }
+
+    /// Marks `snapshot` Hidden (or Shown) in the real menu bar. No-op for a keyless item.
+    public mutating func setHidden(_ on: Bool, for snapshot: MenuBarItemSnapshot) {
+        guard let key = Self.key(for: snapshot) else { return }
+        setHidden(on, forKey: key)
+    }
+
     // MARK: - Suppression (snapshot-keyed)
 
-    /// Whether `snapshot` is suppressed from the bar render (still searchable/activatable).
+    /// Whether `snapshot` is suppressed from the bar render (still mirrored/activatable).
     /// An item with no derivable key is never suppressed.
     public func isSuppressed(_ snapshot: MenuBarItemSnapshot) -> Bool {
         guard let key = Self.key(for: snapshot) else { return false }
@@ -79,6 +118,14 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     }
 
     // MARK: - Direct-key access (for a settings UI editing by owner identity)
+
+    public func isHidden(forKey key: String) -> Bool {
+        hiddenInMenuBar.contains(key)
+    }
+
+    public mutating func setHidden(_ on: Bool, forKey key: String) {
+        if on { hiddenInMenuBar.insert(key) } else { hiddenInMenuBar.remove(key) }
+    }
 
     public func isSuppressed(forKey key: String) -> Bool {
         suppressedFromBar.contains(key)

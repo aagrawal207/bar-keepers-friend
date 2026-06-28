@@ -28,6 +28,44 @@ import Testing
         #expect(ItemControlStore.key(for: item("")) == nil)
     }
 
+    // MARK: - Menu-bar hide intent
+
+    @Test func hideIntentRoundTrips() {
+        var store = ItemControlStore()
+        let maccy = item("com.maccy.Maccy")
+        #expect(store.isHidden(maccy) == false)
+        store.setHidden(true, for: maccy)
+        #expect(store.isHidden(maccy) == true)
+        store.setHidden(false, for: maccy)
+        #expect(store.isHidden(maccy) == false)
+    }
+
+    @Test func hideIntentNoOpForKeylessItem() {
+        var store = ItemControlStore()
+        store.setHidden(true, for: item(nil))
+        #expect(store.hiddenInMenuBar.isEmpty)
+        #expect(store.isHidden(item(nil)) == false)
+    }
+
+    @Test func decodingOlderStoreWithoutHideIntentSucceeds() throws {
+        // A store written before `hiddenInMenuBar` existed (only suppression + order).
+        let json = #"{"suppressedFromBar":["com.a"],"barOrder":{"com.b":2}}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ItemControlStore.self, from: json)
+        #expect(decoded.hiddenInMenuBar.isEmpty)
+        #expect(decoded.suppressedFromBar == ["com.a"])
+        #expect(decoded.barOrder == ["com.b": 2])
+    }
+
+    @Test func hideIntentSurvivesCodableRoundTrip() throws {
+        var store = ItemControlStore()
+        store.setHidden(true, for: item("com.a"))
+        store.setSuppressed(true, for: item("com.b"))
+        let data = try JSONEncoder().encode(store)
+        let decoded = try JSONDecoder().decode(ItemControlStore.self, from: data)
+        #expect(decoded == store)
+        #expect(decoded.hiddenInMenuBar == ["com.a"])
+    }
+
     // MARK: - Suppression
 
     @Test func suppressionRoundTrips() {
