@@ -253,11 +253,14 @@ final class FloatingBarController {
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
         lastAnchorMinX = anchorMinX
         lastAnchorRightX = anchorRightX
-        let items = buildItemsFromCache()
-        // Before the first capture finishes (the launch warm-up window), an empty item list
-        // means "still preparing", not "nothing hidden" — surface that so the panel shows a
-        // spinner instead of the misleading empty-state copy.
-        let isPreparing = !hasCapturedOnce && items.isEmpty
+        // The BAR renders the filtered + reordered set (suppressed items dropped, pinned items
+        // first). Search and currentItems() deliberately use the FULL set, so a suppressed item
+        // stays findable — that split is the whole point of "show in search only".
+        let items = barItems()
+        // "Preparing" is about the capture warm-up, so gate it on the full cache, not the
+        // (possibly all-suppressed) bar set: if everything hidden is suppressed we want the real
+        // empty state, not a spinner.
+        let isPreparing = !hasCapturedOnce && buildItemsFromCache().isEmpty
 
         // Place the panel on the display the ANCHOR lives on, not NSScreen.main. For a menu-bar
         // agent with no key window, NSScreen.main is whichever screen owns the user's frontmost
@@ -463,7 +466,9 @@ final class FloatingBarController {
     /// show/hide toggle). Composites over a neutral backdrop so the translucent material reads
     /// the way it would over a wallpaper. Triggered alongside the SIGUSR1 report.
     func renderDiagnosticSnapshot(to url: URL) {
-        let items = buildItemsFromCache()
+        // Render exactly what the bar shows (filtered + ordered), so the diagnostic PNG matches
+        // the live panel rather than including suppressed items.
+        let items = barItems()
         let content = FloatingBarView(
             items: items,
             style: preferences.floatingBarStyle,
@@ -535,8 +540,9 @@ final class FloatingBarController {
         ))
     }
 
-    /// Builds the items to show from the cached order + cached images, tagging each with the
-    /// user's alias (if any) so the bar and search show the user's chosen name.
+    /// Builds the FULL item set from the cached order + cached images, tagging each with the
+    /// user's alias. This is the search/`currentItems()` view: it includes items the user marked
+    /// "search only", so they remain findable. The BAR uses `barItems()` instead.
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in
             guard let image = iconCache[snapshot.windowID] else { return nil }
@@ -547,6 +553,22 @@ final class FloatingBarController {
                 alias: preferences.itemAliases.alias(for: snapshot)
             )
         }
+    }
+
+    /// The items the floating bar should RENDER: the full cached set with suppressed ("search
+    /// only") items dropped and the user's explicit bar order applied. The filter/sort is the
+    /// pure `ItemControlStore.visibleBarItems` so it's unit-tested in Core; here we just map the
+    /// chosen snapshots back to their cached `FloatingBarItem`s. Kept SEPARATE from
+    /// `buildItemsFromCache()` so search (which calls `currentItems()`) never loses a suppressed
+    /// item — the load-bearing honesty guard for "search only".
+    private func barItems() -> [FloatingBarItem] {
+        let full = buildItemsFromCache()
+        let byID = Dictionary(full.map { ($0.snapshot.windowID, $0) }, uniquingKeysWith: { a, _ in a })
+        let visibleSnapshots = ItemControlStore.visibleBarItems(
+            from: full.map(\.snapshot),
+            controls: preferences.itemControls
+        )
+        return visibleSnapshots.compactMap { byID[$0.windowID] }
     }
 
     /// Activates the real menu bar item behind a mirrored icon.

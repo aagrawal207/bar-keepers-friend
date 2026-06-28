@@ -56,6 +56,10 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// generic "Item-0". Persisted with the rest of preferences.
     public var itemAliases: ItemAliasStore
 
+    /// Per-item floating-bar presentation controls (suppress-from-bar / bar order), keyed by
+    /// owning-app identity. Distinct from `itemAliases` so each store stays single-purpose.
+    public var itemControls: ItemControlStore
+
     // MARK: - Hover to reveal
 
     /// Reveal the floating bar when the pointer hovers over the menu bar anchor, without a
@@ -85,6 +89,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         enableSearch: Bool = true,
         searchHotkey: HotkeyCombo = .defaultSearch,
         itemAliases: ItemAliasStore = ItemAliasStore(),
+        itemControls: ItemControlStore = ItemControlStore(),
         hoverToReveal: Bool = false,
         hoverRevealDelay: TimeInterval = 0.25,
         dismissBarOnMouseExit: Bool = true
@@ -102,6 +107,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.enableSearch = enableSearch
         self.searchHotkey = searchHotkey
         self.itemAliases = itemAliases
+        self.itemControls = itemControls
         self.hoverToReveal = hoverToReveal
         self.hoverRevealDelay = hoverRevealDelay
         self.dismissBarOnMouseExit = dismissBarOnMouseExit
@@ -124,6 +130,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case enableSearch
         case searchHotkey
         case itemAliases
+        case itemControls
         case hoverToReveal
         case hoverRevealDelay
         case dismissBarOnMouseExit
@@ -147,6 +154,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         enableSearch = try container.decodeIfPresent(Bool.self, forKey: .enableSearch) ?? d.enableSearch
         searchHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .searchHotkey) ?? d.searchHotkey
         itemAliases = try container.decodeIfPresent(ItemAliasStore.self, forKey: .itemAliases) ?? d.itemAliases
+        itemControls = try container.decodeIfPresent(ItemControlStore.self, forKey: .itemControls) ?? d.itemControls
         hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
         hoverRevealDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .hoverRevealDelay) ?? d.hoverRevealDelay
         dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
