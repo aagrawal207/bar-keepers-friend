@@ -36,7 +36,6 @@ import Testing
 
     @Test func displayStringForDefaults() {
         #expect(HotkeyCarbon.displayString(for: .defaultToggle) == "⌥⌘B")
-        #expect(HotkeyCarbon.displayString(for: .defaultSearch) == "⌥⌘F")
     }
 
     @Test func displayStringForInvalidComboIsUnset() {

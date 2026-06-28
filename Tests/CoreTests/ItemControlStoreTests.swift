@@ -117,13 +117,14 @@ import Testing
         #expect(visible.map(\.ownerBundleID) == ["solo"])
     }
 
-    // MARK: - Search-completeness guard
+    // MARK: - Hidden-only invariant
 
-    @Test func suppressedItemIsDroppedFromBarButStillSearchable() {
-        // The load-bearing honesty invariant: an item marked "search only" must NOT appear in the
-        // bar, yet MUST remain findable by search. The bar uses visibleBarItems (drops it); search
-        // ranks the FULL set (keeps it). Proven here on pure logic so a future change to either
-        // side can't silently break "search only".
+    @Test func suppressedItemIsDroppedFromBarButStillInTheFullSet() {
+        // An item marked "hide from bar" must NOT appear in what the bar renders, yet must remain
+        // in the full set the Items settings list manages (so the user can un-hide it again). The
+        // bar uses visibleBarItems (drops it); the full positional set keeps it. Proven here on
+        // pure logic so a future change to the filter can't silently strand a hidden item where
+        // the user can no longer find it to restore it.
         var store = ItemControlStore()
         let secret = item("com.secret.App", x: 0, id: 1)
         let shown = item("com.shown.App", x: 30, id: 2)
@@ -133,8 +134,7 @@ import Testing
         let bar = ItemControlStore.visibleBarItems(from: positional, controls: store)
         #expect(bar.map(\.ownerBundleID) == ["com.shown.App"]) // suppressed item not in the bar
 
-        // Search ranks the full positional set (what currentItems() exposes), so it's still found.
-        let found = SearchRanker.rank(items: positional, query: "secret")
-        #expect(found.contains { $0.item.windowID == secret.windowID })
+        // The full set (what the Items list manages) still contains it, so it stays restorable.
+        #expect(positional.contains { $0.windowID == secret.windowID })
     }
 }

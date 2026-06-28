@@ -8,7 +8,6 @@ import Testing
         var prefs = Preferences.default
         prefs.autoRehide = false
         prefs.autoRehideDelay = 30
-        prefs.showSectionDividers = true
         prefs.launchAtLogin = true
         prefs.useFloatingBar = false
         prefs.floatingBarStyle = .vertical
@@ -60,7 +59,8 @@ import Testing
     @Test func exportImportIsLossless() throws {
         let store = PreferencesStore(backing: InMemoryPreferences())
         var prefs = Preferences.default
-        prefs.showSectionDividers = true
+        prefs.autoRehideDelay = 99
+        prefs.hoverToReveal = true
         let exported = try store.exportJSON(prefs)
         let imported = try store.importJSON(exported)
         #expect(imported == prefs)

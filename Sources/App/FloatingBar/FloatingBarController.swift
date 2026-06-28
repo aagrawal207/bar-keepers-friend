@@ -105,6 +105,24 @@ final class FloatingBarController {
     /// edge for less than this re-enters and cancels the pending dismissal, so it doesn't snap shut.
     private static let mouseExitGraceDelay: TimeInterval = 0.4
 
+    /// False until the pointer has been seen INSIDE the panel at least once since this show(). The
+    /// mouse-exit watchdog must not arm before that: a hover-reveal or the ⌥⌘B shortcut opens the
+    /// bar while the pointer is elsewhere (over the anchor, or wherever the user left it), which is
+    /// "outside the panel" — so an ungated watchdog would arm the 0.4s dismissal the instant the
+    /// bar appeared and the bar would vanish ~0.4s later. That's exactly the "reveal disappears
+    /// almost instantly" bug AND why the shortcut looked dead (the bar flashed and closed). Gating
+    /// on first-entry means the bar stays put until the user has actually moved onto it and then
+    /// left, which is the only time auto-dismiss should trigger.
+    private var pointerHasEnteredPanel = false
+    /// Backstop so a revealed bar the user never moves onto still tidies itself away rather than
+    /// lingering forever. If the pointer hasn't entered within this window of the bar opening, we
+    /// allow the exit watchdog to arm anyway. Comfortably longer than the time it takes to move
+    /// the pointer down onto a just-revealed bar, but short enough that an ignored bar doesn't sit
+    /// open indefinitely. Only consulted while `pointerHasEnteredPanel` is still false.
+    private static let preEntryGracePeriod: TimeInterval = 3
+    /// When the current bar became visible, for the pre-entry backstop above. Set in show().
+    private var shownAt: Date?
+
     init(
         windowServer: WindowServer,
         capture: IconCaptureService,
@@ -309,6 +327,15 @@ final class FloatingBarController {
         let panel = panel ?? makePanel()
         panel.contentViewController = NSHostingController(rootView: root)
         self.panel = panel
+        // A FRESH open (not a re-layout show() while already visible) resets the mouse-exit
+        // entry latch: the pointer hasn't been on this newly-shown bar yet, so the exit watchdog
+        // stays disarmed until it arrives. A re-layout show() (captureAndCache landing a glyph
+        // while the bar is open) must NOT reset it, or moving the pointer onto the bar and waiting
+        // for a glyph to fill in would re-disarm and the bar would never auto-dismiss.
+        if !isVisible {
+            pointerHasEnteredPanel = false
+            shownAt = Date()
+        }
         // Set visible up front so the engine's toggle logic and the `if isVisible { await show }`
         // re-layout path in captureAndCache both see the bar as open the instant we commit to it,
         // not after the animation lands.
@@ -714,13 +741,26 @@ final class FloatingBarController {
         guard let frame = panel?.frame else { return }
 
         if frame.contains(NSEvent.mouseLocation) {
-            // Pointer is over the bar — cancel a pending dismissal (the user came back / is aiming).
+            // Pointer is over the bar — record the entry (which arms exit-dismissal from now on)
+            // and cancel a pending dismissal (the user came back / is aiming).
+            pointerHasEnteredPanel = true
             dismissWorkItem?.cancel()
             dismissWorkItem = nil
-        } else if dismissWorkItem == nil {
-            // Pointer left and nothing is scheduled yet — arm the grace countdown. (If one is
-            // already pending we let it keep running; restarting it on every outside jiggle would
-            // postpone the dismissal indefinitely.)
+            return
+        }
+
+        // Pointer is OUTSIDE the panel. Only arm the exit dismissal once the pointer has actually
+        // been on the bar — otherwise a bar revealed under a pointer that's elsewhere (hover over
+        // the anchor, or the ⌥⌘B shortcut) would dismiss itself ~0.4s after appearing. The backstop
+        // is a generous pre-entry window: a bar the user never moves onto still tidies away rather
+        // than lingering forever.
+        guard pointerHasEnteredPanel || Date().timeIntervalSince(shownAt ?? Date()) >= Self.preEntryGracePeriod else {
+            return
+        }
+
+        if dismissWorkItem == nil {
+            // Nothing scheduled yet — arm the grace countdown. (If one is already pending we let it
+            // keep running; restarting it on every outside jiggle would postpone it indefinitely.)
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.isVisible else { return }
                 self.dismissWorkItem = nil

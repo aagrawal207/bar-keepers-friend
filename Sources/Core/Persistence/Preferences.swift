@@ -10,9 +10,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Seconds before auto-rehide fires (when `autoRehide` is on).
     public var autoRehideDelay: TimeInterval
 
-    /// Show a small glyph for each divider so the user can see the boundaries.
-    public var showSectionDividers: Bool
-
     /// Launch the app at login.
     public var launchAtLogin: Bool
 
@@ -43,17 +40,9 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// `NSEvent.ModifierFlags` raw value (device-independent flags only). Default ⌥⌘B.
     public var toggleHotkey: HotkeyCombo
 
-    // MARK: - Search
-
-    /// Whether the fuzzy search panel (and its shortcut) is enabled.
-    public var enableSearch: Bool
-
-    /// The shortcut that opens the search panel. Default ⌥⌘F.
-    public var searchHotkey: HotkeyCombo
-
-    /// User-chosen searchable aliases for menu bar items, keyed by owning-app identity. Lets the
-    /// user find an item by a nickname — valuable on Tahoe where the real title is often the
-    /// generic "Item-0". Persisted with the rest of preferences.
+    /// User-chosen display nicknames for menu bar items, keyed by owning-app identity. Lets the
+    /// user rename an item shown in the bar/Items list — valuable on Tahoe where the real title is
+    /// often the generic "Item-0". Persisted with the rest of preferences.
     public var itemAliases: ItemAliasStore
 
     /// Per-item floating-bar presentation controls (suppress-from-bar / bar order), keyed by
@@ -78,7 +67,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
-        showSectionDividers: Bool = false,
         launchAtLogin: Bool = false,
         useFloatingBar: Bool = true,
         floatingBarStyle: FloatingBarStyle = .horizontal,
@@ -86,8 +74,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         controlItemPositions: [String: Double] = [:],
         enableGlobalHotkey: Bool = true,
         toggleHotkey: HotkeyCombo = .defaultToggle,
-        enableSearch: Bool = true,
-        searchHotkey: HotkeyCombo = .defaultSearch,
         itemAliases: ItemAliasStore = ItemAliasStore(),
         itemControls: ItemControlStore = ItemControlStore(),
         hoverToReveal: Bool = false,
@@ -96,7 +82,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = autoRehideDelay
-        self.showSectionDividers = showSectionDividers
         self.launchAtLogin = launchAtLogin
         self.useFloatingBar = useFloatingBar
         self.floatingBarStyle = floatingBarStyle
@@ -104,8 +89,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.controlItemPositions = controlItemPositions
         self.enableGlobalHotkey = enableGlobalHotkey
         self.toggleHotkey = toggleHotkey
-        self.enableSearch = enableSearch
-        self.searchHotkey = searchHotkey
         self.itemAliases = itemAliases
         self.itemControls = itemControls
         self.hoverToReveal = hoverToReveal
@@ -119,7 +102,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case autoRehide
         case autoRehideDelay
-        case showSectionDividers
         case launchAtLogin
         case useFloatingBar
         case floatingBarStyle
@@ -127,8 +109,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         case controlItemPositions
         case enableGlobalHotkey
         case toggleHotkey
-        case enableSearch
-        case searchHotkey
         case itemAliases
         case itemControls
         case hoverToReveal
@@ -143,7 +123,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         let d = Preferences.default
         autoRehide = try container.decodeIfPresent(Bool.self, forKey: .autoRehide) ?? d.autoRehide
         autoRehideDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .autoRehideDelay) ?? d.autoRehideDelay
-        showSectionDividers = try container.decodeIfPresent(Bool.self, forKey: .showSectionDividers) ?? d.showSectionDividers
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         useFloatingBar = try container.decodeIfPresent(Bool.self, forKey: .useFloatingBar) ?? d.useFloatingBar
         floatingBarStyle = try container.decodeIfPresent(FloatingBarStyle.self, forKey: .floatingBarStyle) ?? d.floatingBarStyle
@@ -151,8 +130,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         controlItemPositions = try container.decodeIfPresent([String: Double].self, forKey: .controlItemPositions) ?? d.controlItemPositions
         enableGlobalHotkey = try container.decodeIfPresent(Bool.self, forKey: .enableGlobalHotkey) ?? d.enableGlobalHotkey
         toggleHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .toggleHotkey) ?? d.toggleHotkey
-        enableSearch = try container.decodeIfPresent(Bool.self, forKey: .enableSearch) ?? d.enableSearch
-        searchHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .searchHotkey) ?? d.searchHotkey
         itemAliases = try container.decodeIfPresent(ItemAliasStore.self, forKey: .itemAliases) ?? d.itemAliases
         itemControls = try container.decodeIfPresent(ItemControlStore.self, forKey: .itemControls) ?? d.itemControls
         hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
@@ -189,6 +166,4 @@ public struct HotkeyCombo: Equatable, Sendable, Codable, Hashable {
 
     /// Default toggle-bar shortcut: ⌥⌘B (kVK_ANSI_B = 11).
     public static let defaultToggle = HotkeyCombo(keyCode: 11, modifiers: command | option)
-    /// Default search shortcut: ⌥⌘F (kVK_ANSI_F = 3).
-    public static let defaultSearch = HotkeyCombo(keyCode: 3, modifiers: command | option)
 }

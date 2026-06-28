@@ -146,11 +146,13 @@ final class CosmeticHideEngine {
         }
         anchorItem = anchor
 
-        let divider = NSStatusBar.system.statusItem(withLength: ControlItemLength.collapsed)
+        // The hidden divider is purely a mechanism, not a visible control: it carries NO image,
+        // so the user never sees a chevron or boundary marker in their menu bar. Its only job is
+        // to expand its width and push the hidden items off-screen. It starts at its natural
+        // (zero-content) width so it's invisible until it's expanded to hide.
+        let divider = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         divider.autosaveName = ControlItem.Identifier.hiddenDivider.rawValue
         if let button = divider.button {
-            button.image = Self.dividerImage()
-            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(dividerClicked(_:))
         }
@@ -237,9 +239,6 @@ final class CosmeticHideEngine {
         let wasFloatingBar = self.preferences.useFloatingBar
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
-        // Show the divider glyph only when section dividers are enabled; otherwise keep it
-        // imageless so the boundary is invisible.
-        hiddenDivider?.button?.image = preferences.showSectionDividers ? Self.dividerImage() : nil
 
         // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
         // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
@@ -428,15 +427,15 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Expands the divider to hide the section, or restores natural width to reveal it.
+    /// Expands the divider to hide the section, or restores natural width to reveal it. The
+    /// divider has no image, so its natural (variable) length is effectively zero width — it
+    /// leaves no visible gap or marker in the menu bar when the section is revealed.
     private func setHidden(collapsed: Bool) {
         guard let divider = hiddenDivider else { return }
         if collapsed {
             divider.length = ControlItemLength.expanded(forScreenWidth: menuBarScreenWidth)
         } else {
-            divider.length = preferences.showSectionDividers
-                ? ControlItemLength.collapsed
-                : NSStatusItem.variableLength
+            divider.length = NSStatusItem.variableLength
         }
     }
 
@@ -544,9 +543,5 @@ final class CosmeticHideEngine {
 
     private static func anchorImage() -> NSImage? {
         NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Bar Keeper's Friend")
-    }
-
-    private static func dividerImage() -> NSImage? {
-        NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Toggle hidden items")
     }
 }

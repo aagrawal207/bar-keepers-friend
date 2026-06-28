@@ -21,14 +21,11 @@ import Carbon.HIToolbox
 final class HotkeyService {
     /// Invoked on the main actor when the toggle-bar hotkey fires.
     var onToggle: (() -> Void)?
-    /// Invoked on the main actor when the search hotkey fires.
-    var onSearch: (() -> Void)?
 
-    /// The two shortcuts we manage. The raw value is the per-hotkey id Carbon hands back in the
-    /// event, so the handler can tell which fired. Kept distinct and stable across re-registration.
+    /// The shortcuts we manage. The raw value is the per-hotkey id Carbon hands back in the event,
+    /// so the handler can tell which fired. Kept stable across re-registration.
     private enum Slot: UInt32 {
         case toggle = 1
-        case search = 2
     }
 
     /// A live registration: the ref we must unregister, and the slot it stands for.
@@ -63,9 +60,6 @@ final class HotkeyService {
 
         if preferences.enableGlobalHotkey && preferences.toggleHotkey.isValid {
             register(combo: preferences.toggleHotkey, slot: .toggle)
-        }
-        if preferences.enableSearch && preferences.searchHotkey.isValid {
-            register(combo: preferences.searchHotkey, slot: .search)
         }
 
         // No registrations survived (everything off/invalid)? Drop ourselves from the table so a
@@ -155,7 +149,6 @@ final class HotkeyService {
     fileprivate func handle(id: UInt32) {
         switch Slot(rawValue: id) {
         case .toggle: onToggle?()
-        case .search: onSearch?()
         case nil: break
         }
     }

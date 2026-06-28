@@ -11,7 +11,6 @@ import Testing
         var prefs = Preferences.default
         prefs.autoRehide = false
         prefs.autoRehideDelay = 30
-        prefs.showSectionDividers = true
         prefs.launchAtLogin = true
         prefs.useFloatingBar = false
         prefs.floatingBarStyle = .vertical
@@ -19,8 +18,6 @@ import Testing
         prefs.controlItemPositions = ["BKFAnchor": 0, "BKFHidden": 1.5]
         prefs.enableGlobalHotkey = false
         prefs.toggleHotkey = HotkeyCombo(keyCode: 12, modifiers: HotkeyCombo.command | HotkeyCombo.shift)
-        prefs.enableSearch = false
-        prefs.searchHotkey = HotkeyCombo(keyCode: 5, modifiers: HotkeyCombo.control)
         prefs.hoverToReveal = true
         prefs.hoverRevealDelay = 0.5
         return prefs

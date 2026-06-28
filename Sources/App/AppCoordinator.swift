@@ -16,7 +16,6 @@ final class AppCoordinator {
     private var floatingBar: FloatingBarController?
 
     private let hotkeys = HotkeyService()
-    private let search = SearchController()
     private let hoverMonitor = HoverRevealMonitor()
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
@@ -54,14 +53,9 @@ final class AppCoordinator {
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         hideEngine = engine
 
-        // Global hotkeys: toggle the bar, open search. Carbon-based, so no Accessibility prompt.
+        // Global hotkey: toggle the bar. Carbon-based, so no Accessibility prompt.
         hotkeys.onToggle = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
-        hotkeys.onSearch = { [weak self] in self?.search.toggle() }
         hotkeys.apply(preferences: preferences)
-
-        // Search panel shares the floating bar's item set and activation path.
-        search.itemsProvider = { [weak self] in self?.floatingBar?.currentItems() ?? [] }
-        search.onActivate = { [weak self] windowID in self?.floatingBar?.activate(windowID: windowID) }
 
         // Hover-to-reveal (opt-in): reveal the bar when the pointer dwells over the anchor.
         hoverMonitor.anchorFrameProvider = { [weak self] in self?.hideEngine?.anchorWindowFrame }

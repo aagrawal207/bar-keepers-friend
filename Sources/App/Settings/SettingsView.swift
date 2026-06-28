@@ -27,7 +27,6 @@ private struct GeneralSettingsTab: View {
         Form {
             Section("General") {
                 Toggle("Launch at login", isOn: $model.launchAtLogin)
-                Toggle("Show section dividers", isOn: $model.preferences.showSectionDividers)
             }
 
             Section("Hidden items") {
@@ -57,19 +56,11 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
-            Section("Shortcuts") {
+            Section("Shortcut") {
                 Toggle("Toggle the bar with a global shortcut", isOn: $model.preferences.enableGlobalHotkey)
                 if model.preferences.enableGlobalHotkey {
                     LabeledContent("Toggle bar") {
                         Text(HotkeyCarbon.displayString(for: model.preferences.toggleHotkey))
-                            .font(.body.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Toggle("Enable the search panel", isOn: $model.preferences.enableSearch)
-                if model.preferences.enableSearch {
-                    LabeledContent("Search") {
-                        Text(HotkeyCarbon.displayString(for: model.preferences.searchHotkey))
                             .font(.body.monospaced())
                             .foregroundStyle(.secondary)
                     }

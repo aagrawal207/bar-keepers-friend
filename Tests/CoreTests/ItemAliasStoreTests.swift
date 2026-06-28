@@ -94,38 +94,4 @@ import Testing
         let decoded = try JSONDecoder().decode(ItemAliasStore.self, from: data)
         #expect(decoded == store)
     }
-
-    // MARK: - Ranking with aliases
-
-    @Test func aliasMakesOtherwiseUnmatchableItemSearchable() {
-        // Tahoe reality: no readable title (placeholder), bundle id doesn't contain the
-        // query — but the user aliased it "Coffee". Without the store, "coffee" finds
-        // nothing; with the store, the item is returned.
-        let snapshot = item(id: 7, title: "Item-0", bundle: "com.acme.tool")
-        let aliases = ItemAliasStore(aliases: ["com.acme.tool": "Coffee"])
-
-        let withoutAliases = SearchRanker.rank(items: [snapshot], query: "coffee")
-        #expect(withoutAliases.isEmpty)
-
-        let withAliases = SearchRanker.rank(items: [snapshot], query: "coffee", aliases: aliases)
-        #expect(withAliases.map(\.item.windowID) == [7])
-    }
-
-    @Test func aliasMatchRanksAtLeastAsHighAsTitleMatch() {
-        // Two items: one matches on title, one matches (exactly) on alias. The alias match
-        // should not score lower than the equivalent title match.
-        let titleHit = item(id: 1, title: "Coffee", bundle: "com.a.one")
-        let aliasHit = item(id: 2, title: "Item-0", bundle: "com.b.two")
-        let aliases = ItemAliasStore(aliases: ["com.b.two": "Coffee"])
-
-        let result = SearchRanker.rank(
-            items: [titleHit, aliasHit],
-            query: "coffee",
-            aliases: aliases
-        )
-        let scores = Dictionary(uniqueKeysWithValues: result.map { ($0.item.windowID, $0.score) })
-        #expect(scores[1] != nil)
-        #expect(scores[2] != nil)
-        #expect(scores[2]! >= scores[1]!)
-    }
 }
