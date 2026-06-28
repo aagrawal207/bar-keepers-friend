@@ -62,7 +62,7 @@ final class HiddenItemController {
     /// copies of each item. No-op (empty result) when nothing needs moving, so it's cheap to call on
     /// every settings change or menu-bar refresh.
     @discardableResult
-    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore, displayXRange: ClosedRange<CGFloat>? = nil) async -> ReconcileResult {
+    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore, displayXRange: ClosedRange<CGFloat>? = nil, displayMenuBarTop: CGFloat = 0) async -> ReconcileResult {
         var result = ReconcileResult()
 
         // Attribute first so each snapshot carries its REAL owning pid (not Tahoe's broken
@@ -76,7 +76,8 @@ final class HiddenItemController {
             anchorMaxX: anchorMaxX,
             controls: controls,
             excludingWindowIDs: controlItemWindowIDs,
-            displayXRange: displayXRange
+            displayXRange: displayXRange,
+            displayMenuBarTop: displayMenuBarTop
         )
         result.planned = plan.count
         DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(anchorMinX) hidden=\(controls.hiddenInMenuBar)")

@@ -52,7 +52,8 @@ public enum HiddenLayoutPlanner {
         anchorMaxX: CGFloat,
         controls: ItemControlStore,
         excludingWindowIDs: Set<CGWindowID> = [],
-        displayXRange: ClosedRange<CGFloat>? = nil
+        displayXRange: ClosedRange<CGFloat>? = nil,
+        displayMenuBarTop: CGFloat = 0
     ) -> [Move] {
         // Targets just past each anchor edge. The window server snaps a dragged item into the
         // nearest real slot, so these need only land unambiguously on the correct side — a small
@@ -74,7 +75,9 @@ public enum HiddenLayoutPlanner {
             // guard a "hide Karabiner" intent would also target the notification window, which can't
             // move — burning the full retry budget per stray window. `isPlausibleMenuBarItem`
             // (height/width/top-edge bounds) is the same filter the floating-bar resolver uses.
-            guard HiddenItemsResolver.isPlausibleMenuBarItem(item) else { continue }
+            // `displayMenuBarTop` makes the top-edge test relative to the anchor's display, so an
+            // item on a display stacked above/below the primary isn't wrongly rejected.
+            guard HiddenItemsResolver.isPlausibleMenuBarItem(item, displayMenuBarTop: displayMenuBarTop) else { continue }
             // No stable identity → intent can't be keyed to it → leave it where the user put it.
             guard ItemControlStore.key(for: item) != nil else { continue }
             // System items that corrupt the layout if moved are never targeted.

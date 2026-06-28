@@ -27,10 +27,11 @@ public enum HiddenItemsResolver {
     public static func hiddenItems(
         from items: [MenuBarItemSnapshot],
         leftOfAnchorX anchorMinX: CGFloat,
-        excludingControlItems controlItemWindowIDs: Set<CGWindowID> = []
+        excludingControlItems controlItemWindowIDs: Set<CGWindowID> = [],
+        displayMenuBarTop: CGFloat = 0
     ) -> [MenuBarItemSnapshot] {
         items
-            .filter { isPlausibleMenuBarItem($0) }
+            .filter { isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop) }
             .filter { !controlItemWindowIDs.contains($0.windowID) }
             .filter { !isOwnControlItem($0) }
             .filter { !ImmovableItems.isImmovable($0) }
@@ -48,20 +49,28 @@ public enum HiddenItemsResolver {
     /// single value and can't bracket both the 24 pt notch item and 33 pt normal items within
     /// one tolerance band. There is no upper width bound — legitimately wide items exist (Now
     /// Playing, date/time, iStat Menus), and height alone already rejects the popup panels.
-    public static func isPlausibleMenuBarItem(_ item: MenuBarItemSnapshot) -> Bool {
+    public static func isPlausibleMenuBarItem(
+        _ item: MenuBarItemSnapshot,
+        displayMenuBarTop: CGFloat = 0
+    ) -> Bool {
         let minHeight: CGFloat = 18
         let maxHeight: CGFloat = 40
         let minWidth: CGFloat = 6
-        // The menu bar sits at the top of the display (global top-left origin → y ≈ 0). A
-        // status-layer window far down the screen is not a menu bar item — e.g. an app's
-        // transient notification window (observed at y≈916) that shares the status layer.
-        // (Single-display assumption, matching the rest of the app; a display positioned
-        // below the primary would need the per-display menu-bar y instead of this constant.)
-        let maxTop: CGFloat = 40
+        // A real status item sits flush against ITS DISPLAY's menu-bar top; a status-layer window
+        // far down the screen (an app's transient notification window, observed at y≈916, or a tall
+        // popover) is not one. We test the item's offset from the menu-bar top rather than absolute
+        // global y: on a multi-display rig a display can be positioned above/below the primary, so
+        // its menu bar lives at a large (or negative) global y and every legitimate item on it would
+        // fail an absolute `minY ≤ 40` test (the bar would show nothing and no move would fire).
+        // `displayMenuBarTop` defaults to 0 — the primary display's top, and the single-display
+        // case — so existing callers and the transient-window rejection are unchanged.
+        let maxOffsetFromTop: CGFloat = 40
+        let offset = item.frame.minY - displayMenuBarTop
         return item.frame.height >= minHeight
             && item.frame.height <= maxHeight
             && item.frame.width >= minWidth
-            && item.frame.minY <= maxTop
+            && offset >= -maxOffsetFromTop      // tolerate small rounding above the top edge
+            && offset <= maxOffsetFromTop
     }
 
     /// Whether a snapshot is one of the app's own control items, identified by its window

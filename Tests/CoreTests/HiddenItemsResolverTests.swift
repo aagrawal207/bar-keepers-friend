@@ -152,4 +152,37 @@ import Testing
         )
         #expect(HiddenItemsResolver.isPlausibleMenuBarItem(topItem))
     }
+
+    @Test func keepsItemAtTopOfADisplayStackedBelowThePrimary() {
+        // A display positioned BELOW the primary has its menu bar at a large global y (e.g. the
+        // primary is 982 tall, so the lower display's bar sits at y≈982). Without a per-display
+        // top, an absolute `minY ≤ 40` test rejects every legitimate item there. With the display's
+        // menu-bar top supplied, the item reads as plausible (and a far-down window still doesn't).
+        let item = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: nil, title: nil,
+            frame: CGRect(x: 100, y: 982, width: 30, height: 33)
+        )
+        #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(item)) // absolute default → wrongly rejected
+        #expect(HiddenItemsResolver.isPlausibleMenuBarItem(item, displayMenuBarTop: 982)) // correct
+    }
+
+    @Test func keepsItemAtTopOfADisplayStackedAboveThePrimary() {
+        // A display ABOVE the primary has a NEGATIVE global menu-bar y. The item sits flush at that
+        // negative top; the relative test keeps it.
+        let item = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: nil, title: nil,
+            frame: CGRect(x: 100, y: -1080, width: 30, height: 33)
+        )
+        #expect(HiddenItemsResolver.isPlausibleMenuBarItem(item, displayMenuBarTop: -1080))
+    }
+
+    @Test func stillRejectsTransientWindowFarBelowItsDisplaysMenuBar() {
+        // The transient-window guard must survive the relative test: a notification window 900pt
+        // below ITS display's menu-bar top is still rejected, even on a stacked display.
+        let lowItem = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: nil, title: nil,
+            frame: CGRect(x: 100, y: 982 + 900, width: 30, height: 33)
+        )
+        #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(lowItem, displayMenuBarTop: 982))
+    }
 }

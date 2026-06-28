@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **167 tests, 20 suites**).
+- Test: same command with `test` (currently **171 tests, 20 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -110,6 +110,17 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-28] Items on a display stacked above/below the primary were dropped.** The
+  plausibility filter (`isPlausibleMenuBarItem`) used an ABSOLUTE `minY ≤ 40` to reject windows far
+  down the screen — correct for a transient notification window, but it conflated "near the top of
+  its display" with "near global y=0". On a display positioned above/below the primary the menu bar
+  lives at a large (or negative) global y, so every legitimate item failed the test: the floating
+  bar showed nothing AND the planner refused every move there. Fixed: the filter now takes a
+  `displayMenuBarTop` and tests the item's OFFSET from its display's menu-bar top (default 0 →
+  unchanged single-display / primary behavior, and the transient-window rejection still holds).
+  `CosmeticHideEngine.anchorDisplayMenuBarTop` derives it in CG-global space and threads it to both
+  the move planner and the floating-bar enumeration. Pure + 4 new tests. (Natural completion of the
+  display-scoping move fix in `4b3201a`; together they handle side-by-side AND stacked displays.)
 - **[RESOLVED 2026-06-28] BKF's own anchor icon vanished from the menu bar.** The per-item moves
   churn the two control items' saved `NSStatusItem Preferred Position` slots, and they drifted
   *inverted* (anchor=379, divider=363 — higher slot = further left, so the divider ended up to the

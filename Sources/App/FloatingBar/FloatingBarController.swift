@@ -64,6 +64,12 @@ final class FloatingBarController {
     /// The anchor's trailing edge from the most recent show, reused when re-laying-out the
     /// panel in place (e.g. when a background capture fills in a glyph while the bar is open).
     private var lastAnchorRightX: CGFloat = 0
+    /// The CG-global y of the anchor display's menu-bar top, so item enumeration tests the
+    /// plausibility filter's top-edge bound relative to that display rather than absolute y=0.
+    /// 0 (the primary display's top) until the engine sets it. On a display stacked above/below
+    /// the primary the menu bar lives at a large/negative global y; without this the enumeration
+    /// would reject every item there and the bar would show nothing. Set by the engine each pass.
+    var displayMenuBarTop: CGFloat = 0
 
     /// Window ids for which we hold a REAL captured glyph (not an app-icon fallback). Keeps the
     /// cache monotonic: once an item has a clean glyph we never downgrade it to an app icon on a
@@ -173,7 +179,8 @@ final class FloatingBarController {
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
             leftOfAnchorX: anchorMinX,
-            excludingControlItems: controlItemWindowIDs
+            excludingControlItems: controlItemWindowIDs,
+            displayMenuBarTop: displayMenuBarTop
         )
         guard !hidden.isEmpty else {
             // Genuinely nothing hidden: clear the cache so a stale glyph from a previous layout
@@ -481,7 +488,8 @@ final class FloatingBarController {
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
             leftOfAnchorX: lastAnchorMinX,
-            excludingControlItems: controlItemWindowIDs
+            excludingControlItems: controlItemWindowIDs,
+            displayMenuBarTop: displayMenuBarTop
         )
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
         let attributed = await AXAttributionProvider.attribute(deduped)
@@ -559,7 +567,8 @@ final class FloatingBarController {
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
             leftOfAnchorX: anchorMinX,
-            excludingControlItems: controlItemWindowIDs
+            excludingControlItems: controlItemWindowIDs,
+            displayMenuBarTop: displayMenuBarTop
         )
         let live = Set(HiddenItemsResolver.deduplicateByMidXProximity(hidden).map { $0.windowID })
         let cached = Set(cachedHiddenOrder.map { $0.windowID })

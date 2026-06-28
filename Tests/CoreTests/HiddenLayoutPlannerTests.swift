@@ -139,6 +139,27 @@ import Testing
         #expect(result.map { $0.item.windowID } == [1]) // only the on-display copy is planned
     }
 
+    @Test func itemOnADisplayStackedBelowIsStillPlannedWhenDisplayTopIsGiven() {
+        // An item whose intent is set but which lives on a display below the primary (menu bar at
+        // global y≈982). With the default top=0 the plausibility filter rejects it (minY ≫ 40) and
+        // no move is planned; supplying the display's menu-bar top makes the move plan correctly.
+        var controls = ItemControlStore()
+        let item = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: "com.a.app", title: nil,
+            frame: CGRect(x: 1100, y: 982, width: 24, height: 22)) // shown side, wants hidden
+        controls.setHidden(true, for: item)
+
+        let rejected = HiddenLayoutPlanner.moves(
+            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls) // default displayMenuBarTop: 0 → wrongly skipped
+        #expect(rejected.isEmpty)
+
+        let planned = HiddenLayoutPlanner.moves(
+            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls, displayMenuBarTop: 982)
+        #expect(planned.map { $0.item.windowID } == [1])
+    }
+
     @Test func nilDisplayRangePlansAcrossAllItems() {
         // Single-display callers (and the FakeWindowServer tests) pass no range → no display filter,
         // so behavior is unchanged: both wrong-side copies are planned.

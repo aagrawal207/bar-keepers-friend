@@ -94,6 +94,10 @@ final class CosmeticHideEngine {
             await awaitBounded(previous, seconds: Self.captureSequenceTimeout)
             captureInFlightCount += 1
             defer { captureInFlightCount -= 1 }
+            // Tell the bar which display's menu-bar top to measure item plausibility against, so a
+            // display stacked above/below the primary isn't enumerated as "all items below the bar".
+            // Every capture path funnels through here, so this one assignment covers them all.
+            floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
             setHidden(collapsed: false)
             try? await Task.sleep(for: .milliseconds(350))
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
@@ -256,6 +260,9 @@ final class CosmeticHideEngine {
             }
         }
         floatingBar?.controlItemWindowIDs = ids
+        // Keep the bar's display-top current for the non-capture paths too (e.g. the pre-show
+        // staleness check), so its item enumeration measures against the anchor's display.
+        floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
     }
 
     /// The anchor window's global frame, used to align the floating bar and to determine
@@ -360,7 +367,8 @@ final class CosmeticHideEngine {
                     anchorMinX: anchor.minX,
                     anchorMaxX: anchor.maxX,
                     controls: self.preferences.itemControls,
-                    displayXRange: self.anchorDisplayXRange
+                    displayXRange: self.anchorDisplayXRange,
+                    displayMenuBarTop: self.anchorDisplayMenuBarTop
                 )
             }
             // Re-capture so the mirror reflects whatever moved. If the bar is open it re-lays-out.
@@ -559,6 +567,18 @@ final class CosmeticHideEngine {
     private var anchorDisplayXRange: ClosedRange<CGFloat>? {
         guard let frame = anchorScreen?.frame else { return nil }
         return frame.minX...frame.maxX
+    }
+
+    /// The y-coordinate of the anchor's display's menu-bar top, in CoreGraphics global space
+    /// (top-left origin) — the space the snapshots' frames use. The menu bar sits at the top of
+    /// each screen; CG-y of a screen's top is `primaryHeight − screenFrame.maxY` (AppKit screen
+    /// frames are bottom-left). For the primary, zero-origin display this is 0, matching the
+    /// single-display default. Used to make the plausibility filter's top-edge test relative to
+    /// the anchor's display, so items on a display stacked above/below the primary aren't rejected.
+    private var anchorDisplayMenuBarTop: CGFloat {
+        guard let anchorScreen,
+              let primaryHeight = NSScreen.screens.first?.frame.maxY else { return 0 }
+        return primaryHeight - anchorScreen.frame.maxY
     }
 
     private func applyDividerVisibility() {
