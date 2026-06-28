@@ -44,11 +44,14 @@ enum AXAttributionProvider {
         _ snapshots: [MenuBarItemSnapshot],
         apps: [(pid: pid_t, name: String)]
     ) -> [MenuBarItemSnapshot] {
-        // Collect every menu bar extra of every running app: its left edge, a display label,
-        // and the owning pid. The label is the app name, except for Control Center modules
-        // (which all report "Control Center") where we read the element's own title so the
-        // user sees "Wi-Fi", "Battery", etc. instead of a wall of identical names.
-        var extras: [(leftEdge: CGFloat, label: String, pid: pid_t)] = []
+        // Collect every menu bar extra of every running app: its left edge, top y, a display
+        // label, and the owning pid. The label is the app name, except for Control Center
+        // modules (which all report "Control Center") where we read the element's own title so
+        // the user sees "Wi-Fi", "Battery", etc. instead of a wall of identical names. The top y
+        // is carried so the matcher can reject a same-x extra that lives on a *different
+        // display's* menu bar (every display has its own bar at near-identical x — without y, an
+        // extra from display B could win an item on display A and mislabel/mis-move it).
+        var extras: [(leftEdge: CGFloat, topY: CGFloat, label: String, pid: pid_t)] = []
         for app in apps {
             let axApp = AXUIElementCreateApplication(app.pid)
             // Cap each app's Accessibility IPC. Without a timeout a single hung or slow app
@@ -62,16 +65,20 @@ enum AXAttributionProvider {
                 if isControlCenter, let title = moduleLabel(child) {
                     label = title
                 }
-                extras.append((leftEdge: position.x, label: label, pid: app.pid))
+                extras.append((leftEdge: position.x, topY: position.y, label: label, pid: app.pid))
             }
         }
         guard !extras.isEmpty else { return snapshots }
 
         // Assign each item to at most one extra (1:1, nearest-wins) so two items near the same
-        // extra don't both claim it — that was the cause of duplicate names in the bar.
+        // extra don't both claim it — that was the cause of duplicate names in the bar. The y
+        // band (kAXPosition and the window frame are both top-left global) keeps an item from
+        // claiming an extra on another display's menu bar.
         let assignment = MenuBarExtraMatcher.assignGreedy(
             targetMinXs: snapshots.map { $0.frame.minX },
-            extraLeftEdges: extras.map { $0.leftEdge }
+            extraLeftEdges: extras.map { $0.leftEdge },
+            targetYs: snapshots.map { $0.frame.minY },
+            extraTopYs: extras.map { $0.topY }
         )
         return snapshots.enumerated().map { index, snapshot in
             guard let extraIndex = assignment[index] else { return snapshot }

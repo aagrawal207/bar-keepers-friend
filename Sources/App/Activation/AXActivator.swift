@@ -77,6 +77,7 @@ enum AXActivator {
         timeout: Float
     ) -> PressOutcome {
         var candidates: [(leftEdge: CGFloat, value: AXUIElement)] = []
+        var candidateYs: [CGFloat] = []
         for pid in pids {
             let axApp = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(axApp, timeout)
@@ -84,10 +85,20 @@ enum AXActivator {
             for child in copyChildren(extrasMenu) {
                 if let position = copyPosition(child) {
                     candidates.append((leftEdge: position.x, value: child))
+                    candidateYs.append(position.y)
                 }
             }
         }
-        guard let child = MenuBarExtraMatcher.nearest(to: targetFrame.minX, among: candidates) else {
+        // Match on left edge AND a y band: the fallback sweeps every app across every display, so
+        // without y an extra on another display's menu bar (same x, far-off y) could win and we'd
+        // press the wrong item. The single-app fast path collects only one bar's extras, but the
+        // band is harmless there. Shares MenuBarExtraMatcher with attribution so the two agree.
+        guard let child = MenuBarExtraMatcher.nearest(
+            to: targetFrame.minX,
+            among: candidates,
+            targetY: targetFrame.minY,
+            candidateYs: candidateYs
+        ) else {
             DebugLog.log("AXActivator: no actionable element for \(windowID) at \(targetFrame)")
             return .noMatch
         }

@@ -115,4 +115,91 @@ import Testing
         )
         #expect(assignment == [1, 0]) // 210->208 (2), 201->200 (1)
     }
+
+    // MARK: - assignGreedy y-band (multi-display)
+
+    @Test func greedyYBandPrefersSameDisplayExtraOverNearerOffDisplay() {
+        // The bug: two displays' menu bars share x. An item on display A (y≈0) has two same-x
+        // extras to choose from — one on display A (y≈0) and a *nearer-x* one on display B
+        // (y≈1080). Without y the off-display extra would win (it's the global nearest x). With
+        // the y band, only the same-display extra is even a candidate.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [1106],
+            extraLeftEdges: [1104, 1106], // index 1 is the exact-x match, but it's on display B
+            targetYs: [0],
+            extraTopYs: [0, 1080]
+        )
+        #expect(assignment == [0]) // claims the display-A extra (1104), not the off-display 1106
+    }
+
+    @Test func greedyYBandYieldsNilWhenOnlyOffDisplayExtraExists() {
+        // The only same-x extra is on another display: rather than mislabel the item with the
+        // wrong app, it must match nothing.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [1106],
+            extraLeftEdges: [1106],
+            targetYs: [0],
+            extraTopYs: [1080]
+        )
+        #expect(assignment == [nil])
+    }
+
+    @Test func greedyYBandAbsorbsSameBarSubPixelDrift() {
+        // kAXPosition and the window frame can disagree by a few points on the same bar; a real
+        // same-display match (y 0 vs 1.5) must still be claimed — the band is far wider than any
+        // within-bar drift.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [1106],
+            extraLeftEdges: [1106],
+            targetYs: [0],
+            extraTopYs: [1.5]
+        )
+        #expect(assignment == [0])
+    }
+
+    @Test func greedyIgnoresYWhenArraysMismatchOrAbsent() {
+        // Defensive: a malformed y array (wrong length) must not silently drop all matches — it
+        // falls back to x-only. And omitting y entirely is byte-identical to the x-only overload.
+        let mismatched = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [100, 200],
+            extraLeftEdges: [101, 199],
+            targetYs: [0], // wrong length on purpose
+            extraTopYs: [0, 0]
+        )
+        #expect(mismatched == [0, 1])
+        let omitted = MenuBarExtraMatcher.assignGreedy(targetMinXs: [100, 200], extraLeftEdges: [101, 199])
+        #expect(omitted == [0, 1])
+    }
+
+    // MARK: - nearest y-band (multi-display)
+
+    @Test func nearestYBandRejectsOffDisplayExtra() {
+        // The exact-x candidate is on another display (y 1080); the in-band one (y 0) is slightly
+        // farther in x but on the right display — it must win. Without y, "b" would win.
+        let candidates: [(leftEdge: CGFloat, value: String)] = [(1104, "a"), (1106, "b")]
+        #expect(MenuBarExtraMatcher.nearest(
+            to: 1106,
+            among: candidates,
+            targetY: 0,
+            candidateYs: [0, 1080]
+        ) == "a")
+    }
+
+    @Test func nearestYBandReturnsNilWhenOnlyOffDisplayCandidate() {
+        let candidates: [(leftEdge: CGFloat, value: String)] = [(1106, "b")]
+        #expect(MenuBarExtraMatcher.nearest(
+            to: 1106,
+            among: candidates,
+            targetY: 0,
+            candidateYs: [1080]
+        ) == nil)
+    }
+
+    @Test func nearestIgnoresYWhenMismatchedOrAbsent() {
+        // Wrong-length candidateYs falls back to x-only (doesn't drop everything); omitting y is
+        // identical to the plain overload.
+        let candidates: [(leftEdge: CGFloat, value: String)] = [(1104, "a"), (1106, "b")]
+        #expect(MenuBarExtraMatcher.nearest(to: 1106, among: candidates, targetY: 0, candidateYs: [0]) == "b")
+        #expect(MenuBarExtraMatcher.nearest(to: 1106, among: candidates) == "b")
+    }
 }

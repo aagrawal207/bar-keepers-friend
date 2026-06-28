@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **186 tests, 21 suites**).
+- Test: same command with `test` (currently **193 tests, 21 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -128,11 +128,24 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `LayoutConfig.decode` checked `version <= currentVersion` but had no lower bound, so a hand-edited
   or corrupt file with a nonsensical version imported as if valid. Fixed: also require `version >= 1`
   (a real export always stamps ≥ 1). Pure + tests.
-- **[MEDIUM, open] Cross-display attribution drops `position.y`** (`AXAttributionProvider.swift:65`).
-  Attribution matches AX extras to item windows on x only; on a multi-display rig two displays' bars
-  share x-ranges, so an item can be labeled with (and moved as) the wrong app. Fix: carry `position.y`
-  and reject matches on a different display band — ideally pushed into the tested `MenuBarExtraMatcher`.
-  Confirmed by audit-2; App-target (not pure) so review-only without a seam.
+- **[RESOLVED 2026-06-28] Cross-display attribution dropped `position.y`.** `AXAttributionProvider`
+  read each AX extra's full `kAXPosition` but kept only `.x`, and `MenuBarExtraMatcher` matched on x
+  alone within a 12pt tolerance. On a multi-display rig every display has its own menu bar at
+  near-identical global x (confirmed live: Control Center items at both x≈1106 and x≈3069), so an
+  extra on display B could be the global nearest-x to an item on display A and win the assignment.
+  Worst part: because `reconcile` attributes *before* moving and the matched extra's **pid** drives
+  the synthesized-move scromble relay, a wrong cross-display match could route a *physical* menu-bar
+  move to the wrong process — not just a cosmetic mislabel. Fixed in the pure, tested
+  `MenuBarExtraMatcher`: both `assignGreedy` and `nearest` gained optional, default-nil y arrays + a
+  `yBandTolerance` (100pt) — a pair is a candidate only if its y also agrees within the band. Both
+  `kAXPosition` and the window `frame` are top-left global, so same-item y agrees to a few points
+  while different-display y differs by ≥ a display height; 100pt cleanly separates them. Wired into
+  BOTH call sites (attribution `assignGreedy`, activation-fallback `nearest`) so the two paths stay
+  in agreement per the matcher's shared-invariant contract. Default-nil keeps single-display behavior
+  byte-identical (all prior tests unchanged) and crucially **does not touch the attribution label** —
+  the label is the persistence key for Hidden/Shown intent + aliases, so the fix only *rejects* a
+  wrong-display match, never changes how an accepted label is formed. Pure + 7 new tests (cross-
+  display rejection, off-display→nil, sub-pixel-drift still matches, malformed-array fallback).
 - **[MEDIUM, open] No startup login-item reconciliation** (`AppCoordinator.start` ~L68). The app
   never calls `loginItem.setEnabled(preferences.launchAtLogin)` at launch, so if the SMAppService
   registration is lost (OS update, manual removal) it's never restored to match the saved pref.
@@ -290,12 +303,27 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   is hardware-verified — don't keep building on an unproven mechanism.)
 - **Triggers / automation** — battery / wifi / app-active / schedule → apply a preset.
 - **Presets / profiles** — saved arrangements, per-display or per-Space.
+- **Layout Mode: On-Demand vs Live** *(idea from Bartender's onboarding, 2026-06-28 — the clean
+  reframe of our cursor-warp problem).* Bartender makes the user choose up front: **On-Demand**
+  ("you're in control" — only moves items when you ask, never interrupts the mouse) vs **Live**
+  ("always organized" — auto-sorts on every add/remove, "may cause a temporary mouse interruption").
+  They don't *hide* the cursor jump; they make non-interruption the default and let power users opt
+  into auto-organize. BKF is already On-Demand-shaped ("only moves what the user explicitly
+  toggled"), so this validates our direction — adopt the *name* now (frame the current behavior as
+  On-Demand) and treat Live (auto-reconcile on menu-bar change) as the future opt-in. This also
+  gives the batch-cursor-guard work a home: it's the thing that makes a future Live mode tolerable.
 - **Always-Hidden tier** — a second section never shown in the bar (deferred; Tahoe broke nested
   sectioning for Ice, so approach with care).
 - **Menu-bar item spacing** (global `NSStatusItemSpacing`) — opt-in, force-relaunches every
   menu-bar app; ship only with a clear warning + reset.
 - **First-run onboarding** — a guided welcome flow (the Permissions *panel* in Settings is done;
   what's left is a proactive first-launch walkthrough rather than the user finding Settings).
+  *Bartender's onboarding (2026-06-28 screenshots) is a good model:* a feature-overview grid, then
+  the Layout Mode choice (above), then a dedicated full-screen **Grant Permissions** step with crisp
+  per-permission benefit bullets ("Screen Recording → see items in the bar / live previews / capture
+  for search"; "Accessibility → move & rearrange / click to show menus / hide & show automatically").
+  We already have the live status + deep-links in Settings; onboarding is just surfacing them
+  proactively on first launch with that benefit copy.
 - **Sparkle auto-update**, **notarized DMG** distribution.
 
 ## Hard constraints / gotchas
