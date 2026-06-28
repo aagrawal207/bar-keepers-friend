@@ -182,6 +182,29 @@ import Testing
         #expect(parts.shown.isEmpty)
     }
 
+    @Test func bulkHideThenPartitionPutsEverythingHidden() {
+        // Backs the "Hide All" bulk action: marking every item hidden, then partitioning, leaves
+        // nothing in Shown. (The model batches these into one mutation; here we assert the store
+        // semantics it relies on.)
+        var store = ItemControlStore()
+        let items = [item("a", x: 0, id: 1), item("b", x: 30, id: 2), item("c", x: 60, id: 3)]
+        for it in items { store.setHidden(true, for: it) }
+        let parts = ItemControlStore.partitionByHidden(items, controls: store)
+        #expect(parts.shown.isEmpty)
+        #expect(parts.hidden.count == 3)
+    }
+
+    @Test func bulkShowAllClearsHiddenIntent() {
+        // Backs "Show All": clearing hidden on every item empties the hidden set.
+        var store = ItemControlStore()
+        store.setHidden(true, forKey: "a")
+        store.setHidden(true, forKey: "b")
+        let items = [item("a", x: 0, id: 1), item("b", x: 30, id: 2)]
+        for it in items { store.setHidden(false, for: it) }
+        #expect(store.hiddenInMenuBar.isEmpty)
+        #expect(ItemControlStore.partitionByHidden(items, controls: store).hidden.isEmpty)
+    }
+
     // MARK: - Hidden-only invariant
 
     @Test func suppressedItemIsDroppedFromBarButStillInTheFullSet() {

@@ -250,14 +250,40 @@ private struct ItemsSettingsTab: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Choose which menu bar items to hide.")
-                .font(.callout)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Choose which menu bar items to hide.")
+                    .font(.callout)
+                Spacer()
+                if !loading && !items.isEmpty {
+                    bulkActions
+                }
+            }
             Text("Hidden items move into Bar Keeper's Friend's bar — click the menu bar icon (or press the shortcut) to reveal them.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+    }
+
+    /// "Hide all" / "Show all" bulk toggles. Each is disabled when it would be a no-op (everything
+    /// already in that state), so the buttons double as a hint of the current split. Both mutate
+    /// the intent once (single reconcile) and re-partition so rows resettle into their sections.
+    private var bulkActions: some View {
+        let parts = model.partition(items)
+        return HStack(spacing: 8) {
+            Button("Hide All") {
+                model.setHidden(true, forAll: items)
+                repartitionToken += 1
+            }
+            .disabled(parts.shown.isEmpty)
+            Button("Show All") {
+                model.setHidden(false, forAll: items)
+                repartitionToken += 1
+            }
+            .disabled(parts.hidden.isEmpty)
+        }
+        .controlSize(.small)
     }
 
     private var loadingState: some View {

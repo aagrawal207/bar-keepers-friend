@@ -134,6 +134,18 @@ final class SettingsModel {
         preferences.itemControls.setHidden(hidden, for: item.snapshot)
     }
 
+    /// Sets the Hidden intent for MANY items at once, mutating `preferences` exactly ONCE so the
+    /// engine runs a single reconcile (and the prefs are persisted once) — not one per item. Used
+    /// by the "Hide all" / "Show all" bulk actions. Items already in the target state are left
+    /// untouched, and keyless items are skipped by the store.
+    func setHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) {
+        var controls = preferences.itemControls
+        for item in items {
+            controls.setHidden(hidden, for: item.snapshot)
+        }
+        preferences.itemControls = controls
+    }
+
     /// The user's display nickname for the item, edited via the name field. Empty clears it.
     func alias(for item: FloatingBarItem) -> String {
         preferences.itemAliases.alias(for: item.snapshot) ?? ""

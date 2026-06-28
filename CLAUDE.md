@@ -89,6 +89,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   "Shown (N)" sections instead of one interleaved list, so the two states scan at a glance and a
   toggled row visibly moves between them (cheap re-partition, no menu-bar re-scan). Pure
   `ItemControlStore.partitionByHidden` + tested.
+- **Hide All / Show All** — bulk buttons in the Items header flip every item's intent in ONE
+  mutation (single reconcile, persisted once), each disabled when it'd be a no-op. Backed by
+  `SettingsModel.setHidden(_:forAll:)` + tested store semantics.
 
 ## Removed (intentionally — don't re-add without asking)
 
@@ -121,7 +124,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Features not yet built (from the plan, roughly prioritized)
 
-- **Per-item / global hotkeys** to toggle a *specific* item.
+- **Per-item / global hotkeys** to toggle a *specific* item. (Deferred until the synthesized move
+  is hardware-verified — don't keep building on an unproven mechanism.)
 - **Triggers / automation** — battery / wifi / app-active / schedule → apply a preset.
 - **Presets / profiles** — saved arrangements, per-display or per-Space.
 - **Always-Hidden tier** — a second section never shown in the bar (deferred; Tahoe broke nested
