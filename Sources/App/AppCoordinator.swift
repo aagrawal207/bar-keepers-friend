@@ -124,7 +124,9 @@ final class AppCoordinator {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(
                 preferences: preferences,
-                loginItem: loginItem
+                loginItem: loginItem,
+                itemsProvider: { [weak self] in self?.floatingBar?.currentItems() ?? [] },
+                refreshItems: { [weak self] in self?.hideEngine?.refreshFloatingBarCache() }
             ) { [weak self] updated in
                 self?.persist(updated)
                 self?.hideEngine?.apply(preferences: updated)
