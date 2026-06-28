@@ -74,6 +74,38 @@ final class SettingsModel {
         }
     }
 
+    // MARK: - Permissions
+
+    /// Live authorization state for Accessibility + Screen Recording, refreshed from the probe.
+    /// The Pro features fail silently without these, so the Settings UI surfaces them and lets the
+    /// user jump straight to the right System Settings pane.
+    private(set) var permissions = PermissionState()
+    private let permissionProbe: PermissionProbe = SystemPermissionProbe()
+
+    /// Re-reads permission status from the system. Called when the Settings window appears and
+    /// can be polled while it's open so a grant the user just toggled in System Settings shows up
+    /// without reopening. Cheap (two boolean syscalls); promotes a regranted-then-revoked
+    /// permission to `.lapsed` via the pure state machine.
+    func refreshPermissions() {
+        permissions.refresh(using: permissionProbe)
+    }
+
+    /// Status of a single permission for the UI to render.
+    func status(of permission: Permission) -> PermissionStatus {
+        permissions.status(of: permission)
+    }
+
+    /// Opens the System Settings pane for a permission (and, for Accessibility, fires the grant
+    /// prompt so the app appears in the list). Invoked by the Permissions section's button.
+    func openPermissionSettings(_ permission: Permission) {
+        switch permission {
+        case .accessibility:
+            AccessibilityPermission.requestAndOpenSettings()
+        case .screenRecording:
+            ScreenRecordingPermission.openSettings()
+        }
+    }
+
     // MARK: - Items management
 
     /// Loads every manageable menu bar item (shown and hidden) for the Items list. Async: it

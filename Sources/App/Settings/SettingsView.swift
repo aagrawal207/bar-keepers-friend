@@ -29,6 +29,8 @@ private struct GeneralSettingsTab: View {
                 Toggle("Launch at login", isOn: $model.launchAtLogin)
             }
 
+            PermissionsSection(model: model)
+
             Section("Hidden items") {
                 Toggle("Show hidden items in a floating bar", isOn: $model.preferences.useFloatingBar)
                 if model.preferences.useFloatingBar {
@@ -90,6 +92,94 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Permissions section
+
+/// Surfaces the two optional permissions the Pro features rely on, so the user isn't left with a
+/// silently-failing "Hidden" toggle or blank icons. Each row shows the live status and, when not
+/// granted, a button that routes to the right System Settings pane. Polls while visible so a grant
+/// the user just flipped in System Settings updates here without reopening Settings.
+///
+/// Both permissions are OPTIONAL — the cosmetic hide/show baseline needs neither — so this never
+/// nags or blocks; it explains what each unlocks and gets out of the way once granted.
+private struct PermissionsSection: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Section("Permissions") {
+            PermissionRow(
+                model: model,
+                permission: .accessibility,
+                title: "Accessibility",
+                purpose: "Lets the app hide and reveal menu bar items by moving them."
+            )
+            PermissionRow(
+                model: model,
+                permission: .screenRecording,
+                title: "Screen Recording",
+                purpose: "Lets the floating bar show each hidden icon's real image."
+            )
+        }
+        .onAppear { model.refreshPermissions() }
+        .task {
+            // Poll gently while Settings is open so a just-granted permission flips to "Granted"
+            // without the user having to reopen the window. Two cheap syscalls per tick.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                model.refreshPermissions()
+            }
+        }
+    }
+}
+
+/// One permission row: title + one-line purpose, a status chip, and (only when not granted) an
+/// "Open Settings…" button.
+private struct PermissionRow: View {
+    @Bindable var model: SettingsModel
+    let permission: Permission
+    let title: String
+    let purpose: String
+
+    private var status: PermissionStatus { model.status(of: permission) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(title)
+                statusChip
+                Spacer(minLength: 8)
+                if status != .granted {
+                    Button("Open Settings…") { model.openPermissionSettings(permission) }
+                        .controlSize(.small)
+                }
+            }
+            Text(purpose)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder private var statusChip: some View {
+        switch status {
+        case .granted:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        case .lapsed:
+            Label("Needs re-approval", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        case .denied, .notDetermined:
+            Label("Not granted", systemImage: "circle")
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .font(.caption)
+        }
     }
 }
 

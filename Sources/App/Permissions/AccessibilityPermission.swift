@@ -16,6 +16,12 @@ enum AccessibilityPermission {
         // concurrency-safe global constant under Swift 6.
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+        openSettings()
+    }
+
+    /// Opens the Accessibility privacy pane without firing the grant prompt — used by the
+    /// Permissions UI's "Open Settings" button, where the user already knows what they're doing.
+    static func openSettings() {
         if let url = URL(string: Permission.accessibility.settingsURLString) {
             NSWorkspace.shared.open(url)
         }

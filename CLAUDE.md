@@ -75,6 +75,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   panel, so a revealed bar doesn't vanish instantly), **launch at login**, **layout
   export/import** (versioned JSON), **per-item display aliases** (nicknames in the bar/Items
   list), **multi-display** anchor placement, **notch-safe** geometry.
+- **Permissions panel** — Settings → General shows live Accessibility + Screen Recording status
+  (Granted / Needs re-approval / Not granted), explains what each unlocks, and offers an "Open
+  Settings…" button per permission. Polls while open so a freshly-granted permission updates
+  without reopening. Both are optional (the cosmetic baseline needs neither), so it never blocks.
+  Pure `PermissionState` machine in Core + `SystemPermissionProbe` in the app target.
 
 ## Removed (intentionally — don't re-add without asking)
 
@@ -114,8 +119,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   sectioning for Ice, so approach with care).
 - **Menu-bar item spacing** (global `NSStatusItemSpacing`) — opt-in, force-relaunches every
   menu-bar app; ship only with a clear warning + reset.
-- **Onboarding / permission UX** — explain Screen Recording + Accessibility, handle the
-  Sequoia/Tahoe monthly re-prompt with a text-only fallback.
+- **First-run onboarding** — a guided welcome flow (the Permissions *panel* in Settings is done;
+  what's left is a proactive first-launch walkthrough rather than the user finding Settings).
 - **Sparkle auto-update**, **notarized DMG** distribution.
 
 ## Hard constraints / gotchas
