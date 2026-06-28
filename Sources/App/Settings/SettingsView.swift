@@ -21,6 +21,7 @@ struct SettingsView: View {
                         Text("Vertical list").tag(FloatingBarStyle.vertical)
                     }
                     .pickerStyle(.radioGroup)
+                    Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
                 }
             }
 

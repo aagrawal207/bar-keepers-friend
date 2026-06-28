@@ -49,7 +49,14 @@ struct SearchView: View {
     /// `FloatingBarItem` by window id so we keep the captured icon and disabled state.
     private var results: [FloatingBarItem] {
         let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return SearchRanker.rank(items: items.map(\.snapshot), query: query)
+        // Let search match a user's custom alias too. Rebuild a small alias store from the items'
+        // own aliases (each item already carries the alias resolved for its owner) so the ranker —
+        // which matches over title/owner/alias — can find an item by its nickname.
+        var aliases = ItemAliasStore()
+        for item in items where item.alias?.isEmpty == false {
+            aliases.setAlias(item.alias, for: item.snapshot)
+        }
+        return SearchRanker.rank(items: items.map(\.snapshot), query: query, aliases: aliases)
             .compactMap { byID[$0.item.windowID] }
     }
 

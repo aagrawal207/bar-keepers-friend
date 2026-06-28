@@ -73,6 +73,38 @@ final class FloatingBarController {
     /// the very first open (during launch warm-up) instead of a misleading "no hidden items".
     private(set) var hasCapturedOnce = false
 
+    // MARK: - Present/dismiss animation + auto-dismiss state
+
+    /// True only while a hide() slide-out is mid-flight (between starting the animation and its
+    /// completion firing `orderOut`). Lets a show() that interrupts a hide know it must reclaim a
+    /// panel that's part-way faded/slid: without this the completion handler of the *cancelled*
+    /// hide could later `orderOut` the panel show() just brought back, leaving the bar stuck
+    /// invisible. show() flips this false and reasserts the final frame/alpha so the stale
+    /// completion becomes a no-op.
+    private var isAnimatingHide = false
+
+    /// How far (points) the panel starts above its final resting spot, toward the menu bar, before
+    /// sliding down on show / back up on hide. Small so it reads as a quick drop-in, not a launch.
+    private static let slideOffset: CGFloat = 10
+    /// Present/dismiss animation duration. Short enough to feel instant, long enough to register as
+    /// motion rather than a pop.
+    private static let slideDuration: TimeInterval = 0.18
+
+    /// Opaque tokens from `NSEvent.add*MonitorForEvents`, installed on show() when
+    /// `dismissBarOnMouseExit` is on and torn down in hide(). Non-nil exactly while the mouse-exit
+    /// watch is armed; also serve as the install guard so a re-layout show() can't stack duplicates.
+    /// A GLOBAL monitor (events to other apps) plus a LOCAL one (events to us — e.g. the pointer
+    /// over our own panel) mirror HoverRevealMonitor: the global alone goes blind whenever the
+    /// cursor is over the panel itself, which is exactly when we must NOT dismiss.
+    private var exitGlobalMonitor: Any?
+    private var exitLocalMonitor: Any?
+    /// The grace countdown armed when the pointer leaves the panel frame, cancelled if it returns
+    /// before firing. A `DispatchWorkItem` so replace/cancel is one cheap, unambiguous operation.
+    private var dismissWorkItem: DispatchWorkItem?
+    /// Seconds the pointer may sit outside the panel before the bar dismisses itself. Brushing the
+    /// edge for less than this re-enters and cancels the pending dismissal, so it doesn't snap shut.
+    private static let mouseExitGraceDelay: TimeInterval = 0.4
+
     init(
         windowServer: WindowServer,
         capture: IconCaptureService,
@@ -273,13 +305,59 @@ final class FloatingBarController {
 
         let panel = panel ?? makePanel()
         panel.contentViewController = NSHostingController(rootView: root)
-        panel.setFrame(panelFrame, display: true)
-        // Become key so the hosted SwiftUI buttons receive clicks. The panel is a
-        // .nonactivatingPanel, so this does NOT activate the app or steal focus from the
-        // user's frontmost window — it just lets our own controls handle mouse events.
-        panel.makeKeyAndOrderFront(nil)
         self.panel = panel
+        // Set visible up front so the engine's toggle logic and the `if isVisible { await show }`
+        // re-layout path in captureAndCache both see the bar as open the instant we commit to it,
+        // not after the animation lands.
         isVisible = true
+        present(panel: panel, finalFrame: panelFrame)
+        // (Re)arm the mouse-exit watch. A re-layout show() (captureAndCache while visible) tears
+        // down then re-installs so monitors never stack; honoring the preference live here means a
+        // setting flip takes effect on the next open without retrofitting an already-open bar.
+        installMouseExitMonitorIfNeeded()
+    }
+
+    /// Presents `panel` at `finalFrame`, sliding it down from just under the menu bar with a fade
+    /// (Bartender-style). The panel starts `slideOffset` points HIGHER (toward the menu bar) at
+    /// alpha 0, orders front, then animates to the final frame + alpha 1. Because this is an
+    /// `NSPanel`, the frame and alpha are driven through `animator()` inside an
+    /// `NSAnimationContext` group.
+    ///
+    /// Re-entrancy: a show() can land while a hide() slide-out is still running. Clearing
+    /// `isAnimatingHide` here neuters that hide's completion handler (it checks the flag before
+    /// `orderOut`), so the panel we just reclaimed can't be ordered out from under us and left
+    /// stuck invisible. We always reassert the final frame + alpha, so an interrupted part-way
+    /// state is corrected regardless of where the prior animation was.
+    ///
+    /// Reduce Motion: if the system asks for reduced motion we skip the slide/fade entirely and
+    /// just place the panel at its final frame, full alpha, and order it front.
+    private func present(panel: NSPanel, finalFrame: CGRect) {
+        // A show interrupting a hide: reclaim the panel and disarm the stale hide completion.
+        isAnimatingHide = false
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.alphaValue = 1
+            panel.setFrame(finalFrame, display: true)
+            // Become key so the hosted SwiftUI buttons receive clicks. The panel is a
+            // .nonactivatingPanel, so this does NOT activate the app or steal focus from the
+            // user's frontmost window — it just lets our own controls handle mouse events.
+            panel.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        // Start above the final spot (toward the menu bar) and transparent, then slide down + fade
+        // in. Order front BEFORE animating so the panel exists on screen to animate.
+        let startFrame = finalFrame.offsetBy(dx: 0, dy: Self.slideOffset)
+        panel.alphaValue = 0
+        panel.setFrame(startFrame, display: false)
+        panel.makeKeyAndOrderFront(nil)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.slideDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(finalFrame, display: true)
+            panel.animator().alphaValue = 1
+        }
     }
 
     func hide() {
@@ -290,8 +368,44 @@ final class FloatingBarController {
         // the new task is assigned after this returns, so only a PRIOR activation is cancelled.
         currentActivationTask?.cancel()
         currentActivationTask = nil
-        panel?.orderOut(nil)
+
+        // Re-entrancy: a second hide() while the bar is already hidden (or its slide-out is still
+        // running) must be a no-op — otherwise we'd start a fresh fade-from-zero on an invisible
+        // panel and/or fight the running animation. `isVisible` is the immediate, authoritative
+        // flag; it was set false the first time hide() ran.
+        guard isVisible else { return }
         isVisible = false
+
+        // Tear down the mouse-exit watch and any pending grace dismissal so neither leaks nor
+        // fires after the bar is closed. Always done, regardless of how we hide.
+        removeMouseExitMonitor()
+
+        guard let panel else { return }
+
+        // Reduce Motion: skip the slide/fade and just order out instantly.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            panel.orderOut(nil)
+            return
+        }
+
+        // Slide back UP by the same offset (toward the menu bar) while fading to 0, then order out
+        // in the completion. `isAnimatingHide` marks this animation as the live one; if a show()
+        // interrupts it, show() flips the flag false and the completion below becomes a no-op so it
+        // can't order out a panel show() just reclaimed (which would strand the bar invisible).
+        isAnimatingHide = true
+        let upFrame = panel.frame.offsetBy(dx: 0, dy: Self.slideOffset)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.slideDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrame(upFrame, display: true)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            // Superseded by a show() that reclaimed the panel — leave it on screen.
+            guard self.isAnimatingHide else { return }
+            self.isAnimatingHide = false
+            self.panel?.orderOut(nil)
+        })
     }
 
     /// The screen whose horizontal extent contains a global x coordinate — used to place the
@@ -421,14 +535,16 @@ final class FloatingBarController {
         ))
     }
 
-    /// Builds the items to show from the cached order + cached images.
+    /// Builds the items to show from the cached order + cached images, tagging each with the
+    /// user's alias (if any) so the bar and search show the user's chosen name.
     private func buildItemsFromCache() -> [FloatingBarItem] {
         cachedHiddenOrder.compactMap { snapshot in
             guard let image = iconCache[snapshot.windowID] else { return nil }
             return FloatingBarItem(
                 snapshot: snapshot,
                 image: image,
-                isDisabled: unactivatableWindowIDs.contains(snapshot.windowID)
+                isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
+                alias: preferences.itemAliases.alias(for: snapshot)
             )
         }
     }
@@ -523,6 +639,74 @@ final class FloatingBarController {
         // Consider it blank if fewer than 1% of pixels have any opacity.
         let opaque = alpha.reduce(0) { $0 + ($1 > 8 ? 1 : 0) }
         return opaque * 100 < w * h
+    }
+
+    // MARK: - Mouse-exit auto-dismiss
+
+    /// Arms the "dismiss when the pointer leaves the bar" watch, if `dismissBarOnMouseExit` is on.
+    /// Idempotent and safe to call on every show(): a re-layout show() (captureAndCache while the
+    /// bar is visible) calls this again, so we tear down first to guarantee monitors never stack.
+    /// Reads the preference LIVE so a setting flip is honored on the next open without retrofitting
+    /// an already-open bar. Does nothing — installs nothing — when the preference is off.
+    ///
+    /// Concurrency mirrors HoverRevealMonitor/HotkeyService: AppKit delivers these callbacks on the
+    /// main thread, so the closures reach `@MainActor` state via `MainActor.assumeIsolated` with no
+    /// runtime hop. The GLOBAL monitor sees movement over OTHER apps; the LOCAL one sees movement
+    /// over US (the pointer parked on the panel itself) and must return the event unchanged so it
+    /// isn't swallowed — that local case is precisely when we must keep the bar open.
+    private func installMouseExitMonitorIfNeeded() {
+        // Always start clean so a re-layout show() can't end up with two sets of monitors.
+        removeMouseExitMonitor()
+        guard preferences.dismissBarOnMouseExit else { return }
+
+        exitGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleMouseExitMove() }
+        }
+        exitLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+            MainActor.assumeIsolated { self?.handleMouseExitMove() }
+            return event
+        }
+    }
+
+    /// Removes both mouse-exit monitors and cancels any pending grace dismissal. Called from hide()
+    /// (so nothing leaks or fires once the bar is closed) and from `installMouseExitMonitorIfNeeded`
+    /// before a reinstall.
+    private func removeMouseExitMonitor() {
+        if let exitGlobalMonitor { NSEvent.removeMonitor(exitGlobalMonitor) }
+        if let exitLocalMonitor { NSEvent.removeMonitor(exitLocalMonitor) }
+        exitGlobalMonitor = nil
+        exitLocalMonitor = nil
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
+    }
+
+    /// Per-move handler for the auto-dismiss watch. Kept tiny because `.mouseMoved` fires at pointer
+    /// cadence. If the pointer is inside the panel frame the user is aiming at an icon, so cancel any
+    /// pending dismissal and stay open. Once it's outside, arm a one-shot grace timer; if the pointer
+    /// returns before it fires, the next inside event cancels it — brushing the edge won't snap the
+    /// bar shut.
+    private func handleMouseExitMove() {
+        // Defensive: a queued callback could arrive between monitor removal and drain, or after the
+        // bar hid. Only act while genuinely visible with monitors live.
+        guard isVisible, exitGlobalMonitor != nil || exitLocalMonitor != nil else { return }
+        guard let frame = panel?.frame else { return }
+
+        if frame.contains(NSEvent.mouseLocation) {
+            // Pointer is over the bar — cancel a pending dismissal (the user came back / is aiming).
+            dismissWorkItem?.cancel()
+            dismissWorkItem = nil
+        } else if dismissWorkItem == nil {
+            // Pointer left and nothing is scheduled yet — arm the grace countdown. (If one is
+            // already pending we let it keep running; restarting it on every outside jiggle would
+            // postpone the dismissal indefinitely.)
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.isVisible else { return }
+                self.dismissWorkItem = nil
+                self.hide()
+            }
+            dismissWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.mouseExitGraceDelay, execute: work)
+        }
     }
 
     private func makePanel() -> NSPanel {

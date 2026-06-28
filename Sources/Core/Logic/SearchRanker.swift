@@ -16,9 +16,18 @@ public enum SearchRanker {
     }
 
     /// Returns items matching `query`, best first. An empty query returns everything in
-    /// the input order (score 0). Matching is case-insensitive over the item title and,
-    /// as a fallback, its owner bundle id.
-    public static func rank(items: [MenuBarItemSnapshot], query: String) -> [Match] {
+    /// the input order (score 0). Matching is case-insensitive over the item title, the
+    /// user's chosen alias (if any), and — as a fallback — its owner bundle id.
+    ///
+    /// `aliases` is defaulted to an empty store so existing callers (which pass only
+    /// `items:` and `query:`) keep compiling unchanged. When supplied, an item's alias is
+    /// just another haystack, which matters most on Tahoe where the real title is often a
+    /// useless `"Item-0"` placeholder — the alias is the only name worth searching.
+    public static func rank(
+        items: [MenuBarItemSnapshot],
+        query: String,
+        aliases: ItemAliasStore = ItemAliasStore()
+    ) -> [Match] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return items.map { Match(item: $0, score: 0) }
@@ -27,7 +36,11 @@ public enum SearchRanker {
 
         return items
             .compactMap { item -> Match? in
-                let haystacks = [item.title, item.ownerBundleID].compactMap { $0?.lowercased() }
+                // Alias and title are both strong, user-/system-facing names, so an alias
+                // match ranks just as highly as a title match (same scoring, the max wins).
+                // The bundle id stays a weaker fallback because it's a developer string.
+                let haystacks = [item.title, aliases.alias(for: item), item.ownerBundleID]
+                    .compactMap { $0?.lowercased() }
                 guard let best = haystacks.map({ score(needle: needle, haystack: $0) }).max(),
                       best > 0 else {
                     return nil

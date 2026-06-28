@@ -51,6 +51,11 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// The shortcut that opens the search panel. Default ⌥⌘F.
     public var searchHotkey: HotkeyCombo
 
+    /// User-chosen searchable aliases for menu bar items, keyed by owning-app identity. Lets the
+    /// user find an item by a nickname — valuable on Tahoe where the real title is often the
+    /// generic "Item-0". Persisted with the rest of preferences.
+    public var itemAliases: ItemAliasStore
+
     // MARK: - Hover to reveal
 
     /// Reveal the floating bar when the pointer hovers over the menu bar anchor, without a
@@ -79,6 +84,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         toggleHotkey: HotkeyCombo = .defaultToggle,
         enableSearch: Bool = true,
         searchHotkey: HotkeyCombo = .defaultSearch,
+        itemAliases: ItemAliasStore = ItemAliasStore(),
         hoverToReveal: Bool = false,
         hoverRevealDelay: TimeInterval = 0.25,
         dismissBarOnMouseExit: Bool = true
@@ -95,6 +101,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.toggleHotkey = toggleHotkey
         self.enableSearch = enableSearch
         self.searchHotkey = searchHotkey
+        self.itemAliases = itemAliases
         self.hoverToReveal = hoverToReveal
         self.hoverRevealDelay = hoverRevealDelay
         self.dismissBarOnMouseExit = dismissBarOnMouseExit
@@ -116,6 +123,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case toggleHotkey
         case enableSearch
         case searchHotkey
+        case itemAliases
         case hoverToReveal
         case hoverRevealDelay
         case dismissBarOnMouseExit
@@ -138,6 +146,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         toggleHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .toggleHotkey) ?? d.toggleHotkey
         enableSearch = try container.decodeIfPresent(Bool.self, forKey: .enableSearch) ?? d.enableSearch
         searchHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .searchHotkey) ?? d.searchHotkey
+        itemAliases = try container.decodeIfPresent(ItemAliasStore.self, forKey: .itemAliases) ?? d.itemAliases
         hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
         hoverRevealDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .hoverRevealDelay) ?? d.hoverRevealDelay
         dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
