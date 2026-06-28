@@ -193,6 +193,10 @@ private struct ItemsSettingsTab: View {
     /// The listed items, loaded asynchronously (enumerating + attributing the live menu bar).
     @State private var items: [FloatingBarItem] = []
     @State private var loading = true
+    /// Bumped when a row's Shown/Hidden flips, to force a cheap re-partition (no menu-bar re-scan)
+    /// so the row visibly moves between sections. Re-enumerating on every toggle would flash the
+    /// loading spinner for a second; the item set hasn't changed, only the intent has.
+    @State private var repartitionToken = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -203,14 +207,37 @@ private struct ItemsSettingsTab: View {
             } else if items.isEmpty {
                 emptyState
             } else {
-                List(items) { item in
-                    ItemRow(model: model, item: item)
-                }
-                .listStyle(.inset)
+                groupedList
             }
         }
         .padding(.top, 8)
         .task { await reload() }
+    }
+
+    /// The items split into "Hidden (N)" and "Shown (N)" sections, so the two states are easy to
+    /// scan rather than interleaved. Toggling a row re-partitions on the next reload, which is
+    /// triggered by the row itself after the move settles.
+    private var groupedList: some View {
+        // `repartitionToken` is read so SwiftUI re-evaluates this when a toggle bumps it.
+        _ = repartitionToken
+        let parts = model.partition(items)
+        return List {
+            if !parts.hidden.isEmpty {
+                Section("Hidden (\(parts.hidden.count))") {
+                    ForEach(parts.hidden) { item in
+                        ItemRow(model: model, item: item, onToggle: { repartitionToken += 1 })
+                    }
+                }
+            }
+            if !parts.shown.isEmpty {
+                Section("Shown (\(parts.shown.count))") {
+                    ForEach(parts.shown) { item in
+                        ItemRow(model: model, item: item, onToggle: { repartitionToken += 1 })
+                    }
+                }
+            }
+        }
+        .listStyle(.inset)
     }
 
     /// Reloads the list. Run on appear; also re-run after a toggle so the new Shown/Hidden state
@@ -269,6 +296,9 @@ private struct ItemsSettingsTab: View {
 private struct ItemRow: View {
     @Bindable var model: SettingsModel
     let item: FloatingBarItem
+    /// Called after the user flips Shown/Hidden, so the parent can re-partition the list and the
+    /// row visibly moves between the "Hidden" and "Shown" sections.
+    var onToggle: () -> Void = {}
     @State private var alias: String = ""
     @State private var hidden: Bool = false
     @FocusState private var aliasFocused: Bool
@@ -310,6 +340,7 @@ private struct ItemRow: View {
         }
         .onChange(of: hidden) { _, newValue in
             model.setHidden(newValue, for: item)
+            onToggle()
         }
     }
 }

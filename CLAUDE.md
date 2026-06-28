@@ -85,6 +85,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   rows; vertical → extra columns); `FloatingBarView` renders the matching grid. Pure + tested
   (panel never exceeds the display at 80 items either axis). *(grid rendering not yet
   hardware-verified, but the geometry is.)*
+- **Items list grouped Hidden / Shown** — Settings → Items splits into "Hidden (N)" and
+  "Shown (N)" sections instead of one interleaved list, so the two states scan at a glance and a
+  toggled row visibly moves between them (cheap re-partition, no menu-bar re-scan). Pure
+  `ItemControlStore.partitionByHidden` + tested.
 
 ## Removed (intentionally — don't re-add without asking)
 

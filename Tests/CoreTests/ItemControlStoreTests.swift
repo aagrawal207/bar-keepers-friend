@@ -155,6 +155,33 @@ import Testing
         #expect(visible.map(\.ownerBundleID) == ["solo"])
     }
 
+    // MARK: - partitionByHidden (Items list grouping)
+
+    @Test func partitionSplitsByHideIntentPreservingOrder() {
+        var store = ItemControlStore()
+        store.setHidden(true, forKey: "b")
+        store.setHidden(true, forKey: "d")
+        let items = [item("a", x: 0, id: 1), item("b", x: 30, id: 2),
+                     item("c", x: 60, id: 3), item("d", x: 90, id: 4)]
+        let parts = ItemControlStore.partitionByHidden(items, controls: store)
+        #expect(parts.hidden.map(\.ownerBundleID) == ["b", "d"])   // in input order
+        #expect(parts.shown.map(\.ownerBundleID) == ["a", "c"])    // in input order
+    }
+
+    @Test func partitionWithNothingHiddenPutsAllInShown() {
+        let store = ItemControlStore()
+        let items = [item("a", x: 0, id: 1), item("b", x: 30, id: 2)]
+        let parts = ItemControlStore.partitionByHidden(items, controls: store)
+        #expect(parts.hidden.isEmpty)
+        #expect(parts.shown.count == 2)
+    }
+
+    @Test func partitionOfEmptyInputIsTwoEmptyGroups() {
+        let parts = ItemControlStore.partitionByHidden([], controls: ItemControlStore())
+        #expect(parts.hidden.isEmpty)
+        #expect(parts.shown.isEmpty)
+    }
+
     // MARK: - Hidden-only invariant
 
     @Test func suppressedItemIsDroppedFromBarButStillInTheFullSet() {

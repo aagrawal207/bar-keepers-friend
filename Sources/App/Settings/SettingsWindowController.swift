@@ -112,6 +112,17 @@ final class SettingsModel {
     /// enumerates and attributes the live menu bar.
     func items() async -> [FloatingBarItem] { await itemsProvider() }
 
+    /// Splits the given items into Hidden vs Shown by the user's current intent, so the Items
+    /// list can render two grouped sections. Preserves each group's incoming order.
+    func partition(_ items: [FloatingBarItem]) -> (hidden: [FloatingBarItem], shown: [FloatingBarItem]) {
+        var hidden: [FloatingBarItem] = []
+        var shown: [FloatingBarItem] = []
+        for item in items {
+            if preferences.itemControls.isHidden(item.snapshot) { hidden.append(item) } else { shown.append(item) }
+        }
+        return (hidden, shown)
+    }
+
     /// Whether the item is currently marked Hidden in the menu bar. Assigning mutates
     /// `preferences.itemControls`, which fires `onChange` so the engine moves the item and the
     /// bar refreshes.

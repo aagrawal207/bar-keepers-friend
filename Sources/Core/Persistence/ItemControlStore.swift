@@ -170,4 +170,20 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
             }
         }.map(\.element)
     }
+
+    /// Splits items into (hidden, shown) by the user's menu-bar hide intent, preserving each
+    /// group's incoming order. Used by the Settings Items list to show "Hidden (N)" and
+    /// "Shown (N)" sections instead of one interleaved list — easier to scan, and it makes a
+    /// mis-attributed item's grouping obvious at a glance. Pure, so the grouping is unit-tested.
+    public static func partitionByHidden(
+        _ items: [MenuBarItemSnapshot],
+        controls: ItemControlStore
+    ) -> (hidden: [MenuBarItemSnapshot], shown: [MenuBarItemSnapshot]) {
+        var hidden: [MenuBarItemSnapshot] = []
+        var shown: [MenuBarItemSnapshot] = []
+        for item in items {
+            if controls.isHidden(item) { hidden.append(item) } else { shown.append(item) }
+        }
+        return (hidden, shown)
+    }
 }
