@@ -227,9 +227,21 @@ final class FloatingBarController {
         // spinner instead of the misleading empty-state copy.
         let isPreparing = !hasCapturedOnce && items.isEmpty
 
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let displayFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        // Place the panel on the display the ANCHOR lives on, not NSScreen.main. For a menu-bar
+        // agent with no key window, NSScreen.main is whichever screen owns the user's frontmost
+        // window — often a *different* monitor than the one whose menu bar the anchor sits in, so
+        // the bar would open detached or on the wrong screen. The anchor's x is a global
+        // coordinate (identical in CG and AppKit), so pick the screen whose x-range contains it.
+        let screen = Self.screenContaining(globalX: anchorRightX) ?? NSScreen.main ?? NSScreen.screens.first
+        let screenFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let menuBarHeight = NSStatusBar.system.thickness
+
+        // Feed the layout a frame with the screen's REAL global x-origin (so its right/left
+        // clamp shares the same coordinate space as the global anchorRightX) but a zero y-origin
+        // (the layout's top-left convention treats minY as "distance from the top"). The panel's
+        // global x then comes straight out of the layout, and only the y needs flipping into
+        // AppKit's bottom-left space using this screen's real maxY.
+        let layoutFrame = CGRect(x: screenFrame.minX, y: 0, width: screenFrame.width, height: screenFrame.height)
 
         // When empty, lay out as if for one item so the "no hidden items" message has a
         // sensibly-sized panel. This gives visible feedback that the click registered.
@@ -238,15 +250,15 @@ final class FloatingBarController {
             itemCount: max(items.count, 1),
             anchorRightX: anchorRightX,
             menuBarHeight: menuBarHeight,
-            displayFrame: CGRect(origin: .zero, size: displayFrame.size),
+            displayFrame: layoutFrame,
             metrics: .default
         )
 
-        // Convert from the layout's top-left origin (y down from top) to AppKit's
-        // bottom-left global coordinates.
-        let appKitY = displayFrame.maxY - layout.panelFrame.maxY
+        // x is already global (the layout clamped in global x); only convert the top-left y to
+        // AppKit's bottom-left, anchored to the chosen screen's real top edge.
+        let appKitY = screenFrame.maxY - layout.panelFrame.maxY
         let panelFrame = CGRect(
-            x: displayFrame.minX + layout.panelFrame.minX,
+            x: layout.panelFrame.minX,
             y: appKitY,
             width: layout.panelFrame.width,
             height: layout.panelFrame.height
@@ -271,8 +283,24 @@ final class FloatingBarController {
     }
 
     func hide() {
+        // Cancel any in-flight activation: if the bar is being hidden (auto-rehide, an anchor
+        // re-click, or the engine tearing down), a slow activation that hasn't fired yet must not
+        // later warp the cursor and synthesize a click into the menu bar after the user moved on.
+        // This is safe on the activation path itself, which calls hide() BEFORE creating its task:
+        // the new task is assigned after this returns, so only a PRIOR activation is cancelled.
+        currentActivationTask?.cancel()
+        currentActivationTask = nil
         panel?.orderOut(nil)
         isVisible = false
+    }
+
+    /// The screen whose horizontal extent contains a global x coordinate — used to place the
+    /// panel on the same display as the anchor. Matching on x (rather than a full point) is
+    /// robust because the anchor's x is unambiguous across CG and AppKit spaces, and menu bars
+    /// span the full width of their display. Returns nil if no screen contains x (caller falls
+    /// back to NSScreen.main).
+    private static func screenContaining(globalX: CGFloat) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.minX <= globalX && globalX <= $0.frame.maxX }
     }
 
     // MARK: - Diagnostics

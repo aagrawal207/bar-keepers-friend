@@ -17,6 +17,9 @@ final class CosmeticHideEngine {
     var onOpenSettings: (() -> Void)?
     /// Called when the user chooses Quit from the anchor's right-click menu.
     var onQuit: (() -> Void)?
+    /// Called when an auto-rehide closes the bar/section on its own (not a user action), so the
+    /// hover monitor can re-arm even while the pointer is still parked over the anchor.
+    var onAutoHidden: (() -> Void)?
 
     /// The floating bar that mirrors hidden items below the menu bar. When set and enabled
     /// in preferences, the anchor click toggles this panel instead of reflowing items back
@@ -39,10 +42,18 @@ final class CosmeticHideEngine {
     /// each sequence onto the previous one guarantees they run one at a time.
     private var captureChain: Task<Void, Never> = Task {}
 
-    /// True while a capture sequence is revealing/capturing. Lets the anchor click ignore the
+    /// Number of capture sequences currently revealing/capturing. A COUNTER, not a bool: when a
+    /// wedged predecessor is overtaken via `awaitBounded`'s timeout, predecessor and successor run
+    /// concurrently for a moment. With a bool, the orphaned predecessor's `defer` would clear the
+    /// flag while the successor is still live, defeating the click-during-capture guard (a user
+    /// click would then yank the divider shut under an in-flight screenshot). Incrementing/
+    /// decrementing means the flag stays true until the LAST sequence finishes.
+    private var captureInFlightCount = 0
+
+    /// Whether any capture sequence is revealing/capturing. Lets the anchor click ignore the
     /// transient reveal (the divider is physically open for capture but not for the user), so a
     /// click during the launch capture window can't misread that state and eat the toggle.
-    private(set) var captureInFlight = false
+    var captureInFlight: Bool { captureInFlightCount > 0 }
 
     /// Upper bound on a single capture sequence so a wedged ScreenCaptureKit call can't stall
     /// the chain forever (the next sequence waits on this one). Generous vs. the ~1s happy path.
@@ -76,8 +87,8 @@ final class CosmeticHideEngine {
             // predecessor finishes on its own; the worst case is a brief divider overlap, not a
             // permanent stall that prevents the bar from ever showing.
             await awaitBounded(previous, seconds: Self.captureSequenceTimeout)
-            captureInFlight = true
-            defer { captureInFlight = false }
+            captureInFlightCount += 1
+            defer { captureInFlightCount -= 1 }
             setHidden(collapsed: false)
             try? await Task.sleep(for: .milliseconds(350))
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
@@ -154,7 +165,15 @@ final class CosmeticHideEngine {
             await self?.revealForActivation()
         }
         floatingBar?.rehideItems = { [weak self] in
-            self?.setHidden(collapsed: true)
+            // Reconcile the STATE MACHINE, not just the physical divider. `revealForActivation`
+            // advanced the state to `.shown` before every activation; on a failed/off-screen
+            // activation the bar calls this to tidy up. If we only collapsed the divider here
+            // (the old bug), the state machine would stay stuck at `.shown` forever — making
+            // `sectionInUse` permanently true (so refreshes silently no-op and the mirror goes
+            // stale) and the next anchor click hit the `.shown` branch and get eaten. Driving the
+            // collapse through the state machine keeps model and divider in sync.
+            guard let self else { return }
+            self.enact(self.stateMachine.apply(.hide(.hidden)))
         }
         floatingBar?.scheduleAutoRehideAfterActivation = { [weak self] in
             self?.scheduleAutoRehideAfterActivation()
@@ -173,15 +192,7 @@ final class CosmeticHideEngine {
             //   2. If anything is still missing, one reconcile pass that DOES allow the app-icon
             //      fallback, so a genuinely uncapturable item isn't omitted forever.
             // The menu bar is usually fully composited by pass 2, so the fallback rarely fires.
-            runCaptureSequence(forceCollapseAfter: true) { [weak self] in
-                guard let self, let bar = self.floatingBar else { return }
-                let anchorX = self.anchorFrame?.minX ?? 1115
-                await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
-                if bar.hasIncompleteGlyphs {
-                    try? await Task.sleep(for: .milliseconds(220))
-                    await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
-                }
-            }
+            warmUpFloatingBarCache()
         } else {
             applyDividerVisibility()
         }
@@ -223,11 +234,42 @@ final class CosmeticHideEngine {
     // MARK: - Preferences
 
     func apply(preferences: Preferences) {
+        let wasFloatingBar = self.preferences.useFloatingBar
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
         // Show the divider glyph only when section dividers are enabled; otherwise keep it
         // imageless so the boundary is invisible.
         hiddenDivider?.button?.image = preferences.showSectionDividers ? Self.dividerImage() : nil
+
+        // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
+        // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
+        // branch, so a user who enables the bar AFTER launch would otherwise get a stuck
+        // "Preparing…" spinner on first open until a stale-cache refresh limps in. Mirror the
+        // launch behavior on the transition.
+        if preferences.useFloatingBar != wasFloatingBar {
+            if preferences.useFloatingBar {
+                warmUpFloatingBarCache()
+            } else {
+                floatingBar?.hide()
+                applyDividerVisibility()
+            }
+        }
+    }
+
+    /// Runs the same two-pass reveal→capture→hide warm-up that `install()` uses, so the floating
+    /// bar's cache is pre-populated (and `hasCapturedOnce` set) before the first open. Shared by
+    /// launch and the Settings enable-at-runtime path.
+    private func warmUpFloatingBarCache() {
+        guard preferences.useFloatingBar, floatingBar != nil else { return }
+        runCaptureSequence(forceCollapseAfter: true) { [weak self] in
+            guard let self, let bar = self.floatingBar else { return }
+            let anchorX = self.anchorFrame?.minX ?? 1115
+            await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
+            if bar.hasIncompleteGlyphs {
+                try? await Task.sleep(for: .milliseconds(220))
+                await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+            }
+        }
     }
 
     // MARK: - Actions
@@ -271,6 +313,13 @@ final class CosmeticHideEngine {
     /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
     private func toggleFloatingBar() {
         guard let bar = floatingBar else { return }
+        // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
+        // timer armed by an earlier activation (default 15s) could fire later and yank shut a bar
+        // the user just re-opened, or collapse a section they re-engaged — a spontaneous-vanish
+        // bug. toggleFloatingBar is the single funnel for anchor clicks, hotkey, and hover, so one
+        // cancel here covers every re-open path.
+        autoRehideWorkItem?.cancel()
+        autoRehideWorkItem = nil
         // A click during the one-time launch capture: don't eat it (that felt broken), and don't
         // touch the divider/state machine (the capture is mid-reveal and owns it — collapsing now
         // would yank the section out from under the screenshot). Just show the panel; it renders a
@@ -325,13 +374,28 @@ final class CosmeticHideEngine {
         toggleFloatingBar()
     }
 
-    /// Toggles the floating bar from a global hotkey or a hover reveal. Routes through the same
-    /// path as an anchor click in floating-bar mode; in reflow mode it toggles the hidden
-    /// section instead, so the shortcut does the right thing either way.
+    /// Toggles the floating bar from a global hotkey. Routes through the same path as an anchor
+    /// click in floating-bar mode; in reflow mode it toggles the hidden section instead, so the
+    /// shortcut does the right thing either way. A keypress *toggling* is expected behavior.
     func toggleFromShortcut() {
         if preferences.useFloatingBar, floatingBar != nil {
             toggleFloatingBar()
         } else {
+            toggleHidden()
+        }
+    }
+
+    /// Reveals the bar from a hover. Unlike a toggle this is idempotent: if the bar is already
+    /// open it does NOTHING. Hover must be reveal-only — wiring it to a toggle meant a dwell over
+    /// the anchor (which the pointer crosses constantly to reach app menus) would HIDE an open
+    /// bar, so the "reveal on hover" gesture fought the user and flickered the bar shut.
+    func revealFromHover() {
+        if preferences.useFloatingBar, let bar = floatingBar {
+            guard !bar.isVisible, stateMachine.visibility(of: .hidden) != .shown else { return }
+            toggleFloatingBar()
+        } else {
+            // Reflow mode: only reveal when currently collapsed, so re-hover can't collapse it.
+            guard stateMachine.visibility(of: .hidden) == .collapsed else { return }
             toggleHidden()
         }
     }
@@ -368,13 +432,23 @@ final class CosmeticHideEngine {
     private func setHidden(collapsed: Bool) {
         guard let divider = hiddenDivider else { return }
         if collapsed {
-            let screenWidth = NSScreen.main?.frame.width ?? 1440
-            divider.length = ControlItemLength.expanded(forScreenWidth: screenWidth)
+            divider.length = ControlItemLength.expanded(forScreenWidth: menuBarScreenWidth)
         } else {
             divider.length = preferences.showSectionDividers
                 ? ControlItemLength.collapsed
                 : NSStatusItem.variableLength
         }
+    }
+
+    /// Width of the display that actually hosts the menu bar (where our status items live), NOT
+    /// `NSScreen.main` — on a multi-display rig the menu-bar screen can be far wider (e.g. a
+    /// 5120pt Pro Display XDR while main is a 1440pt laptop). Sizing the expanded divider from
+    /// the wrong, narrower screen left hidden items un-pushed past the edge, so hiding silently
+    /// failed. Prefer the anchor's own screen; fall back to main, then a safe default.
+    private var menuBarScreenWidth: CGFloat {
+        let anchorScreen = anchorItem?.button?.window?.screen
+            ?? anchorFrame.flatMap { f in NSScreen.screens.first { $0.frame.intersects(f) } }
+        return (anchorScreen ?? NSScreen.main)?.frame.width ?? 1440
     }
 
     private func applyDividerVisibility() {
@@ -389,6 +463,7 @@ final class CosmeticHideEngine {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
+            self.onAutoHidden?()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
@@ -405,8 +480,15 @@ final class CosmeticHideEngine {
         guard preferences.autoRehide else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            // Defensive: only tear down if the section is still in its post-activation revealed
+            // state. If the user already re-engaged (re-opened the bar, which sets state back to
+            // a fresh show), this stale timer must NOT hide the panel out from under them.
+            // toggleFloatingBar also cancels this timer on re-interaction; the guard is belt-and-
+            // suspenders for any path that doesn't.
+            guard self.stateMachine.visibility(of: .hidden) == .shown else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
             self.floatingBar?.hide()
+            self.onAutoHidden?()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
@@ -429,6 +511,16 @@ final class CosmeticHideEngine {
         // when idle.
         guard !sectionInUse else { return }
         enact(stateMachine.apply(.screenParametersChanged))
+        // The state-machine transition above is a no-op when already `.collapsed` (which it
+        // almost always is here, since `.shown` implies sectionInUse), so it emits no intents and
+        // the divider is never resized. But the new screen may be a different WIDTH, and the
+        // expanded length is screen-width-derived — a stale (too-narrow) divider lets hidden items
+        // leak back onto the menu bar. So re-apply the physical width unconditionally for the
+        // current collapsed state. This also fixes reflow mode, which used to return before any
+        // resize because the `useFloatingBar` guard below came first.
+        if stateMachine.visibility(of: .hidden) == .collapsed {
+            setHidden(collapsed: true)
+        }
         guard preferences.useFloatingBar else { return }
         refreshFloatingBarCache()
     }

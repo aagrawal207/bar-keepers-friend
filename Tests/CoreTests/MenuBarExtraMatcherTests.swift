@@ -86,4 +86,33 @@ import Testing
         )
         #expect(assignment == [0, nil])
     }
+
+    @Test func greedyResolvesNearEquidistantInversionOptimally() {
+        // Regression: input-order greedy would let target 105 grab extra 100 (the first it sees
+        // at equal distance), forcing target 100 onto extra 110 — swapping the two and producing
+        // total distance 15. The globally-optimal 1:1 matching is [1, 0] (105->110, 100->100;
+        // total 5), which keeps each item on its true-nearest extra.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [105, 100],
+            extraLeftEdges: [100, 110]
+        )
+        #expect(assignment == [1, 0])
+    }
+
+    @Test func greedyAssignmentIsOrderIndependent() {
+        // The matching must be the same regardless of how targets are ordered in the array,
+        // since it is now distance-globally-optimal rather than first-come.
+        let a = MenuBarExtraMatcher.assignGreedy(targetMinXs: [100, 105], extraLeftEdges: [100, 110])
+        #expect(a == [0, 1]) // 100->100 (0), 105->110 (5): total 5, the optimum
+    }
+
+    @Test func greedyClosestPairWinsContestedExtra() {
+        // Two targets contest extra at 200; the closer one (201) must win it and the farther
+        // one (210) fall to its next-best free extra (208), not the reverse.
+        let assignment = MenuBarExtraMatcher.assignGreedy(
+            targetMinXs: [210, 201],
+            extraLeftEdges: [200, 208]
+        )
+        #expect(assignment == [1, 0]) // 210->208 (2), 201->200 (1)
+    }
 }

@@ -34,9 +34,16 @@ public enum MenuBarExtraMatcher {
     }
 
     /// Assigns each target (a status-item left edge) to at most one extra, 1:1, so two items
-    /// near the same extra can't both claim it (which produced duplicate names). Each target,
-    /// in input order, claims its nearest still-unclaimed extra within `tolerance`; an extra
-    /// once claimed is unavailable to later targets.
+    /// near the same extra can't both claim it (which produced duplicate names).
+    ///
+    /// Uses a **globally minimum-distance** matching, not per-target greedy. The old input-order
+    /// greedy could let an earlier target grab an extra a later target needed more, forcing the
+    /// later one onto a worse (but still in-tolerance) extra — swapping two neighbours' labels and
+    /// activation targets. Example: targets [105, 100] vs extras [100, 110] greedily yields
+    /// [0, 1] (total distance 15); the optimal is [1, 0] (total 5). We achieve the optimum for the
+    /// small N here by enumerating every in-tolerance (distance, target, extra) pair, sorting by
+    /// distance ascending (deterministic tie-break on target then extra index), and claiming the
+    /// closest available pair first.
     ///
     /// Returns, per input target index, the index into `extraLeftEdges` it claimed, or `nil`
     /// if none was free within tolerance. Apps with several extras (Control Center exposes
@@ -47,22 +54,32 @@ public enum MenuBarExtraMatcher {
         extraLeftEdges: [CGFloat],
         tolerance: CGFloat = tolerance
     ) -> [Int?] {
-        var claimed = Set<Int>()
-        return targetMinXs.map { target in
-            var bestIndex: Int?
-            var bestDistance = CGFloat.greatestFiniteMagnitude
-            for (index, edge) in extraLeftEdges.enumerated() where !claimed.contains(index) {
+        // All candidate pairings within tolerance.
+        var pairs: [(distance: CGFloat, target: Int, extra: Int)] = []
+        for (t, target) in targetMinXs.enumerated() {
+            for (e, edge) in extraLeftEdges.enumerated() {
                 let distance = abs(edge - target)
-                if distance < bestDistance {
-                    bestDistance = distance
-                    bestIndex = index
+                if distance <= tolerance {
+                    pairs.append((distance, t, e))
                 }
             }
-            if let bestIndex, bestDistance <= tolerance {
-                claimed.insert(bestIndex)
-                return bestIndex
-            }
-            return nil
         }
+        // Closest pair first; deterministic ties so the result never depends on enumeration luck.
+        pairs.sort {
+            if $0.distance != $1.distance { return $0.distance < $1.distance }
+            if $0.target != $1.target { return $0.target < $1.target }
+            return $0.extra < $1.extra
+        }
+
+        var result = [Int?](repeating: nil, count: targetMinXs.count)
+        var claimedTargets = Set<Int>()
+        var claimedExtras = Set<Int>()
+        for pair in pairs {
+            guard !claimedTargets.contains(pair.target), !claimedExtras.contains(pair.extra) else { continue }
+            result[pair.target] = pair.extra
+            claimedTargets.insert(pair.target)
+            claimedExtras.insert(pair.extra)
+        }
+        return result
     }
 }

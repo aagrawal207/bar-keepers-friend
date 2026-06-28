@@ -169,4 +169,19 @@ final class HoverRevealMonitor {
         dwellWorkItem?.cancel()
         dwellWorkItem = nil
     }
+
+    /// Re-arms the gesture after the bar closed itself OUT OF BAND (auto-rehide), so a pointer
+    /// still parked over the anchor can re-reveal it without first having to leave and return.
+    /// Without this, the latch (cleared the instant a reveal fires, re-armed only on leave) leaves
+    /// the monitor stuck `armed == false, pointerInside == true` after an auto-rehide, and the
+    /// "keep hovering to reveal" gesture silently dies. We re-arm and, if the pointer is still
+    /// inside, restart the dwell so continued hovering brings the bar back. Crucially this is only
+    /// called for auto-rehide — NOT for a user-initiated close — so hover never fights a deliberate
+    /// dismissal. Safe to call when monitoring is off (it just re-arms latent state).
+    func barDidAutoHide() {
+        armed = true
+        if pointerInside, globalMonitor != nil || localMonitor != nil {
+            scheduleDwell()
+        }
+    }
 }

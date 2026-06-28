@@ -65,8 +65,12 @@ final class AppCoordinator {
 
         // Hover-to-reveal (opt-in): reveal the bar when the pointer dwells over the anchor.
         hoverMonitor.anchorFrameProvider = { [weak self] in self?.hideEngine?.anchorWindowFrame }
-        hoverMonitor.onReveal = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
+        hoverMonitor.onReveal = { [weak self] in self?.hideEngine?.revealFromHover() }
         hoverMonitor.apply(preferences: preferences)
+
+        // When the bar auto-rehides on its own, let the hover monitor re-arm so a still-parked
+        // pointer can re-reveal without leaving and returning.
+        engine.onAutoHidden = { [weak self] in self?.hoverMonitor.barDidAutoHide() }
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
         // needs capture to show icons. Permission-free hide/show still works without it.

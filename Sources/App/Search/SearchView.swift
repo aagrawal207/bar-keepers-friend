@@ -69,10 +69,17 @@ struct SearchView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         )
-        .onAppear { fieldFocused = true }
-        // Re-clamp the highlight whenever the result set changes (e.g. typing narrows it): a
-        // selection that pointed at row 5 must not dangle when only two rows remain.
-        .onChange(of: query) { clampSelection() }
+        .onAppear {
+            fieldFocused = true
+            // Land the highlight on the first ENABLED row at open time, not blindly on index 0:
+            // if the first hidden item previously failed to activate it's disabled, and a default
+            // selection of 0 would render no highlight and make the first Return a silent no-op.
+            selectTopEnabled()
+        }
+        // On every query change the list is RE-RANKED best-first, so reset the highlight to the
+        // new top-ranked enabled row rather than clamping the stale index — otherwise Return could
+        // fire a lower-ranked result the highlight lagged onto as the user typed.
+        .onChange(of: query) { selectTopEnabled() }
     }
 
     // MARK: - Pieces
@@ -176,17 +183,11 @@ struct SearchView: View {
         selection = index
     }
 
-    /// Keeps `selection` valid after the result set changes, landing on the first enabled row.
-    private func clampSelection() {
-        guard !results.isEmpty else { selection = 0; return }
-        let clamped = min(max(selection, 0), results.count - 1)
-        selection = clamped
-        if results[clamped].isDisabled {
-            // Snap to the first enabled row if the clamped one happens to be disabled.
-            if let firstEnabled = results.firstIndex(where: { !$0.isDisabled }) {
-                selection = firstEnabled
-            }
-        }
+    /// Sets `selection` to the top-ranked ENABLED row (falling back to 0 when none is enabled or
+    /// the list is empty). Used at open time and after every re-rank, so Return always activates
+    /// the current best activatable match rather than a stale or disabled row.
+    private func selectTopEnabled() {
+        selection = results.firstIndex(where: { !$0.isDisabled }) ?? 0
     }
 
     private func activateSelection() {

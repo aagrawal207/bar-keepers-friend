@@ -70,4 +70,36 @@ import Testing
         let result = FloatingBarLayout.layout(style: .horizontal, itemCount: 0, anchorRightX: 1000, menuBarHeight: menuBarHeight, displayFrame: display)
         #expect(result.itemRects.isEmpty)
     }
+
+    // MARK: - Off-origin (secondary) display
+
+    /// Regression for the multi-display positioning bug: when the display's global origin.x is
+    /// non-zero (a second monitor to the right of the main one), the panel must still align under
+    /// the anchor's GLOBAL x — not get clamped against a zero-based width and flung to the wrong
+    /// place. The controller now feeds the layout the screen's real global-origin frame.
+    @Test func panelAlignsUnderAnchorOnOffOriginDisplay() {
+        let secondary = CGRect(x: 1512, y: 0, width: 1920, height: 1080)
+        let anchorRightX: CGFloat = 3000 // a real anchor near the right of the secondary display
+        let result = FloatingBarLayout.layout(
+            style: .horizontal, itemCount: 5,
+            anchorRightX: anchorRightX, menuBarHeight: menuBarHeight, displayFrame: secondary
+        )
+        // Right edge under the anchor, and the whole panel inside the secondary display.
+        #expect(abs(result.panelFrame.maxX - anchorRightX) < 0.5)
+        #expect(result.panelFrame.minX >= secondary.minX)
+        #expect(result.panelFrame.maxX <= secondary.maxX - FloatingBarLayout.Metrics.default.cornerInset + 0.5)
+    }
+
+    @Test func panelClampsToOffOriginDisplayRightEdge() {
+        // Anchor jammed against the secondary display's far-right edge: panel clamps inside that
+        // display's bounds (using its real maxX), never spilling onto a neighbouring screen.
+        let secondary = CGRect(x: 1512, y: 0, width: 1920, height: 1080)
+        let result = FloatingBarLayout.layout(
+            style: .horizontal, itemCount: 10,
+            anchorRightX: secondary.maxX, menuBarHeight: menuBarHeight, displayFrame: secondary
+        )
+        let inset = FloatingBarLayout.Metrics.default.cornerInset
+        #expect(result.panelFrame.maxX <= secondary.maxX - inset + 0.5)
+        #expect(result.panelFrame.minX >= secondary.minX)
+    }
 }
