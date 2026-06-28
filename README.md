@@ -1,6 +1,6 @@
 # Bar Keeper's Friend
 
-A native macOS menu bar manager — hide, organize, reveal, and search your status bar
+A native macOS menu bar manager — hide, organize, and reveal your status bar
 icons when you have too many. In the spirit of Bartender and [Ice](https://github.com/jordanbaird/Ice),
 built ground-up for macOS 26 (Tahoe).
 
@@ -17,6 +17,10 @@ Early development. Built in phases, robust core first:
   or vertical list), so a too-narrow (notched) menu bar isn't relied on to show items.
   Clicking a mirrored icon reveals the section and triggers the real item. Needs Screen
   Recording (to capture icon images) + Accessibility (to click). ✅
+- **Phase 3** — per-item **Shown / Hidden** control in Settings that physically moves the real
+  item across the anchor (the Bartender-style direct picker), plus a global toggle shortcut
+  (⌥⌘B). Uses private window-server behavior, so it's fenced behind a protocol seam with a
+  self-validating retry loop. ✅ *(move not yet hardware-verified — see `CLAUDE.md`.)*
 
 ### How it works
 
@@ -32,7 +36,7 @@ protocol (`WindowServer`, `PermissionProbe`, …) so the bulk of the logic is pu
 types that are exhaustively unit-tested without ever launching the menu bar agent.
 
 - **`BarKeepersFriendCore`** — pure logic: section classification, notch geometry, the
-  hide/show state machine, preferences, search ranking. No AppKit side effects.
+  hide/show state machine, preferences, the per-item move planner. No AppKit side effects.
 - **`BarKeepersFriend`** — thin AppKit shell: `NSStatusItem` management, the settings
   window (SwiftUI), lifecycle.
 
