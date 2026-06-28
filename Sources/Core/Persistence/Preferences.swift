@@ -60,6 +60,12 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Seconds the pointer must dwell over the anchor before the bar reveals on hover.
     public var hoverRevealDelay: TimeInterval
 
+    // MARK: - Floating bar behavior
+
+    /// Dismiss the floating bar automatically when the pointer leaves it (Bartender-style).
+    /// On by default — a quick-glance bar shouldn't linger once the user moves away.
+    public var dismissBarOnMouseExit: Bool
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -74,7 +80,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         enableSearch: Bool = true,
         searchHotkey: HotkeyCombo = .defaultSearch,
         hoverToReveal: Bool = false,
-        hoverRevealDelay: TimeInterval = 0.25
+        hoverRevealDelay: TimeInterval = 0.25,
+        dismissBarOnMouseExit: Bool = true
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = autoRehideDelay
@@ -90,6 +97,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.searchHotkey = searchHotkey
         self.hoverToReveal = hoverToReveal
         self.hoverRevealDelay = hoverRevealDelay
+        self.dismissBarOnMouseExit = dismissBarOnMouseExit
     }
 
     public static let `default` = Preferences()
@@ -110,6 +118,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case searchHotkey
         case hoverToReveal
         case hoverRevealDelay
+        case dismissBarOnMouseExit
     }
 
     /// Decodes leniently: any missing key falls back to its default, so adding a new
@@ -131,6 +140,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         searchHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .searchHotkey) ?? d.searchHotkey
         hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
         hoverRevealDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .hoverRevealDelay) ?? d.hoverRevealDelay
+        dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
     }
 }
 
