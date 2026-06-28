@@ -120,7 +120,7 @@ final class SettingsModel {
 
     /// Reads settings from a user-chosen JSON file and applies them. A malformed/incompatible
     /// file surfaces an error line instead of throwing into the UI. Assigning `preferences`
-    /// triggers `onChange`, so the whole app (engine, bar, hotkeys, hover) re-applies at once.
+    /// triggers `onChange`, so the whole app (engine, bar, hotkeys) re-applies at once.
     func importLayout() {
         do {
             if let imported = try LayoutTransferService.importLayout() {

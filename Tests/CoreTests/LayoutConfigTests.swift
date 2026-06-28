@@ -18,8 +18,7 @@ import Testing
         prefs.controlItemPositions = ["BKFAnchor": 0, "BKFHidden": 1.5]
         prefs.enableGlobalHotkey = false
         prefs.toggleHotkey = HotkeyCombo(keyCode: 12, modifiers: HotkeyCombo.command | HotkeyCombo.shift)
-        prefs.hoverToReveal = true
-        prefs.hoverRevealDelay = 0.5
+        prefs.dismissBarOnMouseExit = false
         return prefs
     }
 

@@ -41,21 +41,6 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
-            Section("Reveal on hover") {
-                Toggle("Reveal when hovering the anchor", isOn: $model.preferences.hoverToReveal)
-                if model.preferences.hoverToReveal {
-                    LabeledContent("Hover delay") {
-                        Stepper(
-                            value: $model.preferences.hoverRevealDelay,
-                            in: 0.05...2,
-                            step: 0.05
-                        ) {
-                            Text(String(format: "%.2fs", model.preferences.hoverRevealDelay))
-                        }
-                    }
-                }
-            }
-
             Section("Shortcut") {
                 Toggle("Toggle the bar with a global shortcut", isOn: $model.preferences.enableGlobalHotkey)
                 if model.preferences.enableGlobalHotkey {

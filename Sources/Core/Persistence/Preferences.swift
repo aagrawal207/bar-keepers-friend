@@ -49,15 +49,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// owning-app identity. Distinct from `itemAliases` so each store stays single-purpose.
     public var itemControls: ItemControlStore
 
-    // MARK: - Hover to reveal
-
-    /// Reveal the floating bar when the pointer hovers over the menu bar anchor, without a
-    /// click (Bartender-style). Off by default — opt-in, since it can surprise users.
-    public var hoverToReveal: Bool
-
-    /// Seconds the pointer must dwell over the anchor before the bar reveals on hover.
-    public var hoverRevealDelay: TimeInterval
-
     // MARK: - Floating bar behavior
 
     /// Dismiss the floating bar automatically when the pointer leaves it (Bartender-style).
@@ -76,8 +67,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         toggleHotkey: HotkeyCombo = .defaultToggle,
         itemAliases: ItemAliasStore = ItemAliasStore(),
         itemControls: ItemControlStore = ItemControlStore(),
-        hoverToReveal: Bool = false,
-        hoverRevealDelay: TimeInterval = 0.25,
         dismissBarOnMouseExit: Bool = true
     ) {
         self.autoRehide = autoRehide
@@ -91,8 +80,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.toggleHotkey = toggleHotkey
         self.itemAliases = itemAliases
         self.itemControls = itemControls
-        self.hoverToReveal = hoverToReveal
-        self.hoverRevealDelay = hoverRevealDelay
         self.dismissBarOnMouseExit = dismissBarOnMouseExit
     }
 
@@ -111,8 +98,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         case toggleHotkey
         case itemAliases
         case itemControls
-        case hoverToReveal
-        case hoverRevealDelay
         case dismissBarOnMouseExit
     }
 
@@ -132,8 +117,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         toggleHotkey = try container.decodeIfPresent(HotkeyCombo.self, forKey: .toggleHotkey) ?? d.toggleHotkey
         itemAliases = try container.decodeIfPresent(ItemAliasStore.self, forKey: .itemAliases) ?? d.itemAliases
         itemControls = try container.decodeIfPresent(ItemControlStore.self, forKey: .itemControls) ?? d.itemControls
-        hoverToReveal = try container.decodeIfPresent(Bool.self, forKey: .hoverToReveal) ?? d.hoverToReveal
-        hoverRevealDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .hoverRevealDelay) ?? d.hoverRevealDelay
         dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
     }
 }

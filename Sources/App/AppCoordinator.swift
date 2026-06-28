@@ -17,7 +17,6 @@ final class AppCoordinator {
     private var hiddenItemController: HiddenItemController?
 
     private let hotkeys = HotkeyService()
-    private let hoverMonitor = HoverRevealMonitor()
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
@@ -62,15 +61,6 @@ final class AppCoordinator {
         // Global hotkey: toggle the bar. Carbon-based, so no Accessibility prompt.
         hotkeys.onToggle = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
         hotkeys.apply(preferences: preferences)
-
-        // Hover-to-reveal (opt-in): reveal the bar when the pointer dwells over the anchor.
-        hoverMonitor.anchorFrameProvider = { [weak self] in self?.hideEngine?.anchorWindowFrame }
-        hoverMonitor.onReveal = { [weak self] in self?.hideEngine?.revealFromHover() }
-        hoverMonitor.apply(preferences: preferences)
-
-        // When the bar auto-rehides on its own, let the hover monitor re-arm so a still-parked
-        // pointer can re-reveal without leaving and returning.
-        engine.onAutoHidden = { [weak self] in self?.hoverMonitor.barDidAutoHide() }
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
         // needs capture to show icons. Permission-free hide/show still works without it.
@@ -117,7 +107,6 @@ final class AppCoordinator {
     func stop() {
         hideEngine?.uninstall()
         hotkeys.teardown()
-        hoverMonitor.teardown()
     }
 
     func showSettings() {
@@ -131,7 +120,6 @@ final class AppCoordinator {
                 self?.hideEngine?.apply(preferences: updated)
                 self?.floatingBar?.preferences = updated
                 self?.hotkeys.apply(preferences: updated)
-                self?.hoverMonitor.apply(preferences: updated)
             }
         }
         settingsWindowController?.show()

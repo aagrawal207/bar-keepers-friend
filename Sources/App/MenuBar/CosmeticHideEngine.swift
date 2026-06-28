@@ -17,9 +17,6 @@ final class CosmeticHideEngine {
     var onOpenSettings: (() -> Void)?
     /// Called when the user chooses Quit from the anchor's right-click menu.
     var onQuit: (() -> Void)?
-    /// Called when an auto-rehide closes the bar/section on its own (not a user action), so the
-    /// hover monitor can re-arm even while the pointer is still parked over the anchor.
-    var onAutoHidden: (() -> Void)?
 
     /// The floating bar that mirrors hidden items below the menu bar. When set and enabled
     /// in preferences, the anchor click toggles this panel instead of reflowing items back
@@ -380,7 +377,7 @@ final class CosmeticHideEngine {
         // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
         // timer armed by an earlier activation (default 15s) could fire later and yank shut a bar
         // the user just re-opened, or collapse a section they re-engaged — a spontaneous-vanish
-        // bug. toggleFloatingBar is the single funnel for anchor clicks, hotkey, and hover, so one
+        // bug. toggleFloatingBar is the single funnel for anchor clicks and the hotkey, so one
         // cancel here covers every re-open path.
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
@@ -452,23 +449,8 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Reveals the bar from a hover. Unlike a toggle this is idempotent: if the bar is already
-    /// open it does NOTHING. Hover must be reveal-only — wiring it to a toggle meant a dwell over
-    /// the anchor (which the pointer crosses constantly to reach app menus) would HIDE an open
-    /// bar, so the "reveal on hover" gesture fought the user and flickered the bar shut.
-    func revealFromHover() {
-        if preferences.useFloatingBar, let bar = floatingBar {
-            guard !bar.isVisible, stateMachine.visibility(of: .hidden) != .shown else { return }
-            toggleFloatingBar()
-        } else {
-            // Reflow mode: only reveal when currently collapsed, so re-hover can't collapse it.
-            guard stateMachine.visibility(of: .hidden) == .collapsed else { return }
-            toggleHidden()
-        }
-    }
-
-    /// The anchor's current global (AppKit, bottom-left origin) frame, for the hover monitor and
-    /// anyone aligning UI to the anchor. Nil until the status item's window is realized.
+    /// The anchor's current global (AppKit, bottom-left origin) frame, for anyone aligning UI to
+    /// the anchor. Nil until the status item's window is realized.
     var anchorWindowFrame: CGRect? { anchorFrame }
 
     @objc private func dividerClicked(_ sender: NSStatusBarButton) {
@@ -530,7 +512,6 @@ final class CosmeticHideEngine {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
-            self.onAutoHidden?()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
@@ -555,7 +536,6 @@ final class CosmeticHideEngine {
             guard self.stateMachine.visibility(of: .hidden) == .shown else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
             self.floatingBar?.hide()
-            self.onAutoHidden?()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)

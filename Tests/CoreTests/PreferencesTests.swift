@@ -60,7 +60,7 @@ import Testing
         let store = PreferencesStore(backing: InMemoryPreferences())
         var prefs = Preferences.default
         prefs.autoRehideDelay = 99
-        prefs.hoverToReveal = true
+        prefs.dismissBarOnMouseExit = false
         let exported = try store.exportJSON(prefs)
         let imported = try store.importJSON(exported)
         #expect(imported == prefs)
