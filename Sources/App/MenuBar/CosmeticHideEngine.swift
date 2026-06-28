@@ -165,9 +165,22 @@ final class CosmeticHideEngine {
             // off-screen). Reveal → capture+cache → hide, serialized so a later refresh can't
             // race this launch capture for the divider state. Force-collapse after: launch
             // establishes the hidden baseline.
+            //
+            // Two passes within ONE reveal (so there's no flicker of the section opening twice):
+            //   1. A clean first pass that OMITS any straggler whose glyph hasn't composited yet
+            //      (allowFallback: false) — so the first bar the user sees is all real glyphs,
+            //      never a monochrome-glyphs-plus-one-color-app-icon mishmash.
+            //   2. If anything is still missing, one reconcile pass that DOES allow the app-icon
+            //      fallback, so a genuinely uncapturable item isn't omitted forever.
+            // The menu bar is usually fully composited by pass 2, so the fallback rarely fires.
             runCaptureSequence(forceCollapseAfter: true) { [weak self] in
-                guard let self else { return }
-                await self.floatingBar?.captureAndCache(anchorMinX: self.anchorFrame?.minX ?? 1115)
+                guard let self, let bar = self.floatingBar else { return }
+                let anchorX = self.anchorFrame?.minX ?? 1115
+                await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
+                if bar.hasIncompleteGlyphs {
+                    try? await Task.sleep(for: .milliseconds(220))
+                    await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+                }
             }
         } else {
             applyDividerVisibility()
@@ -258,10 +271,20 @@ final class CosmeticHideEngine {
     /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
     private func toggleFloatingBar() {
         guard let bar = floatingBar else { return }
-        // Ignore a click while the one-time launch capture is mid-flight: the divider is
-        // transiently revealed and the cache isn't populated yet, so showing now would misread
-        // the divider state and present an empty bar. The launch window is ~1s and one-time.
-        guard !captureInFlight else { return }
+        // A click during the one-time launch capture: don't eat it (that felt broken), and don't
+        // touch the divider/state machine (the capture is mid-reveal and owns it — collapsing now
+        // would yank the section out from under the screenshot). Just show the panel; it renders a
+        // "Preparing…" spinner from the not-yet-populated cache, and the warm-up re-lays-it-out
+        // with the real glyphs the moment capture lands, then collapses the divider itself.
+        if captureInFlight {
+            if bar.isVisible {
+                bar.hide()
+            } else {
+                let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
+                Task { @MainActor in await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX) }
+            }
+            return
+        }
         // Refresh now that the windows are fully realized, so our own items are excluded.
         publishControlItemWindowIDs()
         // If a prior activation left the section revealed in the menu bar, the anchor should

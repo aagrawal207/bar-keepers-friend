@@ -7,6 +7,9 @@ import SwiftUI
 struct FloatingBarView: View {
     let items: [FloatingBarItem]
     let style: FloatingBarStyle
+    /// True during the launch warm-up before the first capture completes, so an empty list
+    /// reads as "preparing" (spinner) rather than the misleading "no hidden items" copy.
+    var isPreparing: Bool = false
     /// Invoked when the user clicks a mirrored icon. Wired to real-item activation in the
     /// click-routing step; harmless no-op until then.
     var onActivate: (FloatingBarItem) -> Void
@@ -16,7 +19,7 @@ struct FloatingBarView: View {
     var body: some View {
         Group {
             if items.isEmpty {
-                emptyState
+                if isPreparing { preparingState } else { emptyState }
             } else {
                 content
             }
@@ -36,6 +39,20 @@ struct FloatingBarView: View {
             .foregroundStyle(.secondary)
             .padding(12)
             .frame(width: 240)
+    }
+
+    /// Shown on the very first open while the launch capture is still warming up, so a click
+    /// during that window gets immediate feedback instead of an empty/misleading panel. The
+    /// controller re-lays-out the panel as soon as the capture lands, replacing this.
+    private var preparingState: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Preparing…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 36)
     }
 
     @ViewBuilder

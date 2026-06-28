@@ -33,6 +33,13 @@ final class FloatingBarController {
 
     private(set) var isVisible = false
 
+    /// True when at least one hidden item still lacks a real captured glyph (it was omitted or is
+    /// showing an app-icon fallback). The launch warm-up uses this to decide whether a second,
+    /// fallback-allowing reconcile pass is worth running.
+    var hasIncompleteGlyphs: Bool {
+        !cachedHiddenOrder.allSatisfy { capturedGlyphIDs.contains($0.windowID) }
+    }
+
     /// The in-flight activation, so a new click can supersede a previous one. Without this,
     /// a slow activation finishing late would warp the cursor and click the menu bar after
     /// the user already moved on.
@@ -54,6 +61,17 @@ final class FloatingBarController {
     /// The anchor's leading edge from the most recent capture/show, reused when re-hiding
     /// after an activation.
     private var lastAnchorMinX: CGFloat = 0
+    /// The anchor's trailing edge from the most recent show, reused when re-laying-out the
+    /// panel in place (e.g. when a background capture fills in a glyph while the bar is open).
+    private var lastAnchorRightX: CGFloat = 0
+
+    /// Window ids for which we hold a REAL captured glyph (not an app-icon fallback). Keeps the
+    /// cache monotonic: once an item has a clean glyph we never downgrade it to an app icon on a
+    /// later flaky capture, and a warm-up pass can upgrade a fallback to a glyph.
+    private var capturedGlyphIDs: Set<CGWindowID> = []
+    /// False until the first capture pass finishes. Lets the panel show a "Preparing…" state on
+    /// the very first open (during launch warm-up) instead of a misleading "no hidden items".
+    private(set) var hasCapturedOnce = false
 
     init(
         windowServer: WindowServer,
@@ -80,7 +98,16 @@ final class FloatingBarController {
     /// those items are still ON-SCREEN (before the divider hides them), because off-screen
     /// status items cannot be captured. The engine calls this just before expanding the
     /// divider, and refreshes it whenever the menu bar changes.
-    func captureAndCache(anchorMinX: CGFloat) async {
+    ///
+    /// `allowFallback` controls what happens to an item that hasn't captured a real glyph this
+    /// pass and has none cached: when `true` (a settled refresh, or the final warm-up pass) it
+    /// gets the owning app's icon so it's never permanently missing; when `false` (an early
+    /// launch/warm-up pass, before the menu bar has settled) it is left ABSENT — omitted from
+    /// the bar — rather than shown as a color app icon mixed in among the monochrome glyphs.
+    /// That omission is what makes the first load look clean instead of "messed up": a straggler
+    /// that just needs another beat to composite shows up correctly a moment later instead of
+    /// flashing the wrong (app-icon) image first.
+    func captureAndCache(anchorMinX: CGFloat, allowFallback: Bool = true) async {
         lastAnchorMinX = anchorMinX
         // The menu bar may have changed; forget which items were previously unactivatable so
         // a now-fixed item isn't left disabled.
@@ -91,7 +118,16 @@ final class FloatingBarController {
             leftOfAnchorX: anchorMinX,
             excludingControlItems: controlItemWindowIDs
         )
-        guard !hidden.isEmpty else { return }
+        guard !hidden.isEmpty else {
+            // Genuinely nothing hidden: clear the cache so a stale glyph from a previous layout
+            // doesn't linger, and record that a pass completed (so the panel shows the real
+            // "no hidden items" state rather than "Preparing…").
+            cachedHiddenOrder = []
+            iconCache.removeAll()
+            capturedGlyphIDs.removeAll()
+            hasCapturedOnce = true
+            return
+        }
         // Collapse co-located windows that back the same visible icon (Tahoe returns a
         // backing + glyph window per item), which otherwise duplicates rows in the bar.
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
@@ -101,60 +137,95 @@ final class FloatingBarController {
 
         // Mirror the REAL menu bar glyph (Bartender-style) by capturing it while on-screen.
         // The capture can race the section's reveal: if the screenshot lands before the glyphs
-        // have composited into the (translucent) menu bar, the crops come back as bare
-        // wallpaper and `captureIcons` returns nothing for them. So retry until every item has
-        // a real glyph (or we exhaust the attempts and fall back to app icons), re-capturing on
-        // a fresh frame each time. Items stay revealed across attempts (the caller hides after).
-        // Only items whose (frozen) frame is on-screen can be captured — `captureIcons` filters
-        // on exactly this. Gate the retry loop on that subset so an item that's off-screen after
-        // the reveal (and thus never capturable this pass) doesn't force every attempt to be
-        // burned; it falls through to the app-icon fallback instead.
+        // have composited into the (translucent) menu bar, the crops come back as bare wallpaper
+        // and `captureIcons` returns nothing for them. So retry, re-capturing on a fresh frame
+        // each time, until every capturable item has a real glyph — OR progress stalls.
+        //
+        // Only items whose (frozen) frame is on-screen can be captured (`captureIcons` filters on
+        // exactly this), so gate on that subset: an item off-screen after the reveal can never be
+        // captured this pass and must not force every attempt to be burned. Stall detection stops
+        // the loop once a straggler stops making progress, so a single hard-to-composite item no
+        // longer drags the whole first load out to the full retry budget (~1.8s). The straggler is
+        // picked up by the next (calmer) warm-up/refresh pass instead.
         let capturable = attributed.filter { $0.frame.minX >= 0 }
         var images: [CGWindowID: CGImage] = [:]
+        var lastGot = -1
+        var stalledAttempts = 0
         for attempt in 1...Self.maxCaptureAttempts {
-            // Each call takes a fresh screenshot, so retrying recovers glyphs that hadn't yet
-            // composited into the (translucent) menu bar on an earlier attempt.
             let fresh = await capture.captureIcons(for: attributed)
-            for (id, cg) in fresh where images[id] == nil { images[id] = cg }
+            // Only accept non-blank crops; a blank one isn't progress and shouldn't be cached.
+            for (id, cg) in fresh where images[id] == nil && !Self.isBlank(cg) { images[id] = cg }
             let got = capturable.filter { images[$0.windowID] != nil }.count
             if capturable.isEmpty || got >= capturable.count { break }
+            if got == lastGot { stalledAttempts += 1 } else { stalledAttempts = 0; lastGot = got }
+            if stalledAttempts >= Self.maxStalledAttempts {
+                DebugLog.log("floatingbar: capture stalled at \(got)/\(capturable.count); stopping early")
+                break
+            }
             if attempt < Self.maxCaptureAttempts {
                 DebugLog.log("floatingbar: capture attempt \(attempt) got \(got)/\(capturable.count) capturable glyphs; retrying")
                 try? await Task.sleep(for: .milliseconds(Self.captureRetryDelayMs))
             }
         }
 
-        var captured = 0, fellBack = 0
+        // Merge into the cache MONOTONICALLY: a real glyph captured this pass always wins (and
+        // can upgrade a prior app-icon fallback); an item with no glyph this pass keeps the real
+        // glyph it had before rather than being downgraded by a flaky capture.
+        var captured = 0, fellBack = 0, omitted = 0
         for item in attributed {
-            if let cg = images[item.windowID], !Self.isBlank(cg) {
+            if let cg = images[item.windowID] {
                 // The captured glyph is trimmed to its bounding box; size the NSImage from the
-                // glyph's own pixel dimensions so its aspect ratio is preserved when the view
-                // scales it to fit the icon frame.
+                // glyph's own pixel dimensions so its aspect ratio is preserved when scaled.
                 let size = CGSize(width: cg.width, height: cg.height)
                 iconCache[item.windowID] = NSImage(cgImage: cg, size: size)
+                capturedGlyphIDs.insert(item.windowID)
                 captured += 1
-            } else {
-                // No glyph after all attempts (rare): fall back to the owning app's real icon
-                // so we never show an empty box or a wallpaper tile.
+            } else if capturedGlyphIDs.contains(item.windowID) {
+                captured += 1 // keep the real glyph already cached (monotonic)
+            } else if allowFallback {
+                // No glyph after this pass and none cached: use the owning app's real icon so the
+                // item is never permanently missing. Only on a settled/final pass.
                 iconCache[item.windowID] = AppIconProvider.icon(forPID: item.ownerPID)
                 fellBack += 1
+            } else {
+                // Early pass: leave absent so it's omitted from the bar (no jarring app icon)
+                // until a later pass composites its real glyph.
+                omitted += 1
             }
         }
         cachedHiddenOrder = attributed
+        // Prune cache entries for items no longer present so stale glyphs can't reappear.
+        let liveIDs = Set(attributed.map { $0.windowID })
+        iconCache = iconCache.filter { liveIDs.contains($0.key) }
+        capturedGlyphIDs = capturedGlyphIDs.intersection(liveIDs)
         windowIDToPID = Dictionary(attributed.map { ($0.windowID, $0.ownerPID) }, uniquingKeysWith: { _, new in new })
-        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack); cache size=\(iconCache.count)")
+        hasCapturedOnce = true
+        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack) omitted=\(omitted); cache size=\(iconCache.count)")
+        // If the bar is open, re-lay-it-out so a freshly captured glyph (or a now-complete set)
+        // appears without the user having to reopen it.
+        if isVisible {
+            await show(anchorMinX: lastAnchorMinX, anchorRightX: lastAnchorRightX)
+        }
     }
 
     /// How many times `captureAndCache` re-captures while waiting for the revealed glyphs to
-    /// composite in, and the pause between attempts. Covers the reveal/reflow race without a
-    /// single over-long fixed delay.
+    /// composite in, the pause between attempts, and how many no-progress attempts end the loop
+    /// early. Covers the reveal/reflow race without a single over-long fixed delay, and without
+    /// burning the whole budget on one item that won't composite this pass.
     private static let maxCaptureAttempts = 6
     private static let captureRetryDelayMs = 180
+    private static let maxStalledAttempts = 2
 
     /// Builds and presents the panel from the cached icons (items are off-screen when the
     /// bar is shown, so they can't be re-captured here — the cache is populated before hide).
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat) async {
+        lastAnchorMinX = anchorMinX
+        lastAnchorRightX = anchorRightX
         let items = buildItemsFromCache()
+        // Before the first capture finishes (the launch warm-up window), an empty item list
+        // means "still preparing", not "nothing hidden" — surface that so the panel shows a
+        // spinner instead of the misleading empty-state copy.
+        let isPreparing = !hasCapturedOnce && items.isEmpty
 
         let screen = NSScreen.main ?? NSScreen.screens.first
         let displayFrame = screen?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -184,6 +255,7 @@ final class FloatingBarController {
         let root = FloatingBarView(
             items: items,
             style: preferences.floatingBarStyle,
+            isPreparing: isPreparing,
             onActivate: { [weak self] item in self?.activate(item) }
         )
 
@@ -253,6 +325,7 @@ final class FloatingBarController {
         let content = FloatingBarView(
             items: items,
             style: preferences.floatingBarStyle,
+            isPreparing: false,
             onActivate: { _ in }
         )
         let hosting = NSHostingView(rootView: content)
