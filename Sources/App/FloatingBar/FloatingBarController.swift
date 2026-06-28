@@ -327,10 +327,20 @@ final class FloatingBarController {
             height: layout.panelFrame.height
         )
 
+        // The same per-line cap the panel frame was sized from, so the rendered grid matches the
+        // panel exactly (no clipping, no empty slack) and a large hidden set wraps on-screen.
+        let perLine = FloatingBarLayout.itemsPerLine(
+            style: preferences.floatingBarStyle,
+            displayFrame: layoutFrame,
+            menuBarHeight: menuBarHeight,
+            metrics: .default
+        )
+
         let root = FloatingBarView(
             items: items,
             style: preferences.floatingBarStyle,
             isPreparing: isPreparing,
+            itemsPerLine: perLine,
             onActivate: { [weak self] item in self?.activate(item) }
         )
 

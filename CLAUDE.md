@@ -80,6 +80,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Settings…" button per permission. Polls while open so a freshly-granted permission updates
   without reopening. Both are optional (the cosmetic baseline needs neither), so it never blocks.
   Pure `PermissionState` machine in Core + `SystemPermissionProbe` in the app target.
+- **Floating bar grid wrapping** — a large hidden set no longer overflows the screen. `Floating-
+  BarLayout` computes a screen-fitted items-per-line and wraps into a grid (horizontal → extra
+  rows; vertical → extra columns); `FloatingBarView` renders the matching grid. Pure + tested
+  (panel never exceeds the display at 80 items either axis). *(grid rendering not yet
+  hardware-verified, but the geometry is.)*
 
 ## Removed (intentionally — don't re-add without asking)
 

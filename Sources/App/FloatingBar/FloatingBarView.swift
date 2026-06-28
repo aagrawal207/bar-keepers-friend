@@ -10,11 +10,27 @@ struct FloatingBarView: View {
     /// True during the launch warm-up before the first capture completes, so an empty list
     /// reads as "preparing" (spinner) rather than the misleading "no hidden items" copy.
     var isPreparing: Bool = false
+    /// Max items along the panel's primary axis before wrapping: a horizontal strip wraps to a new
+    /// ROW after this many icons, a vertical list wraps to a new COLUMN after this many rows. Keeps
+    /// a large hidden set from growing the panel off-screen. Defaults high so a small set is a
+    /// single line; the controller passes the screen-derived value so it matches the panel frame.
+    var itemsPerLine: Int = .max
     /// Invoked when the user clicks a mirrored icon. Wired to real-item activation in the
     /// click-routing step; harmless no-op until then.
     var onActivate: (FloatingBarItem) -> Void
 
     private let iconSide: CGFloat = 18
+
+    /// Items split into lines of at most `itemsPerLine` (a row for horizontal, a column for
+    /// vertical), preserving order. The grid is filled line-by-line so wrapping matches
+    /// `FloatingBarLayout`'s grid (which the panel frame is sized from).
+    private var lines: [[FloatingBarItem]] {
+        let per = max(1, itemsPerLine)
+        guard per < items.count else { return items.isEmpty ? [] : [items] }
+        return stride(from: 0, to: items.count, by: per).map {
+            Array(items[$0 ..< min($0 + per, items.count)])
+        }
+    }
 
     var body: some View {
         Group {
@@ -60,42 +76,58 @@ struct FloatingBarView: View {
         Group {
             switch style {
             case .horizontal:
-                HStack(spacing: 6) {
-                    ForEach(items) { item in
-                        iconButton(item)
+                // Each `lines` entry is a ROW; stack the rows vertically so a long strip wraps
+                // instead of running off the screen edge.
+                VStack(spacing: 6) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 6) {
+                            ForEach(row) { item in
+                                iconButton(item)
+                            }
+                        }
                     }
                 }
                 .padding(8)
             case .vertical:
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(items) { item in
-                        Button {
-                            onActivate(item)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(nsImage: item.image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(width: iconSide, height: iconSide)
-                                Text(item.displayName)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer(minLength: 0)
+                // Each `lines` entry is a COLUMN; stack the columns horizontally so a tall list
+                // wraps into additional columns instead of running off the bottom.
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, column in
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(column) { item in
+                                verticalRow(item)
                             }
-                            .padding(.horizontal, 8)
-                            .frame(height: 28)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
-                        .disabled(item.isDisabled)
-                        .opacity(item.isDisabled ? 0.4 : 1)
-                        .help(item.isDisabled ? "This item can't be activated" : item.displayName)
+                        .frame(width: 200)
                     }
                 }
                 .padding(8)
-                .frame(width: 200)
             }
         }
+    }
+
+    private func verticalRow(_ item: FloatingBarItem) -> some View {
+        Button {
+            onActivate(item)
+        } label: {
+            HStack(spacing: 8) {
+                Image(nsImage: item.image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: iconSide, height: iconSide)
+                Text(item.displayName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(item.isDisabled)
+        .opacity(item.isDisabled ? 0.4 : 1)
+        .help(item.isDisabled ? "This item can't be activated" : item.displayName)
     }
 
     private func iconButton(_ item: FloatingBarItem) -> some View {
