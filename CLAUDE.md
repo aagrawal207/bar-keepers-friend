@@ -263,6 +263,29 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Features not yet built (from the plan, roughly prioritized)
 
+- **Settings window refinement (UX polish).** *(User feedback 2026-06-28: "looks like someone new
+  built it… refine it and make it a proper app." Low priority, loop item.)* It's currently a bare
+  two-tab `Form` (`SettingsView.swift`, 460×580) with no app identity, no header, default control
+  density. Make it feel shipped: an app header (icon + name + version), a sidebar/`NavigationSplit`
+  layout instead of a cramped tab strip, consistent section spacing and footnotes, an About area.
+  Pure-logic content is fine as-is; this is presentation. Bartender/Ice are good visual references
+  for what "refined" looks like here (UX observation only — clean-room, no code).
+- **Rich anchor right-click menu.** *(User feedback 2026-06-28. Low priority, loop item.)* The
+  anchor's context menu is currently only **Settings… / Quit** (`CosmeticHideEngine.showAnchorMenu`,
+  ~L433). The user wants a proper app menu: **App name + version** (header), a **status line**,
+  **Pause** (suspend hide/reveal + the move so the bar behaves like a vanilla menu bar), **About**,
+  **Check for Updates** (needs Sparkle — see below), **Restart**, plus the existing Settings/Quit.
+  Design notes:
+  - *Status* should reflect real engine state, mapping to the user's vocabulary: **Ready** (idle),
+    **Working** (a reconcile/synthesized move in flight), **Collecting** (a capture sequence
+    running — `captureInFlightCount > 0`), **Update available** (Sparkle found one). Model it as a
+    pure `AppStatus` enum in Core (driven by counters the engine already tracks) so the label is
+    unit-tested, not ad-hoc string-building in the menu builder.
+  - *Pause* is the meatiest piece: it must reveal+leave-revealed (or no-op the divider) AND stop
+    reconcile/auto-rehide/hotkey toggles until un-paused, persisted across launch. A clean `paused`
+    gate in the engine, surfaced as a checkable `NSMenuItem`.
+  - *Check for Updates* and *About*'s version string both presuppose **Sparkle** is wired (it isn't
+    yet — see last bullet); until then show the bundle version and gray out / hide Check for Updates.
 - **Per-item / global hotkeys** to toggle a *specific* item. (Deferred until the synthesized move
   is hardware-verified — don't keep building on an unproven mechanism.)
 - **Triggers / automation** — battery / wifi / app-active / schedule → apply a preset.
