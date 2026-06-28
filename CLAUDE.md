@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **171 tests, 20 suites**).
+- Test: same command with `test` (currently **172 tests, 20 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -110,6 +110,40 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-28] Hide silently, partially failed on a wide (5K/6K/ultrawide) display.**
+  `ControlItemLength.expanded` clamped the divider width to `[500, 4000]`. The hide mechanism works
+  by making the divider WIDER than the display so left-neighbors are pushed off-screen — but on any
+  display wider than ~3800pt the 4000 cap made the divider NARROWER than the screen, so the leftmost
+  hidden items were never pushed off and hiding silently, partially failed (the worst failure mode
+  for a hide tool, and on the *permission-free baseline*). A test even codified the bug
+  (`#expect(ultrawide == 4000)`). Fixed: ceiling raised to 9000 — the operating value stays
+  `screenWidth + 200` for every real display, the ceiling is now just a backstop above the widest
+  real panel (≈7680pt) and still clear of the ~10000 memory-blowup regime. Pure + tests now assert
+  the real invariant (`expanded(w) > w` for 1512…6016). Found by an adversarial audit workflow.
+  *Caveat:* the 9000 ceiling is the largest value comfortably under 10000; if on-device probing on
+  Tahoe ever shows window-server memory growth before then, lower it (but keep it > widest display).
+- **[MEDIUM, open] `anchorDisplayMenuBarTop` assumes `NSScreen.screens.first` is the primary.**
+  (`CosmeticHideEngine.swift` ~L589) The AppKit→CG y-flip uses `NSScreen.screens.first?.frame.maxY`
+  as the primary's height, but `screens.first` is not guaranteed to be the zero-origin primary. When
+  it isn't, the menu-bar-top offset is wrong and the plausibility filter mis-scopes items on a
+  stacked display. Fix (App target, review-only without NSScreen injection): use
+  `NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height`, matching the precedent in
+  `IconCaptureService`. Confirmed by the audit; best of the remaining backlog.
+- **[MEDIUM, open] Overtaken capture sequence's tail block fights its successor.** After an ~8s
+  wedged ScreenCaptureKit call, `awaitBounded` lets a successor start while the orphaned predecessor
+  is still live; when the predecessor finally returns, its tail block (`CosmeticHideEngine.swift`
+  ~L116-123) still drives the shared divider/state-machine, so it can collapse the section out from
+  under the successor (visible flicker / wallpaper crop). Fix: guard the tail on
+  `self.captureChain === thisTask` (the chain is reassigned synchronously, so identity is a valid
+  epoch check). This also subsumes the next item. Hard to unit-test (async interleaving) — verify
+  on-device. Confirmed by the audit.
+- **[LOW, open] `awaitBounded` leaves the orphaned predecessor uncancelled** (`CosmeticHideEngine`
+  ~L132). Only bites on a genuine >8s ScreenCaptureKit wedge; its reliable fix IS the tail-guard
+  above, so don't schedule separately — close it when the tail guard lands. Confirmed by the audit.
+- **[LOW, open] `colorAlpha` bbox test skips the first/last crop columns** (`IconCaptureService`
+  ~L225): a thin colored badge touching the crop edge can lose its outer column, and `p-4` at `x==0`
+  is a latent out-of-bounds-row neighbor read. Impact bounded by the 2pt pad. Cleanup; hard to
+  unit-test (needs pixel fixtures). Confirmed by the audit.
 - **[RESOLVED 2026-06-28] Items on a display stacked above/below the primary were dropped.** The
   plausibility filter (`isPlausibleMenuBarItem`) used an ABSOLUTE `minY ≤ 40` to reject windows far
   down the screen — correct for a transient notification window, but it conflated "near the top of

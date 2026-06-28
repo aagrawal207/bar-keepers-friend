@@ -45,10 +45,20 @@ public enum ControlItemLength {
 
     /// Computes a safe expanded width for a screen of the given width.
     ///
-    /// Bounded to `[500, 4000]` so it is always wider than the menu bar (pushing items
-    /// off-screen) but never large enough to trigger the window-server memory blowup.
+    /// The hide mechanism works by making the divider *wider than the display* so every item to
+    /// its left is pushed off the screen edge. The operating value is therefore `screenWidth + 200`
+    /// — it tracks the actual display, with a small fixed 200pt overhang that is itself memory-safe.
+    ///
+    /// Bounded to `[500, 9000]`. The 500 floor guarantees we clear a tiny bar. The 9000 ceiling is
+    /// a *backstop* against a pathological `screenWidth`, NOT the normal value: for every real
+    /// display the result is `screenWidth + 200` (e.g. 1712 on a laptop, 6216 on a Pro Display XDR),
+    /// well under the ceiling. The previous 4000 ceiling was a latent bug — on a display wider than
+    /// ~3800pt (5K/6K/ultrawide) it clamped the divider *narrower than the screen*, so the leftmost
+    /// hidden items were never pushed off and hide silently, partially failed. 9000 clears the
+    /// widest real logical display (a 57"/8K panel at 1x is ≈7680pt) while staying clear of the
+    /// ~10000 window-server memory-blowup regime (the footgun Ice's literal 10000 hits).
     public static func expanded(forScreenWidth screenWidth: CGFloat) -> CGFloat {
         let target = screenWidth + 200
-        return min(max(target, 500), 4000)
+        return min(max(target, 500), 9000)
     }
 }
