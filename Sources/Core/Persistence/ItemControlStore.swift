@@ -31,6 +31,13 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     /// Exposed read-only; mutate via `setHidden`.
     public private(set) var hiddenInMenuBar: Set<String>
 
+    /// Owner identities the user has EXPLICITLY chosen to keep Shown (right of the anchor). This is
+    /// distinct from "not hidden": an item the user never touched is in NEITHER set, and the
+    /// planner must leave it exactly where it is rather than yanking it to the shown side. We only
+    /// ever move an item the user explicitly toggled — so hiding one item never rearranges the rest
+    /// of the menu bar. Exposed read-only; mutate via `setHidden`.
+    public private(set) var shownInMenuBar: Set<String>
+
     /// Owner identities the user has chosen to suppress from the bar render.
     /// Exposed read-only; mutate via `setSuppressed`.
     public private(set) var suppressedFromBar: Set<String>
@@ -41,17 +48,20 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
 
     public init(
         hiddenInMenuBar: Set<String> = [],
+        shownInMenuBar: Set<String> = [],
         suppressedFromBar: Set<String> = [],
         barOrder: [String: Int] = [:]
     ) {
         self.hiddenInMenuBar = hiddenInMenuBar
+        self.shownInMenuBar = shownInMenuBar
         self.suppressedFromBar = suppressedFromBar
         self.barOrder = barOrder
     }
 
-    // Lenient decode so adding `hiddenInMenuBar` doesn't fail to load an older saved store.
+    // Lenient decode so adding a field doesn't fail to load an older saved store.
     enum CodingKeys: String, CodingKey {
         case hiddenInMenuBar
+        case shownInMenuBar
         case suppressedFromBar
         case barOrder
     }
@@ -59,6 +69,7 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hiddenInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenInMenuBar) ?? []
+        shownInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .shownInMenuBar) ?? []
         suppressedFromBar = try container.decodeIfPresent(Set<String>.self, forKey: .suppressedFromBar) ?? []
         barOrder = try container.decodeIfPresent([String: Int].self, forKey: .barOrder) ?? [:]
     }
@@ -123,8 +134,31 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         hiddenInMenuBar.contains(key)
     }
 
+    /// Records an explicit Hidden/Shown intent for `key`. Setting one side clears the other, so an
+    /// item is never in both sets. Flipping to Shown does NOT just remove the hidden flag — it
+    /// records explicit Shown intent, which is what lets the planner move a just-un-hidden item back
+    /// to the right WITHOUT also disturbing every never-configured item. Items the user never
+    /// toggled stay in neither set and are left exactly where they are.
     public mutating func setHidden(_ on: Bool, forKey key: String) {
-        if on { hiddenInMenuBar.insert(key) } else { hiddenInMenuBar.remove(key) }
+        if on {
+            hiddenInMenuBar.insert(key)
+            shownInMenuBar.remove(key)
+        } else {
+            hiddenInMenuBar.remove(key)
+            shownInMenuBar.insert(key)
+        }
+    }
+
+    /// Whether the user has recorded ANY explicit placement intent (Hidden or Shown) for `key`.
+    /// The planner only moves items with an intent; everything else is left where it sits.
+    public func hasPlacementIntent(forKey key: String) -> Bool {
+        hiddenInMenuBar.contains(key) || shownInMenuBar.contains(key)
+    }
+
+    /// Whether the user has recorded any explicit placement intent for `snapshot`.
+    public func hasPlacementIntent(_ snapshot: MenuBarItemSnapshot) -> Bool {
+        guard let key = Self.key(for: snapshot) else { return false }
+        return hasPlacementIntent(forKey: key)
     }
 
     public func isSuppressed(forKey key: String) -> Bool {

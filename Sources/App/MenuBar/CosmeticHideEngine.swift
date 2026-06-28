@@ -297,11 +297,27 @@ final class CosmeticHideEngine {
     /// there's no mover wired. If moving needs Accessibility and it's missing, route to the prompt
     /// instead of silently failing.
     func reconcileHiddenItems() {
-        guard let controller = hiddenItemController, !sectionInUse else { return }
+        guard let controller = hiddenItemController else {
+            DebugLog.log("reconcileHiddenItems: skipped (no controller)")
+            return
+        }
+        // Only bail if the user has the bar OPEN — moving items out from under a visible panel is
+        // the thing to avoid. We deliberately do NOT use the broader `sectionInUse` here: that also
+        // trips on the state machine's `.shown`, which at launch is just the initial "nothing hidden
+        // yet" baseline (initialVisibility: .shown), not an active reveal. Guarding on it made the
+        // launch reconcile skip every time, so the saved per-item Hidden intent was never applied.
+        // Reconcile manages its own reveal→move→collapse via `runCaptureSequence(forceCollapseAfter:
+        // true)`, serialized behind the warm-up, so it's safe whenever the panel isn't shown.
+        guard !(floatingBar?.isVisible ?? false) else {
+            DebugLog.log("reconcileHiddenItems: skipped (floating bar visible)")
+            return
+        }
         guard controller.canMoveItems else {
+            DebugLog.log("reconcileHiddenItems: skipped (no Accessibility) hidden=\(preferences.itemControls.hiddenInMenuBar)")
             onNeedsAccessibilityForMove?()
             return
         }
+        DebugLog.log("reconcileHiddenItems: proceeding, hidden=\(preferences.itemControls.hiddenInMenuBar)")
         // Make sure our own control-item window ids are excluded from any move.
         publishControlItemWindowIDs()
         controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []

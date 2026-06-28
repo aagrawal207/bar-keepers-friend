@@ -146,6 +146,13 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
 
     /// Posts the two-event move gesture (Command-down off-screen, then up at the destination),
     /// each stamped with the target window id so the server routes it to that item.
+    ///
+    /// CRITICAL (verified on-device 2026-06-28 + against Ice mainline source): a direct
+    /// `CGEvent.post(tap: .cgSessionEventTap)` is INERT against another app's status item on macOS
+    /// 14.4+/26 — it relocated 0/12 items. The window server only treats the synthetic ⌘-down/up as
+    /// a legitimate item drag when each event is delivered to the item's OWNING PROCESS through a
+    /// two-tap round-trip (the "scromble" relay). So we route each event via `scrombleEvent` instead
+    /// of posting it directly.
     private func postMoveGesture(source: CGEventSource, windowID: CGWindowID, pid: pid_t, destination: CGPoint) {
         // Start far off-screen, like Ice: the down event's location is irrelevant (routing is by
         // windowID), and an off-screen point avoids perturbing anything under the real cursor.
@@ -160,8 +167,13 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         stampWindowID(windowID, pid: pid, into: down)
         stampWindowID(windowID, pid: pid, into: up)
 
-        down.post(tap: .cgSessionEventTap)
-        up.post(tap: .cgSessionEventTap)
+        // Deliver through the relay, not a direct post. If the relay can't be set up (e.g. a tap
+        // fails to create), fall back to a direct post so we still emit *something* — the move is
+        // self-validated by the frame re-read either way, so a failed relay degrades to the old
+        // (known-weak) behavior rather than emitting nothing. `scrombleEvent` is a free function
+        // (not a method) to keep it out of the actor-isolation region analysis.
+        if !scrombleEvent(down, toPid: pid, timeout: Self.scrombleTimeout) { down.post(tap: .cgSessionEventTap) }
+        if !scrombleEvent(up, toPid: pid, timeout: Self.scrombleTimeout) { up.post(tap: .cgSessionEventTap) }
     }
 
     /// A plain left click at the item's current centre (no modifier), used between failed move
@@ -214,6 +226,9 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     private static let moveRetryDelayMs = 80
     /// How many points the leading edge must shift to count the move as real (vs. layout jitter).
     private static let moveConfirmEpsilon: CGFloat = 2
+    /// Upper bound on a single scromble round-trip. Ice's frame-change wait is ~50ms; the relay
+    /// itself is faster, so this is generous headroom that still can't wedge the per-item loop.
+    private static let scrombleTimeout: TimeInterval = 0.1
 
     /// Synthesizes a left click at the centre of the item's frame.
     ///
@@ -279,4 +294,134 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             CGWarpMouseCursorPosition(savedCursor)
         }
     }
+}
+
+/// Shared mutable state for the two-tap scromble relay, reached by the C `CGEventTapCallBack`s
+/// through an `Unmanaged` refcon. Lives at file scope (not nested in `scrombleEvent`) so the
+/// strict-concurrency region analysis doesn't trip on the Unmanaged round-trip of a local class.
+/// It is only ever mutated synchronously on the run loop that drives the relay, so the
+/// `@unchecked Sendable` is sound: there is no cross-thread access.
+private final class ScrombleRelay: @unchecked Sendable {
+    var realEvent: CGEvent?
+    var realTag: Int64 = 0
+    var nullTag: Int64 = 0
+    var pid: pid_t = 0
+    var tap1: CFMachPort?
+    var tap2: CFMachPort?
+    var delivered = false
+}
+
+/// The two-tap event shuttle ("scromble") that makes a synthesized menu-bar move actually land,
+/// reconstructed clean-room from Ice's `MenuBarItemManager.scrombleEvent` (mechanism only).
+///
+/// Why this exists: posting a synthetic ⌘-mouse event straight to the session tap does not make the
+/// window server move another app's status item on macOS 14.4+/26 (verified 0/12 on-device). The
+/// server only honors the drag when the event reaches the item's owning process via a round-trip:
+/// post a tagged *null* event to a tap installed ON the owning pid; that tap swallows the null and
+/// re-emits the REAL event to the session tap; a listen-only tap there sees it and re-posts it back
+/// into the owning pid, where the now-disabled first tap lets it pass through into the process.
+/// Routing identity travels in the stamped windowID fields (91/92/0x33) + a unique
+/// `eventSourceUserData` tag the taps match on.
+///
+/// Returns true if the real event was delivered through the round-trip, false if the relay couldn't
+/// be set up (the caller then does a plain direct post as a last resort). Synchronous and bounded:
+/// it pumps the current run loop until the relay completes or `timeout` elapses.
+///
+/// A free (non-isolated) function, NOT a method: the equivalent method on `SystemWindowServer`
+/// crashed the Swift 6.3.2 `SendNonSendable` SIL pass (region analysis over the `Unmanaged` +
+/// CGEvent + C-callback shape inside an actor-isolated context). Lifting it to file scope sidesteps
+/// that compiler bug; it touches no instance state, so nothing is lost.
+private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: TimeInterval) -> Bool {
+    // Tag the real event so the taps recognize exactly our event. A null trigger event carries a
+    // distinct tag so the pid-tap can tell "kick" from "payload".
+    let realTag = Int64(truncatingIfNeeded: ObjectIdentifier(realEvent).hashValue)
+    realEvent.setIntegerValueField(.eventSourceUserData, value: realTag)
+    guard let nullEvent = CGEvent(source: nil) else { return false }
+    let nullTag = realTag &+ 1
+    nullEvent.setIntegerValueField(.eventSourceUserData, value: nullTag)
+
+    let relay = ScrombleRelay()
+    relay.realEvent = realEvent
+    relay.realTag = realTag
+    relay.nullTag = nullTag
+    relay.pid = pid
+    let refcon = Unmanaged.passRetained(relay).toOpaque()
+    defer { Unmanaged<ScrombleRelay>.fromOpaque(refcon).release() }
+
+    // Tap 1: ACTIVE tap scoped to the owning pid. On seeing the tagged null it disables itself,
+    // re-emits the REAL event to the session tap, and swallows the null (returns nil).
+    let tap1Callback: CGEventTapCallBack = { _, _, event, userInfo in
+        guard let userInfo else { return Unmanaged.passUnretained(event) }
+        let relay = Unmanaged<ScrombleRelay>.fromOpaque(userInfo).takeUnretainedValue()
+        if event.getIntegerValueField(.eventSourceUserData) == relay.nullTag {
+            if let tap1 = relay.tap1 { CGEvent.tapEnable(tap: tap1, enable: false) }
+            relay.realEvent?.post(tap: .cgSessionEventTap)
+            return nil // swallow the kick
+        }
+        return Unmanaged.passUnretained(event)
+    }
+    let nullMask: CGEventMask = 1 << CGEventType.null.rawValue
+    guard let tap1 = CGEvent.tapCreateForPid(
+        pid: pid,
+        place: .tailAppendEventTap,
+        options: .defaultTap,
+        eventsOfInterest: nullMask,
+        callback: tap1Callback,
+        userInfo: refcon
+    ) else { return false }
+    relay.tap1 = tap1
+
+    // Tap 2: LISTEN-ONLY tap at the session tap. On seeing the REAL event (matched by tag) it
+    // disables itself and re-posts the real event back into the owning pid — the delivery the
+    // server accepts as a genuine item drag.
+    let tap2Callback: CGEventTapCallBack = { _, _, event, userInfo in
+        guard let userInfo else { return Unmanaged.passUnretained(event) }
+        let relay = Unmanaged<ScrombleRelay>.fromOpaque(userInfo).takeUnretainedValue()
+        if event.getIntegerValueField(.eventSourceUserData) == relay.realTag {
+            if let tap2 = relay.tap2 { CGEvent.tapEnable(tap: tap2, enable: false) }
+            if let real = relay.realEvent {
+                real.postToPid(relay.pid)
+                relay.delivered = true
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+    let realMask: CGEventMask = 1 << realEvent.type.rawValue
+    guard let tap2 = CGEvent.tapCreate(
+        tap: .cgSessionEventTap,
+        place: .tailAppendEventTap,
+        options: .listenOnly,
+        eventsOfInterest: realMask,
+        callback: tap2Callback,
+        userInfo: refcon
+    ) else {
+        CFMachPortInvalidate(tap1)
+        return false
+    }
+    relay.tap2 = tap2
+
+    let source1 = CFMachPortCreateRunLoopSource(nil, tap1, 0)
+    let source2 = CFMachPortCreateRunLoopSource(nil, tap2, 0)
+    let runLoop = CFRunLoopGetCurrent()
+    CFRunLoopAddSource(runLoop, source1, .commonModes)
+    CFRunLoopAddSource(runLoop, source2, .commonModes)
+    CGEvent.tapEnable(tap: tap1, enable: true)
+    CGEvent.tapEnable(tap: tap2, enable: true)
+    defer {
+        CFMachPortInvalidate(tap1)
+        CFMachPortInvalidate(tap2)
+        CFRunLoopRemoveSource(runLoop, source1, .commonModes)
+        CFRunLoopRemoveSource(runLoop, source2, .commonModes)
+    }
+
+    // Kick the shuttle by posting the tagged null INTO the owning pid, where Tap1 (scoped to that
+    // pid) catches it and re-emits the real event to the session tap. Then pump this run loop until
+    // tap2 has re-delivered the real event or the deadline elapses. Bounded so a missed tap can
+    // never wedge the move loop.
+    nullEvent.postToPid(pid)
+    let deadline = Date().addingTimeInterval(timeout)
+    while !relay.delivered, Date() < deadline {
+        CFRunLoopRunInMode(.defaultMode, 0.005, true)
+    }
+    return relay.delivered
 }

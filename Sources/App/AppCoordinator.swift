@@ -43,7 +43,12 @@ final class AppCoordinator {
         )
         floatingBar = bar
 
-        let mover = HiddenItemController(windowServer: windowServer)
+        // Attribute snapshots through Accessibility so the move targets each item's REAL owning pid
+        // (Tahoe's kCGWindowOwnerPID reports Control Center; the move's relay needs the true pid).
+        let mover = HiddenItemController(
+            windowServer: windowServer,
+            attribute: { await AXAttributionProvider.attribute($0) }
+        )
         hiddenItemController = mover
 
         let engine = CosmeticHideEngine(preferences: preferences) { [weak self] updated in

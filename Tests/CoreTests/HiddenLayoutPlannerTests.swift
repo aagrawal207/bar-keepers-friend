@@ -42,12 +42,21 @@ import Testing
     @Test func itemMarkedShownButCurrentlyHiddenGetsMovedRight() {
         var controls = ItemControlStore()
         let maccy = item("com.maccy.Maccy", x: 400, id: 1) // left of anchor → currently hidden
-        // Intent is Shown (default — not in hiddenInMenuBar), so it must move right.
-        _ = controls // no hide set
+        // EXPLICIT Shown intent (the user toggled it back to Shown). Only an explicit intent moves
+        // an item — a never-configured item left of the anchor is left alone (next test).
+        controls.setHidden(false, for: maccy)
 
         let result = moves([maccy], controls)
         #expect(result.count == 1)
         #expect(result.first!.targetX > anchorMaxX)
+    }
+
+    @Test func unconfiguredItemIsNeverMovedEvenIfLeftOfAnchor() {
+        // The core "only move what I toggle" guarantee: an item the user never set an intent for is
+        // left exactly where it sits, so hiding one item can't drag every other item around.
+        let controls = ItemControlStore()
+        let untouched = item("com.maccy.Maccy", x: 400, id: 1) // left of anchor, no intent recorded
+        #expect(moves([untouched], controls).isEmpty)
     }
 
     @Test func itemAlreadyOnCorrectSideIsNotMoved() {
@@ -90,10 +99,25 @@ import Testing
         let c = item("com.c.app", x: 300, id: 3)   // hidden, wants shown → MOVE right
         let d = item("com.d.app", x: 200, id: 4)   // hidden, wants hidden → stay
         controls.setHidden(true, for: a)
+        controls.setHidden(false, for: b)  // explicit Shown intent (already on the right → stays)
+        controls.setHidden(false, for: c)  // explicit Shown intent (on the left → must move right)
         controls.setHidden(true, for: d)
 
         let result = moves([a, b, c, d], controls)
         let movedIDs = Set(result.map { $0.item.windowID })
         #expect(movedIDs == [1, 3])
+    }
+
+    @Test func onlyExplicitlyToggledItemsMoveAmongUnconfiguredNeighbors() {
+        // Hiding ONE item must not disturb the others. a is toggled Hidden (currently shown → moves);
+        // b and c are never configured (left of anchor) and must stay put.
+        var controls = ItemControlStore()
+        let a = item("com.a.app", x: 1100, id: 1)  // shown, toggled hidden → MOVE left
+        let b = item("com.b.app", x: 300, id: 2)   // hidden position, no intent → stay
+        let c = item("com.c.app", x: 350, id: 3)   // hidden position, no intent → stay
+        controls.setHidden(true, for: a)
+
+        let result = moves([a, b, c], controls)
+        #expect(Set(result.map { $0.item.windowID }) == [1])
     }
 }

@@ -59,6 +59,10 @@ public enum HiddenLayoutPlanner {
             guard ItemControlStore.key(for: item) != nil else { continue }
             // System items that corrupt the layout if moved are never targeted.
             guard !ImmovableItems.isImmovable(item) else { continue }
+            // Only move items the user has EXPLICITLY placed (Hidden or Shown). An item the user
+            // never toggled has no intent, so we leave it exactly where it is — otherwise hiding a
+            // single item would yank every other not-hidden item to the shown side of the anchor.
+            guard controls.hasPlacementIntent(item) else { continue }
 
             let wantHidden = controls.isHidden(item)
             let isHidden = item.frame.minX < anchorMinX

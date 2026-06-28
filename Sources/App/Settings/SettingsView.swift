@@ -84,11 +84,16 @@ private struct GeneralSettingsTab: View {
             }
 
             Section {
-                LabeledContent("Tip") {
-                    Text("Click the menu bar anchor to reveal hidden items. Right-click it to open settings.")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                }
+                // A plain full-width row, not a LabeledContent: a "Tip" label would claim the
+                // leading column and squeeze this sentence into a narrow trailing one, wrapping it
+                // into ragged lines. Spanning the row lets it sit on one line (or wrap cleanly to
+                // two if the window is narrow). fixedSize(vertical) lets it grow to whatever height
+                // the wrapped text needs instead of being clipped to one line.
+                Text("Tip: click the menu bar anchor to reveal hidden items, or right-click it to open settings.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)

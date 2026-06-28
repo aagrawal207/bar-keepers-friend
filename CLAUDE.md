@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **145 tests, 19 suites**).
+- Test: same command with `test` (currently **161 tests, 19 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -63,12 +63,19 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   first load is clean. Slide+fade animation, Reduce-Motion aware. Needs Screen Recording.
 - **Activate a mirrored item** — reveal section → synthesized CGEvent click → leave revealed so
   the menu opens. Cursor hidden during the click. Needs Accessibility.
-- **Per-item Shown/Hidden** (private API) — Settings → Items lists every manageable item with a
-  Shown/Hidden segmented control; flipping it **physically moves** the real item across the
-  anchor (synthesized ⌘-mouseDown off-screen + mouseUp at destination, windowID stamped into
-  CGEvent fields 91/92/0x33, posted via `.cgSessionEventTap`). Self-validating: 5 retries +
-  frame-change confirmation + wake-up nudge. Pure `HiddenLayoutPlanner` decides moves;
-  `HiddenItemController` performs them; engine reconciles inside its on-screen reveal sequence.
+- **Per-item Shown/Hidden (private API) — VERIFIED WORKING on-device 2026-06-28.** Settings → Items
+  lists every manageable item with a Shown/Hidden segmented control; flipping it **physically
+  moves** the real item across the anchor. The move uses Ice's two-tap "scromble" relay (a direct
+  `.cgSessionEventTap` post is INERT on Tahoe — it relocated 0/12; the relay routes each event to
+  the item's owning process and relocated 17/24, the failures being genuinely-immovable transient
+  windows). Three things had to be right: (1) the scromble relay (`scrombleEvent` in
+  `SystemWindowServer.swift`); (2) `reconcile` attributes snapshots first so the relay targets the
+  REAL owning pid, not Tahoe's broken Control-Center pid; (3) the launch reconcile guard checks
+  `floatingBar.isVisible`, not the broader `sectionInUse` (which is always true at launch, so the
+  old guard skipped the move every time). **Only moves items the user explicitly toggled** —
+  `ItemControlStore` tracks `hiddenInMenuBar` + `shownInMenuBar`; an un-configured item has no
+  intent and is left exactly where it sits (hiding one item never rearranges the rest). Pure
+  `HiddenLayoutPlanner` decides moves; tested against `FakeWindowServer` (161 tests).
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
 - **Auto re-hide**, **dismiss-on-mouse-exit** (gated on the pointer having first entered the
@@ -103,22 +110,30 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
-- **[HIGH] Wisp (and possibly other right-of-anchor items) mislabel as "Control Center" in the
-  Items tab.** The new `allManageableItems()` enumerates items on *both* sides of the anchor;
-  near Control Center's module cluster, an item's window can match a Control Center AX extra by
-  position (or Wisp doesn't answer the AX sweep that pass and falls back to the broken Tahoe
-  owner = Control Center, FB18327911). NOTE: diagnostics show Wisp attributes *correctly* when
-  hidden, so this is specific to the both-sides picker path. **Do NOT blind-fix** — a wrong
-  guard could make Wisp vanish from the picker. Needs a live `BKF-diag.json` from the *current*
-  build (Wisp's frame + which extra it matched). See `AXAttributionProvider` + `MenuBarExtraMatcher`.
+- **[MEDIUM] A few items still won't move (transient/system windows).** After the scromble fix the
+  reconcile relocates the large majority (17/24 in the verification run), but some fail: notably
+  `Karabiner-NotificationWindow` (a transient notification window that lives at the status layer
+  but isn't a real movable status item), Xcode, and the odd Control Center module. The planner
+  should pre-filter these (broaden `ImmovableItems` / skip non-status transient windows) so it
+  doesn't attempt+fail+retry on them — each failed item burns 5 retries (~1s) and a `wakeUp` click.
+- **[LOW] Cursor moves during a multi-item reconcile.** With the move now succeeding on attempt 1,
+  a single toggle is near-instant, but a large multi-item reconcile (or one with stubborn items
+  that retry) still warps the cursor per move via the `defer` in `SystemWindowServer.move`. A
+  batch-scoped cursor guard (disassociate + hide + ONE warp-back around the whole reconcile,
+  keeping `.cgSessionEventTap`; `postToPid` ruled out as unsafe) would smooth it. Lower priority
+  now that moves don't burn 5 failed retries each. Design is in memory `bkf-private-api-direction`.
+- **[RESOLVED 2026-06-28] The synthesized per-item move failed 100% (0/12).** Root cause: a direct
+  `.cgSessionEventTap` post is inert against another app's status item on Tahoe; plus reconcile fed
+  the move the broken Control-Center pid; plus the launch guard always skipped. Fixed via the
+  scromble relay + attribution-in-reconcile + the `floatingBar.isVisible` guard. Verified 17/24
+  on-device (see Built). Kept as a note: if a future OS breaks it again, the symptom is `ok=0`.
+- **[RESOLVED 2026-06-28] Wisp mislabeled "Control Center" in the Items tab.** A fresh
+  `BKF-diag.json` attributes all 6 items correctly (Wisp, Neru, Amazon Persist, Karabiner-Menu,
+  Hammerspoon, ACME); `BKF-bar.png` confirms it. Kept as a note in case it regresses on a different
+  menu-bar layout.
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
-- **The synthesized per-item move actually relocating a live item.** All orchestration is tested
-  against `FakeWindowServer`; the CGEvent code compiles against the real SDK; but whether the
-  drag moves a real item is unverified. Research flagged it goes intermittent on Tahoe (unstick:
-  `killall ControlCenter`). If flaky, escalate to Ice's fuller pid↔session "scromble" event
-  routing (deliberately omitted from v1 as the most complex, single-sourced part).
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
 

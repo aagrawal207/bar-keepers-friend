@@ -20,11 +20,23 @@ import BarKeepersFriendCore
 final class HiddenItemController {
     private let windowServer: WindowServer
 
+    /// Resolves each raw snapshot's REAL owning app (pid + name). On macOS 26 the snapshots from
+    /// `WindowServer.menuBarItems()` carry the broken `kCGWindowOwnerPID` (Control Center / -1,
+    /// FB18327911); the synthesized move's "scromble" relay must target the item's TRUE owning pid
+    /// or it taps the wrong process and the move silently fails. The app injects an Accessibility-
+    /// based attributor here; the default is identity so `FakeWindowServer`-backed tests (whose
+    /// snapshots already carry correct pids) are unaffected.
+    private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
+
     /// Our own control-item window ids (anchor + divider), never moved. Refreshed by the engine.
     var controlItemWindowIDs: Set<CGWindowID> = []
 
-    init(windowServer: WindowServer) {
+    init(
+        windowServer: WindowServer,
+        attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] = { $0 }
+    ) {
         self.windowServer = windowServer
+        self.attribute = attribute
     }
 
     /// The result of a reconcile pass: how many moves were planned, how many succeeded, and the
@@ -51,7 +63,11 @@ final class HiddenItemController {
     func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore) async -> ReconcileResult {
         var result = ReconcileResult()
 
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        // Attribute first so each snapshot carries its REAL owning pid (not Tahoe's broken
+        // Control-Center pid). The move's relay targets that pid, so wrong attribution = the move
+        // taps the wrong process and fails. The planner's side-of-anchor decision is unaffected by
+        // attribution (it's pure geometry), but the moved snapshot must carry the true pid.
+        let snapshots = await attribute((try? windowServer.menuBarItems()) ?? [])
         let plan = HiddenLayoutPlanner.moves(
             for: snapshots,
             anchorMinX: anchorMinX,
@@ -60,6 +76,7 @@ final class HiddenItemController {
             excludingWindowIDs: controlItemWindowIDs
         )
         result.planned = plan.count
+        DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(anchorMinX) hidden=\(controls.hiddenInMenuBar)")
         guard !plan.isEmpty else { return result }
 
         // Moves run sequentially, NOT concurrently: each one synthesizes events the window server
@@ -73,8 +90,9 @@ final class HiddenItemController {
             do {
                 try await windowServer.move(item: move.item, toX: move.targetX)
                 result.succeeded += 1
+                DebugLog.log("HiddenItemController: move OK for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")) pid=\(move.item.ownerPID) -> x=\(move.targetX)")
             } catch {
-                DebugLog.log("HiddenItemController: move failed for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")): \(error)")
+                DebugLog.log("HiddenItemController: move failed for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")) pid=\(move.item.ownerPID): \(error)")
                 result.failed.append(move.item)
             }
         }
