@@ -142,6 +142,16 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   re-captures) when there's saved Hidden intent, so a display change re-applies it on the active
   display. Pure + tested (2 new planner tests). `killall ControlCenter` is still the manual unstick
   if the window server itself goes sluggish.
+- **[HARDENED 2026-06-28] Screen-parameter changes now debounced.** `didChangeScreenParametersNotification`
+  is posted in bursts by macOS (display sleep/wake, mode negotiation, Stage Manager, an external
+  display handshaking), and the handler drove a full reveal→capture→hide on each — a burst would
+  storm full-display screenshots and visibly flicker the menu bar. `CosmeticHideEngine` now coalesces
+  a burst into ONE settled refresh (0.5s debounce, `screenChangeWorkItem`), cancelled on `uninstall`.
+  Also added a `DebugLog` line in the handler (there was none, which made the capture cadence
+  un-diagnosable from the log). NOTE: verified this is *hardening*, not a fix for a live drain — a
+  40s probe saw **zero** screen-param notifications, and the regular ~13s captures seen in the log
+  were a finite past episode (user interaction / SIGUSR1), not a runtime timer. There is no periodic
+  capture loop in the app.
 - **[LOW] Cursor moves during a multi-item reconcile.** With the move now succeeding on attempt 1,
   a single toggle is near-instant, but a large multi-item reconcile (or one with stubborn items
   that retry) still warps the cursor per move via the `defer` in `SystemWindowServer.move`. A

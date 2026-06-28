@@ -40,6 +40,16 @@ final class CosmeticHideEngine {
 
     private var autoRehideWorkItem: DispatchWorkItem?
 
+    /// Coalesces bursts of `didChangeScreenParametersNotification`. macOS posts that notification
+    /// multiple times for a single user-visible change (display sleep/wake, mode negotiation, Stage
+    /// Manager, an external display handshaking), and each one would otherwise drive a full
+    /// reveal→capture→hide — a storm of full-display screenshots that lights the Screen Recording
+    /// indicator and repeatedly disturbs the menu bar. We debounce: schedule one refresh and let
+    /// later notifications in the burst reset the timer, so only the settled state is captured.
+    private var screenChangeWorkItem: DispatchWorkItem?
+    /// How long to wait for a burst of screen-parameter notifications to settle before refreshing.
+    private static let screenChangeDebounce: TimeInterval = 0.5
+
     /// Serializes reveal → capture → hide sequences. Both the launch capture and any refresh
     /// (menu-bar change, anchor open) drive the shared divider, so running two concurrently
     /// makes them fight over its collapsed state across `await` points — the launch capture
@@ -273,6 +283,7 @@ final class CosmeticHideEngine {
 
     func uninstall() {
         autoRehideWorkItem?.cancel()
+        screenChangeWorkItem?.cancel()
         if let anchor = anchorItem { NSStatusBar.system.removeStatusItem(anchor) }
         if let divider = hiddenDivider { NSStatusBar.system.removeStatusItem(divider) }
         anchorItem = nil
@@ -631,7 +642,17 @@ final class CosmeticHideEngine {
         )
     }
 
+    /// Notification entry point: debounce a burst into one settled refresh (see
+    /// `screenChangeWorkItem`). The actual work runs in `applyScreenParametersChange`.
     @objc private func screenParametersChanged() {
+        screenChangeWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.applyScreenParametersChange() }
+        screenChangeWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.screenChangeDebounce, execute: work)
+    }
+
+    private func applyScreenParametersChange() {
+        DebugLog.log("screenParametersChanged (debounced): anchorScreenWidth=\(menuBarScreenWidth) sectionInUse=\(sectionInUse)")
         // The menu bar geometry changed (display added/removed, resolution change). If the
         // section is in active use (panel showing, or an activation revealed it for an open
         // menu), don't disturb it — collapsing or revealing now would slam an open menu shut or
