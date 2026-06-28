@@ -31,7 +31,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **162 tests, 19 suites**).
+- Test: same command with `test` (currently **165 tests, 20 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -110,6 +110,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-28] BKF's own anchor icon vanished from the menu bar.** The per-item moves
+  churn the two control items' saved `NSStatusItem Preferred Position` slots, and they drifted
+  *inverted* (anchor=379, divider=363 — higher slot = further left, so the divider ended up to the
+  RIGHT of the anchor). The launch hide expands the divider to push everything to *its left*
+  off-screen; with the order flipped that pushed the anchor itself off the left edge (live window
+  list showed BKF's status windows parked at negative x while every third-party icon stayed put).
+  Fixed: `ControlItemOrder.repairedDividerPosition` (pure, tested) + `repairControlItemOrderIfNeeded()`
+  in `CosmeticHideEngine.install()`, run *before* the items are created (AppKit reads the slot at
+  creation), rewrites the divider to just-left-of-anchor when inverted. Self-heals on every launch.
 - **[MEDIUM] Synthesized move is flaky on a multi-display setup.** When the menu-bar display
   changes (this machine gains/loses a second display), a planned move can fail — observed a single
   `Karabiner-Menu` move fail with the anchor on the secondary display (anchorMinX jumped 1106 →

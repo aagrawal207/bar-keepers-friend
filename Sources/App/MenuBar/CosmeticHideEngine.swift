@@ -140,6 +140,13 @@ final class CosmeticHideEngine {
     // MARK: - Lifecycle
 
     func install() {
+        // Heal an inverted control-item order *before* the items are created — AppKit reads the
+        // saved "Preferred Position" slot the moment a status item with an autosaveName is made.
+        // The per-item moves can churn these slots until the divider ends up right of the anchor,
+        // which makes the launch hide expand the divider straight through the anchor and push it
+        // off-screen (every other icon visible, ours gone). See `ControlItemOrder`.
+        repairControlItemOrderIfNeeded()
+
         let anchor = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         anchor.autosaveName = ControlItem.Identifier.anchor.rawValue
         if let button = anchor.button {
@@ -209,6 +216,28 @@ final class CosmeticHideEngine {
             applyDividerVisibility()
         }
         observeScreenChanges()
+    }
+
+    /// The defaults key AppKit uses to persist a status item's horizontal slot, by autosave name.
+    private static func preferredPositionKey(_ identifier: ControlItem.Identifier) -> String {
+        "NSStatusItem Preferred Position \(identifier.rawValue)"
+    }
+
+    /// Rewrites the divider's saved slot when it has drifted to the right of the anchor, so the
+    /// hide mechanism keeps pushing items (not the anchor) off-screen. No-op when the order is
+    /// already correct or either slot hasn't been persisted yet (first launch — AppKit picks a
+    /// sane default order). Must run before the status items are created.
+    private func repairControlItemOrderIfNeeded() {
+        let defaults = UserDefaults.standard
+        let anchorKey = Self.preferredPositionKey(.anchor)
+        let dividerKey = Self.preferredPositionKey(.hiddenDivider)
+        guard defaults.object(forKey: anchorKey) != nil,
+              defaults.object(forKey: dividerKey) != nil else { return }
+        let anchorPos = defaults.double(forKey: anchorKey)
+        let dividerPos = defaults.double(forKey: dividerKey)
+        guard let fixed = ControlItemOrder.repairedDividerPosition(anchor: anchorPos, divider: dividerPos) else { return }
+        defaults.set(fixed, forKey: dividerKey)
+        DebugLog.log("control-item order was inverted (anchor=\(anchorPos) divider=\(dividerPos)); repaired divider -> \(fixed)")
     }
 
     /// Reports the app's own status-item window numbers to the floating bar so it never
