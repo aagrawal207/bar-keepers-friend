@@ -1,0 +1,84 @@
+import AppKit
+import BarKeepersFriendCore
+
+/// Reconciles the live menu bar with the user's per-item Shown/Hidden intent by physically
+/// moving items across the anchor.
+///
+/// This is the app-side glue for the Bartender-style per-item control. The DECISION of what to
+/// move is the pure `HiddenLayoutPlanner`; this type performs the resulting moves through the
+/// `WindowServer` seam (the only place the fragile synthesized-drag private API is touched) and
+/// reports the outcome. It is deliberately small: enumerate → plan → move each → report.
+///
+/// ## Why moves can fail, and what we do about it
+///
+/// Moving another app's status item relies on undocumented window-server behavior that Apple has
+/// broken before and may break again. So every move is best-effort and self-validating:
+/// `WindowServer.move` confirms the item's frame actually changed and retries, throwing if it
+/// can't. We collect failures rather than trapping, so one stubborn item never blocks the rest,
+/// and the caller can surface "couldn't move N items" and fall back to leaving them where they are.
+@MainActor
+final class HiddenItemController {
+    private let windowServer: WindowServer
+
+    /// Our own control-item window ids (anchor + divider), never moved. Refreshed by the engine.
+    var controlItemWindowIDs: Set<CGWindowID> = []
+
+    init(windowServer: WindowServer) {
+        self.windowServer = windowServer
+    }
+
+    /// The result of a reconcile pass: how many moves were planned, how many succeeded, and the
+    /// items that wouldn't budge (so the caller can decide whether to warn or fall back).
+    struct ReconcileResult {
+        var planned: Int = 0
+        var succeeded: Int = 0
+        var failed: [MenuBarItemSnapshot] = []
+        var allSucceeded: Bool { failed.isEmpty }
+    }
+
+    /// Whether the app can physically move items right now (Accessibility granted). When false,
+    /// the per-item Hidden control can't take effect, so the UI should route the user to grant it
+    /// rather than silently doing nothing.
+    var canMoveItems: Bool { windowServer.canSynthesizeClicks }
+
+    /// Brings the live menu bar in line with `controls`: every item on the wrong side of the
+    /// anchor for its intent is moved to the correct side. Returns what happened.
+    ///
+    /// `anchorMinX`/`anchorMaxX` are the anchor's current global edges (the hide/show boundary).
+    /// No-op (empty result) when nothing needs moving, so it's cheap to call on every settings
+    /// change or menu-bar refresh.
+    @discardableResult
+    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore) async -> ReconcileResult {
+        var result = ReconcileResult()
+
+        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let plan = HiddenLayoutPlanner.moves(
+            for: snapshots,
+            anchorMinX: anchorMinX,
+            anchorMaxX: anchorMaxX,
+            controls: controls,
+            excludingWindowIDs: controlItemWindowIDs
+        )
+        result.planned = plan.count
+        guard !plan.isEmpty else { return result }
+
+        // Moves run sequentially, NOT concurrently: each one synthesizes events the window server
+        // routes by windowID, and overlapping two moves races the shared menu-bar layout (the
+        // research notes the mechanism goes sluggish/flaky under load). A failure on one must not
+        // abort the others — collect failures and continue. We re-target the SAME planned
+        // destinations even though earlier moves shift neighbors, because the window server snaps
+        // the item to the nearest real slot on the correct side of the anchor; the exact x only
+        // has to land on the right side, which the planner's margins guarantee.
+        for move in plan {
+            do {
+                try await windowServer.move(item: move.item, toX: move.targetX)
+                result.succeeded += 1
+            } catch {
+                DebugLog.log("HiddenItemController: move failed for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")): \(error)")
+                result.failed.append(move.item)
+            }
+        }
+        DebugLog.log("HiddenItemController: reconcile planned=\(result.planned) ok=\(result.succeeded) failed=\(result.failed.count)")
+        return result
+    }
+}

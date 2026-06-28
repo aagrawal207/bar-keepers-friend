@@ -12,15 +12,13 @@ final class SettingsWindowController {
     init(
         preferences: Preferences,
         loginItem: LoginItemService,
-        itemsProvider: @escaping () -> [FloatingBarItem],
-        refreshItems: @escaping () -> Void,
+        itemsProvider: @escaping () async -> [FloatingBarItem],
         onChange: @escaping (Preferences) -> Void
     ) {
         self.model = SettingsModel(
             preferences: preferences,
             loginItem: loginItem,
             itemsProvider: itemsProvider,
-            refreshItems: refreshItems,
             onChange: onChange
         )
     }
@@ -51,24 +49,20 @@ final class SettingsModel {
 
     private let loginItem: LoginItemService
     private let onChange: (Preferences) -> Void
-    /// Supplies the current hidden items (the full set, including suppressed ones) so the Items
-    /// tab can list everything the user might want to manage.
-    private let itemsProvider: () -> [FloatingBarItem]
-    /// Asks the engine to refresh the mirror cache (a no-op while the section is in use), so
-    /// opening the Items tab picks up items added since the last capture.
-    private let refreshItems: () -> Void
+    /// Supplies every manageable menu bar item (both shown and hidden) so the Items tab can list
+    /// everything the user might want to toggle. Async because it enumerates + attributes the live
+    /// menu bar (an Accessibility sweep off the main thread).
+    private let itemsProvider: () async -> [FloatingBarItem]
 
     init(
         preferences: Preferences,
         loginItem: LoginItemService,
-        itemsProvider: @escaping () -> [FloatingBarItem],
-        refreshItems: @escaping () -> Void,
+        itemsProvider: @escaping () async -> [FloatingBarItem],
         onChange: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
         self.loginItem = loginItem
         self.itemsProvider = itemsProvider
-        self.refreshItems = refreshItems
         self.onChange = onChange
     }
 
@@ -82,50 +76,28 @@ final class SettingsModel {
 
     // MARK: - Items management
 
-    /// The current hidden items (full set, including suppressed) to list in the Items tab.
-    func items() -> [FloatingBarItem] { itemsProvider() }
+    /// Loads every manageable menu bar item (shown and hidden) for the Items list. Async: it
+    /// enumerates and attributes the live menu bar.
+    func items() async -> [FloatingBarItem] { await itemsProvider() }
 
-    /// Asks the engine to refresh the mirror so the list reflects items added since launch.
-    /// Called when the Items tab appears; safe (a no-op while the section is in use).
-    func refreshItemList() { refreshItems() }
-
-    /// Whether the item is shown in the floating bar (the inverse of "search only"). Assigning
-    /// mutates `preferences.itemControls`, which fires `onChange` so the bar re-renders at once.
-    func showsInBar(_ item: FloatingBarItem) -> Bool {
-        !preferences.itemControls.isSuppressed(item.snapshot)
+    /// Whether the item is currently marked Hidden in the menu bar. Assigning mutates
+    /// `preferences.itemControls`, which fires `onChange` so the engine moves the item and the
+    /// bar refreshes.
+    func isHidden(_ item: FloatingBarItem) -> Bool {
+        preferences.itemControls.isHidden(item.snapshot)
     }
 
-    func setShowsInBar(_ shows: Bool, for item: FloatingBarItem) {
-        preferences.itemControls.setSuppressed(!shows, for: item.snapshot)
+    func setHidden(_ hidden: Bool, for item: FloatingBarItem) {
+        preferences.itemControls.setHidden(hidden, for: item.snapshot)
     }
 
-    /// The user's search alias for the item, edited via the alias field. Empty clears it.
+    /// The user's display nickname for the item, edited via the name field. Empty clears it.
     func alias(for item: FloatingBarItem) -> String {
         preferences.itemAliases.alias(for: item.snapshot) ?? ""
     }
 
     func setAlias(_ alias: String, for item: FloatingBarItem) {
         preferences.itemAliases.setAlias(alias, for: item.snapshot)
-    }
-
-    /// Whether this item can be controlled (suppressed/aliased) at all — only items with a
-    /// stable owner identity (bundle id) can, since that's the persistence key.
-    func isControllable(_ item: FloatingBarItem) -> Bool {
-        ItemControlStore.key(for: item.snapshot) != nil
-    }
-
-    /// Applies a drag-reorder of the bar items. `order` is the bundle-id-keyed list the user
-    /// dragged into place; we write a dense `barOrder` index per controllable item so the bar
-    /// renders them in that order. Items without a stable key are skipped (can't be pinned).
-    func reorderBarItems(_ ordered: [FloatingBarItem]) {
-        var controls = preferences.itemControls
-        var index = 0
-        for item in ordered {
-            guard ItemControlStore.key(for: item.snapshot) != nil else { continue }
-            controls.setOrderIndex(index, for: item.snapshot)
-            index += 1
-        }
-        preferences.itemControls = controls
     }
 
     // MARK: - Layout export/import

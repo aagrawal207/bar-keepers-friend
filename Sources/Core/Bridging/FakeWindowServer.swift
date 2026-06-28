@@ -36,7 +36,7 @@ public final class FakeWindowServer: WindowServer, @unchecked Sendable {
         menuBarFrame
     }
 
-    public func move(item: MenuBarItemSnapshot, toX targetX: CGFloat) throws {
+    public func move(item: MenuBarItemSnapshot, toX targetX: CGFloat) async throws {
         if let error = moveError { throw error }
         moveRequests.append((item.windowID, targetX))
         guard let index = items.firstIndex(where: { $0.windowID == item.windowID }) else {

@@ -566,9 +566,36 @@ final class FloatingBarController {
         buildItemsFromCache()
     }
 
+    /// Enumerates EVERY manageable menu bar item — both currently-shown (right of the anchor) and
+    /// hidden (left) — for the Settings Items list, where the user toggles each item Shown/Hidden.
+    /// This is broader than `currentItems()` (which is only the hidden, mirrored set): the picker
+    /// must show items on both sides so a shown item can be hidden and vice-versa.
+    ///
+    /// Read-only and non-disruptive: it enumerates + attributes without revealing or moving
+    /// anything. Each item gets its cached glyph if we have one (hidden items, captured earlier),
+    /// otherwise its owning app's icon — good enough for a settings list, and it never blanks.
+    /// Excludes our own control items and immovable system items (which can't be managed).
+    func allManageableItems() async -> [FloatingBarItem] {
+        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let candidates = snapshots.filter { !controlItemWindowIDs.contains($0.windowID) }
+        let deduped = HiddenItemsResolver.deduplicateByMidXProximity(candidates)
+        let attributed = await AXAttributionProvider.attribute(deduped)
+        return attributed
+            .filter { !ImmovableItems.isImmovable($0) && ItemControlStore.key(for: $0) != nil }
+            .sorted { $0.frame.minX < $1.frame.minX } // left-to-right, stable order
+            .map { snapshot in
+                let image = iconCache[snapshot.windowID] ?? AppIconProvider.icon(forPID: snapshot.ownerPID)
+                return FloatingBarItem(
+                    snapshot: snapshot,
+                    image: image,
+                    isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
+                    alias: preferences.itemAliases.alias(for: snapshot)
+                )
+            }
+    }
+
     /// Activates the real menu bar item with the given window id from the cached order — the
-    /// same path a click on the mirrored icon takes. Used by the search panel so selecting a
-    /// result behaves identically to clicking the bar. No-op if the id isn't currently cached.
+    /// same path a click on the mirrored icon takes. No-op if the id isn't currently cached.
     func activate(windowID: CGWindowID) {
         guard let snapshot = cachedHiddenOrder.first(where: { $0.windowID == windowID }) else { return }
         let image = iconCache[windowID] ?? NSImage()

@@ -26,6 +26,14 @@ final class CosmeticHideEngine {
     /// into the (possibly too-narrow) menu bar.
     var floatingBar: FloatingBarController?
 
+    /// Performs the per-item Shown/Hidden control by physically moving items across the anchor
+    /// (the private synthesized-move path). When set, the engine reconciles the live menu bar
+    /// with the user's `itemControls.hiddenInMenuBar` intent inside its reveal/capture sequence.
+    var hiddenItemController: HiddenItemController?
+    /// Invoked when a reconcile pass needs Accessibility permission that isn't granted, so the
+    /// per-item Hidden control can take effect. Routed to the permission prompt by the coordinator.
+    var onNeedsAccessibilityForMove: (() -> Void)?
+
     private var anchorItem: NSStatusItem?
     private var hiddenDivider: NSStatusItem?
 
@@ -195,6 +203,11 @@ final class CosmeticHideEngine {
             //      fallback, so a genuinely uncapturable item isn't omitted forever.
             // The menu bar is usually fully composited by pass 2, so the fallback rarely fires.
             warmUpFloatingBarCache()
+            // Then apply the saved per-item Hidden intent by moving those items left of the anchor
+            // and re-capturing. Serialized after the warm-up via the capture chain, so the bar is
+            // usable immediately and settles into the saved arrangement a beat later. No-op when
+            // nothing is marked hidden or the mover isn't wired.
+            reconcileHiddenItems()
         } else {
             applyDividerVisibility()
         }
@@ -237,6 +250,7 @@ final class CosmeticHideEngine {
 
     func apply(preferences: Preferences) {
         let wasFloatingBar = self.preferences.useFloatingBar
+        let previousHidden = self.preferences.itemControls.hiddenInMenuBar
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
 
@@ -253,6 +267,13 @@ final class CosmeticHideEngine {
                 applyDividerVisibility()
             }
         }
+
+        // If the per-item Hidden intent changed (the user toggled Shown/Hidden in Settings),
+        // physically move the affected items to the correct side of the anchor and refresh the
+        // mirror. Only when it actually changed, so an unrelated settings edit doesn't drag icons.
+        if preferences.itemControls.hiddenInMenuBar != previousHidden {
+            reconcileHiddenItems()
+        }
     }
 
     /// Runs the same two-pass reveal→capture→hide warm-up that `install()` uses, so the floating
@@ -267,6 +288,46 @@ final class CosmeticHideEngine {
             if bar.hasIncompleteGlyphs {
                 try? await Task.sleep(for: .milliseconds(220))
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+            }
+        }
+    }
+
+    /// Brings the real menu bar in line with the user's per-item Shown/Hidden intent, then
+    /// refreshes the floating-bar mirror so it reflects the new layout. Items can only be moved
+    /// while ON-SCREEN, so this rides inside a reveal→(reconcile + capture)→collapse sequence,
+    /// serialized behind any in-flight capture exactly like a refresh. No-op while the section is
+    /// in active use (don't move items out from under an open menu or the visible panel) and when
+    /// there's no mover wired. If moving needs Accessibility and it's missing, route to the prompt
+    /// instead of silently failing.
+    func reconcileHiddenItems() {
+        guard let controller = hiddenItemController, !sectionInUse else { return }
+        guard controller.canMoveItems else {
+            onNeedsAccessibilityForMove?()
+            return
+        }
+        // Make sure our own control-item window ids are excluded from any move.
+        publishControlItemWindowIDs()
+        controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []
+
+        runCaptureSequence(forceCollapseAfter: true) { [weak self] in
+            guard let self else { return }
+            // Reconcile while items are revealed (on-screen) so they're movable. Use the anchor's
+            // live edges as the hide/show boundary.
+            if let anchor = self.anchorFrame {
+                _ = await controller.reconcile(
+                    anchorMinX: anchor.minX,
+                    anchorMaxX: anchor.maxX,
+                    controls: self.preferences.itemControls
+                )
+            }
+            // Re-capture so the mirror reflects whatever moved. If the bar is open it re-lays-out.
+            if let bar = self.floatingBar {
+                let anchorX = self.anchorFrame?.minX ?? 1115
+                await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
+                if bar.hasIncompleteGlyphs {
+                    try? await Task.sleep(for: .milliseconds(220))
+                    await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+                }
             }
         }
     }

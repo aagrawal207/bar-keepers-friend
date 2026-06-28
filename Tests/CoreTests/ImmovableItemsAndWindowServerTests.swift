@@ -48,10 +48,10 @@ import Testing
         MenuBarItemSnapshot(windowID: id, ownerPID: 1, frame: CGRect(x: x, y: 0, width: 20, height: 22))
     }
 
-    @Test func moveUpdatesItemFrame() throws {
+    @Test func moveUpdatesItemFrame() async throws {
         let server = FakeWindowServer(items: [item(id: 1, x: 100)])
         let target = try server.menuBarItems()[0]
-        try server.move(item: target, toX: 500)
+        try await server.move(item: target, toX: 500)
         #expect(try server.menuBarItems()[0].frame.minX == 500)
         #expect(server.moveRequests.count == 1)
     }
@@ -70,12 +70,12 @@ import Testing
         }
     }
 
-    @Test func moveErrorPropagates() {
+    @Test func moveErrorPropagates() async throws {
         let server = FakeWindowServer(items: [item(id: 1, x: 100)])
         server.moveError = .moveFailed(windowID: 1)
-        let target = try? server.menuBarItems().first
-        #expect(throws: WindowServerError.self) {
-            try server.move(item: target!, toX: 200)
+        let target = try #require(try server.menuBarItems().first)
+        await #expect(throws: WindowServerError.self) {
+            try await server.move(item: target, toX: 200)
         }
     }
 }

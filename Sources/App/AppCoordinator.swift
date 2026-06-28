@@ -14,6 +14,7 @@ final class AppCoordinator {
     private let windowServer: WindowServer = SystemWindowServer()
     private let capture = IconCaptureService()
     private var floatingBar: FloatingBarController?
+    private var hiddenItemController: HiddenItemController?
 
     private let hotkeys = HotkeyService()
     private let hoverMonitor = HoverRevealMonitor()
@@ -43,13 +44,18 @@ final class AppCoordinator {
         )
         floatingBar = bar
 
+        let mover = HiddenItemController(windowServer: windowServer)
+        hiddenItemController = mover
+
         let engine = CosmeticHideEngine(preferences: preferences) { [weak self] updated in
             self?.persist(updated)
         }
         engine.floatingBar = bar
+        engine.hiddenItemController = mover
         engine.install()
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
         engine.onQuit = { NSApp.terminate(nil) }
+        engine.onNeedsAccessibilityForMove = { AccessibilityPermission.requestAndOpenSettings() }
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         hideEngine = engine
 
@@ -119,8 +125,7 @@ final class AppCoordinator {
             settingsWindowController = SettingsWindowController(
                 preferences: preferences,
                 loginItem: loginItem,
-                itemsProvider: { [weak self] in self?.floatingBar?.currentItems() ?? [] },
-                refreshItems: { [weak self] in self?.hideEngine?.refreshFloatingBarCache() }
+                itemsProvider: { [weak self] in await self?.floatingBar?.allManageableItems() ?? [] }
             ) { [weak self] updated in
                 self?.persist(updated)
                 self?.hideEngine?.apply(preferences: updated)
