@@ -45,8 +45,12 @@ this fire; top blocked items are X, Y — need hardware QA / user input") and **
   the read-only picker — it is stale; CLAUDE.md is the source of truth, not the plan.
 - **Do not weaken, skip, or delete a test to get green.** A failing test is a finding, not an
   obstacle. Fix the root cause or report it.
-- **Do not invent features or add knobs.** The user prefers *removing* options. New features need
-  sign-off; the loop's default lane is bug-fixing, verifiable hardening, and honest docs.
+- **Do not invent NEW features or add knobs.** The user prefers *removing* options. But as of
+  2026-06-29 the loop IS cleared to pick up **already-documented** low-priority items from "Features
+  not yet built" below (they have implicit sign-off) — building them incrementally, one focused
+  commit at a time, each still clearing the pre-flight gate. The line that still holds: don't dream
+  up features that aren't written down here, and put the load-bearing logic in Core with tests even
+  when the surrounding UI can only be review-verified. Anything genuinely new still needs sign-off.
 - **Do not break locked decisions:** macOS 26 only; MIT clean-room (study Ice/Bartender for
   mechanism/UX only, copy no code); the cosmetic baseline must survive any OS change.
 
