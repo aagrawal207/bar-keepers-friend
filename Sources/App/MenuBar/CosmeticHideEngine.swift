@@ -522,9 +522,14 @@ final class CosmeticHideEngine {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Bar Keeper's Friend"
     }
 
-    /// The marketing version (CFBundleShortVersionString), e.g. "1.0". Falls back to "—" if absent.
+    /// The display version (short + build, e.g. "0.1.0 (1)"), composed by the same pure
+    /// `AppInfo.displayVersion` the Settings header uses — so the menu and Settings never disagree
+    /// about the version (they did briefly: this read short-only while the header showed short+build).
     private static var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        AppInfo.displayVersion(
+            short: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        )
     }
 
     @objc private func menuOpenSettings() { onOpenSettings?() }

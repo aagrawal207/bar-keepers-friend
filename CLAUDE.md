@@ -391,13 +391,13 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     user's eye — don't ship blind restyling. Bartender/Ice are clean-room visual references only.
 - **Rich anchor right-click menu — IN PROGRESS (greenlit 2026-06-29).** The menu was Settings/Quit
   only; the user wants App name + version, a status line, Pause, About, Check for Updates, Restart.
-  - **[DONE]** App name + version header (disabled rows from `CFBundleName` /
-    `CFBundleShortVersionString`), a live **status line** (`Status: Paused / Ready / Working… /
-    Collecting icons…`), an **About** item (standard AppKit about panel), plus the existing
-    Settings/Quit — all in `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested
-    `AppStatus` enum in Core (`derive(paused:moving:capturing:updateAvailable:)`, precedence
-    paused > update > move > capture > ready); the engine feeds it `reconcileInFlightCount`,
-    `captureInFlightCount`, and `isPaused`.
+  - **[DONE]** App name + version header (`CFBundleName`; version via the shared
+    `AppInfo.displayVersion` so it matches the Settings header — both read `"0.1.0 (1)"`), a live
+    **status line** (`Status: Paused / Ready / Working… / Collecting icons…`), an **About** item
+    (standard AppKit about panel), plus the existing Settings/Quit — all in
+    `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested `AppStatus` enum in Core
+    (`derive(paused:moving:capturing:updateAvailable:)`, precedence paused > update > move > capture
+    > ready); the engine feeds it `reconcileInFlightCount`, `captureInFlightCount`, and `isPaused`.
   - **[DONE] Pause** — a checkable menu item. Pausing reveals the hidden section in place (un-tucks
     the divider via `setHidden(collapsed: false)` + drives the state machine to `.shown`) and gates
     the automated triggers — left-click toggle, hotkey, and `reconcileHiddenItems` (the move) — with
