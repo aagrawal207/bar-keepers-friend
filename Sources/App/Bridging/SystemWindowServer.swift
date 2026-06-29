@@ -2,17 +2,22 @@ import AppKit
 import BarKeepersFriendCore
 import CoreGraphics
 
-/// Real `WindowServer` backed by the public window-list API.
+/// Real `WindowServer` backed by the public window-list API plus the private synthesized-event
+/// move/click.
 ///
-/// Phase-2 read-only foundation: it enumerates menu bar status-item windows via
+/// `menuBarItems()` / `menuBarFrame(...)` enumerate status-item windows via
 /// `CGWindowListCopyWindowInfo` (the public, non-private path) so the floating bar can find
-/// hidden items. Movement and clicking (the private-API parts) are added in a later step
-/// and currently throw `notImplemented`, keeping the fragile surface out of this milestone.
+/// hidden items. `move(...)` and `click(...)` are the fragile private-API parts — they
+/// synthesize CGEvents routed to the item's owning process (the move is verified working
+/// on-device; see CLAUDE.md "Built") — and are isolated here behind the `WindowServer` seam so
+/// the rest of the app depends only on the protocol and the permission-free baseline is unaffected
+/// if they ever break.
 ///
 /// Note on Tahoe (macOS 26): `kCGWindowOwnerPID` is unreliable — it reports most items as
 /// owned by Control Center (FB18327911). We still capture whatever PID/owner is reported;
-/// accurate per-app attribution is handled separately by the Accessibility matcher when the
-/// click-routing step lands. For mirroring images, the window id + frame are sufficient.
+/// accurate per-app attribution is handled separately by the Accessibility matcher
+/// (`AXAttributionProvider`) before a move so the synthesized events target the real pid. For
+/// mirroring images, the window id + frame are sufficient.
 final class SystemWindowServer: WindowServer, @unchecked Sendable {
 
     /// Status-item windows live at this layer (`kCGStatusWindowLevel`).

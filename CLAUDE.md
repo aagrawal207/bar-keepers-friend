@@ -410,3 +410,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - Don't `pkill` an Xcode-launched instance (state `SX`); ask the user to press Stop.
 - Keep this file current: when you finish a feature move it to **Built**, when you find a bug add
   it under **Bugs**, when you remove something note it under **Removed**.
+- **Doc comments are reconciled with shipped reality (2026-06-28).** The old scaffolding
+  `AGENT: implement…` comments in `LayoutConfig`/`LayoutTransferService` and a stale
+  `SystemWindowServer` header claiming move/click "throw `notImplemented`" were corrected — all
+  three are fully implemented (the move is verified on-device). If you add a new stubbed seam,
+  prefer a real type (`WindowServerError.notImplemented`) over a comment that can rot out of sync.

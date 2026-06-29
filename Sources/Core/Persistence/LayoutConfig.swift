@@ -4,9 +4,9 @@ import Foundation
 /// or move their setup between machines. Versioned so a future format change can migrate rather
 /// than fail.
 ///
-/// AGENT: implement `encoded()` / `decode(from:)` and any validation here. The shape below is
-/// the contract the App-side `LayoutTransferService` and its tests depend on — extend it, but
-/// keep `version` and `preferences` so old exports keep importing.
+/// `encoded()` / `decode(from:)` are the contract the App-side `LayoutTransferService` and its
+/// tests depend on. Keep `version` and `preferences` so old exports keep importing; if the shape
+/// changes incompatibly, bump `currentVersion` and migrate rather than reject.
 public struct LayoutConfig: Equatable, Sendable, Codable {
     /// Schema version of this export. Bump when the shape changes incompatibly.
     public static let currentVersion = 1

@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 /// Bridges `LayoutConfig` export/import to the AppKit save/open panels. The serialization logic
 /// lives in Core (`LayoutConfig`, unit-tested); this is the thin UI-facing wrapper.
 ///
-/// AGENT: implement the two methods using NSSavePanel/NSOpenPanel. The public surface below is
-/// fixed — Settings calls `exportLayout(_:)` and `importLayout()`. Do not change the signatures.
+/// The public surface is fixed — Settings calls `exportLayout(_:)` and `importLayout()`. Keep
+/// those signatures stable; the panels (NSSavePanel/NSOpenPanel) are the only AppKit dependency.
 @MainActor
 enum LayoutTransferService {
     /// Presents a save panel and writes the given preferences as a `LayoutConfig` JSON file.
