@@ -33,11 +33,19 @@ public struct PermissionState: Equatable, Sendable {
 
     /// Updates from a probe, marking a previously-granted permission as `.lapsed` if the
     /// probe now reports it ungranted (the recurring Sequoia/Tahoe re-prompt case).
+    ///
+    /// `.lapsed` must be **sticky**: the app polls this roughly once a second while Settings is
+    /// open, and a lapse stays a lapse until the user actually re-grants. So a permission counts as
+    /// "was granted" if its previous state is either `.granted` OR already `.lapsed` — otherwise the
+    /// SECOND poll after the lapse (previous == .lapsed, fresh still ungranted) would fall through to
+    /// the `else` and silently downgrade the row from "Needs re-approval" to "Not granted" after ~1s,
+    /// which is exactly the never-granted-vs-lapsed confusion `.lapsed` exists to prevent. A fresh
+    /// `.granted` from the probe always wins and clears the lapse.
     public mutating func refresh(using probe: PermissionProbe) {
         for permission in Permission.allCases {
             let fresh = probe.status(of: permission)
-            let previous = statuses[permission]
-            if previous == .granted, fresh != .granted {
+            let wasGranted = statuses[permission] == .granted || statuses[permission] == .lapsed
+            if wasGranted, fresh != .granted {
                 statuses[permission] = .lapsed
             } else {
                 statuses[permission] = fresh

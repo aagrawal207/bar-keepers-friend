@@ -57,6 +57,40 @@ import Testing
         #expect(state.status(of: .accessibility) == .lapsed)
     }
 
+    @Test func lapseIsStickyAcrossRepeatedPolls() {
+        // The app polls ~1x/second while Settings is open. A lapse must stay "Needs re-approval"
+        // until the user actually re-grants — it must NOT silently downgrade to "Not granted" on
+        // the second poll after the lapse. (Regression: previous logic only checked `== .granted`,
+        // so once the state became `.lapsed` the next poll fell through and overwrote it.)
+        var state = PermissionState()
+        let probe = StubProbe([.screenRecording: .granted])
+        state.refresh(using: probe)
+        #expect(state.status(of: .screenRecording) == .granted)
+
+        probe.statuses[.screenRecording] = .notDetermined
+        state.refresh(using: probe)   // poll 1 after lapse
+        #expect(state.status(of: .screenRecording) == .lapsed)
+        state.refresh(using: probe)   // poll 2 — still lapsed, not downgraded
+        #expect(state.status(of: .screenRecording) == .lapsed)
+        state.refresh(using: probe)   // poll 3 — still sticky
+        #expect(state.status(of: .screenRecording) == .lapsed)
+    }
+
+    @Test func regrantClearsALapse() {
+        // Once the user re-approves in System Settings, the next poll must clear `.lapsed` back to
+        // `.granted` — the lapse is sticky against ungranted reads, never against a real grant.
+        var state = PermissionState()
+        let probe = StubProbe([.accessibility: .granted])
+        state.refresh(using: probe)
+        probe.statuses[.accessibility] = .denied
+        state.refresh(using: probe)
+        #expect(state.status(of: .accessibility) == .lapsed)
+
+        probe.statuses[.accessibility] = .granted
+        state.refresh(using: probe)
+        #expect(state.status(of: .accessibility) == .granted)
+    }
+
     @Test func freshDenyStaysDeniedNotLapsed() {
         // A permission never granted in this session reads as plain denied, not lapsed — the UI
         // shows "Not granted", not the alarming "Needs re-approval".

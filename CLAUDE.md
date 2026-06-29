@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **219 tests, 24 suites**).
+- Test: same command with `test` (currently **221 tests, 24 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -169,6 +169,18 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-29] A lapsed permission silently downgraded to "Not granted" after ~1s.**
+  `PermissionState.refresh` marked a permission `.lapsed` (was-granted-now-not, the recurring
+  Sequoia/Tahoe re-prompt → UI shows "Needs re-approval") only when `previous == .granted`. The app
+  polls `refreshPermissions()` ~1×/second while Settings is open, so on the SECOND poll after a
+  lapse `previous` was already `.lapsed` (not `.granted`), the condition failed, and the `else`
+  overwrote it with the raw probe value (`.denied`/`.notDetermined`). Net: the "Needs re-approval"
+  warning flashed for a single poll, then reverted to "Not granted" — defeating the exact
+  never-granted-vs-lapsed distinction `.lapsed` exists to draw, right when the user needs the nudge
+  to re-approve. The existing tests missed it because none refreshed a third time. Fixed: treat
+  `.lapsed` as "was granted" too, so a lapse stays sticky across repeated ungranted polls; a fresh
+  `.granted` from the probe still wins and clears it. Pure Core, behind the `PermissionProbe` seam,
+  one-line condition change + 2 tests (sticky across 3 polls; re-grant clears it).
 - **[RESOLVED 2026-06-29] The immovable-items bundle-id denylist never matched, so Control Center
   could be moved.** `ImmovableItems.denylistedBundleIDs` holds reverse-DNS ids
   (`com.apple.controlcenter`, …), but `MenuBarItemSnapshot.ownerBundleID` is populated with a
