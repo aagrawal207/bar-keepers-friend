@@ -233,9 +233,18 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   same truth-over-intent rule: if the imported flag's registration is rejected, it records
   `loginItem.isEnabled` instead. *Pure decision shared with the above; the SMAppService outcome is
   review-only.*
-- **[LOW, open] Superseded activation's AX sweep isn't cancelled** (`AXActivator` detached task has
-  no `Task.isCancelled` checks). A superseded sweep runs to completion (~1.5s) wasting work; it can't
-  fire a stale click (the caller's task is cancelled) but it's wasteful. Confirmed by audit-2.
+- **[RESOLVED 2026-06-29] Superseded activation's AX sweep wasn't cancelled.** `AXActivator.activate`
+  ran its synchronous AX IPC inside `Task.detached`, which has no parent and so **severs
+  cancellation** — when the floating-bar caller superseded a slow activation (`currentActivationTask
+  ?.cancel()`), the detached all-apps sweep kept grinding through every app at the full per-app
+  timeout (1.5s × N), producing a result no one would use. Fixed by routing both detached calls
+  through a `runCancellable` helper that bridges the caller's cancellation via
+  `withTaskCancellationHandler` → `task.cancel()`, plus a `Task.isCancelled` early-exit at the top of
+  `pressMatchingChild`'s per-app loop and a guard before the expensive all-apps sweep even starts.
+  Behavior change is confined to the superseded path (whose result the caller already discards): it
+  now stops early instead of blocking on unresponsive apps. When NOT cancelled, `runCancellable`
+  reduces to exactly the old `await task.value` — byte-identical happy path. App-target async glue,
+  no Core seam; correctness provable by inspection (existing 217 tests still green).
 - **[RESOLVED 2026-06-29] `click()` could warp the cursor to the item and not restore it** if the
   pre-warp `CGEvent(source:nil)?.location` read returned nil. The warp onto the item was
   unconditional while the restore was guarded by `if let savedCursor`, so a nil read left the
