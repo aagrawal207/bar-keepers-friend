@@ -73,6 +73,7 @@ final class AppCoordinator {
             Task { await capture.requestScreenRecordingAccess() }
         }
 
+        reconcileLoginItem()
         installDiagnosticsSignalHandler()
     }
 
@@ -107,6 +108,19 @@ final class AppCoordinator {
         }
         showSource.resume()
         showBarSignalSource = showSource
+    }
+
+    /// Re-applies the saved launch-at-login preference at startup. If the SMAppService
+    /// registration was lost (an OS update or a manual removal in System Settings), the saved
+    /// `true` would otherwise never be restored. The pure reconciler decides whether to act;
+    /// `requiresApproval` is deliberately left alone (the user disabled it on purpose).
+    private func reconcileLoginItem() {
+        let action = LoginItemReconciler.decide(desired: preferences.launchAtLogin, actual: loginItem.status)
+        switch action {
+        case .register: loginItem.setEnabled(true)
+        case .unregister: loginItem.setEnabled(false)
+        case .none: break
+        }
     }
 
     func stop() {

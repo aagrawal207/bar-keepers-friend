@@ -1,3 +1,4 @@
+import BarKeepersFriendCore
 import Foundation
 import ServiceManagement
 
@@ -7,6 +8,18 @@ import ServiceManagement
 final class LoginItemService {
     var isEnabled: Bool {
         SMAppService.mainApp.status == .enabled
+    }
+
+    /// The current registration state, mapped to the Core `LoginItemStatus` so the pure
+    /// `LoginItemReconciler` can decide what (if anything) to do about it.
+    var status: LoginItemStatus {
+        switch SMAppService.mainApp.status {
+        case .enabled: return .enabled
+        case .notRegistered: return .notRegistered
+        case .requiresApproval: return .requiresApproval
+        case .notFound: return .notFound
+        @unknown default: return .notFound
+        }
     }
 
     /// Registers or unregisters the app as a login item. Returns whether it succeeded.

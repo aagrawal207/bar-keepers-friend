@@ -82,7 +82,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **193 tests, 21 suites**).
+- Test: same command with `test` (currently **199 tests, 22 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -197,13 +197,23 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   the label is the persistence key for Hidden/Shown intent + aliases, so the fix only *rejects* a
   wrong-display match, never changes how an accepted label is formed. Pure + 7 new tests (cross-
   display rejection, off-display→nil, sub-pixel-drift still matches, malformed-array fallback).
-- **[MEDIUM, open] No startup login-item reconciliation** (`AppCoordinator.start` ~L68). The app
-  never calls `loginItem.setEnabled(preferences.launchAtLogin)` at launch, so if the SMAppService
-  registration is lost (OS update, manual removal) it's never restored to match the saved pref.
-  Confirmed by audit-2; needs a `LoginItem` protocol seam to be Core-testable.
-- **[MEDIUM, open] `launchAtLogin` setter ignores SMAppService failure** (`SettingsWindowController`
-  ~L71). `setEnabled` is `@discardableResult` and the toggle ignores a thrown/failed result, so the
-  UI can show "on" when registration actually failed. Confirmed by audit-2; App-target.
+- **[RESOLVED 2026-06-28] No startup login-item reconciliation.** `AppCoordinator.start` wired the
+  engine/hotkeys/capture but never touched `loginItem`, so a registration lost to an OS update or a
+  manual removal in System Settings was never restored to match the saved `launchAtLogin = true`.
+  Fixed: a pure `LoginItemReconciler.decide(desired:actual:)` (Core) maps the live SMAppService
+  status to register / unregister / none, and `start()` calls it via a new `reconcileLoginItem()`.
+  `requiresApproval` is deliberately left alone (the user disabled it on purpose — re-registering
+  every launch would fight that). The decision is pure + 6 tests; `LoginItemService` gained a
+  `status` mapped to the Core `LoginItemStatus`. *Decision logic unit-tested; the SMAppService call
+  + the start() wiring are review-only (App-target, not hardware-verified this fire).*
+- **[RESOLVED 2026-06-28] `launchAtLogin` setter (and import) ignored SMAppService failure.** The
+  setter discarded `setEnabled`'s `Bool` and persisted the requested value unconditionally, so the
+  toggle could show "on" while registration actually failed (e.g. approval pending). Fixed: the
+  setter now persists what *actually* took — `succeeded ? newValue : prior` — so on failure the
+  `@Observable` toggle snaps back to the truth (no new View code needed). `importLayout` applies the
+  same truth-over-intent rule: if the imported flag's registration is rejected, it records
+  `loginItem.isEnabled` instead. *Pure decision shared with the above; the SMAppService outcome is
+  review-only.*
 - **[LOW, open] Superseded activation's AX sweep isn't cancelled** (`AXActivator` detached task has
   no `Task.isCancelled` checks). A superseded sweep runs to completion (~1.5s) wasting work; it can't
   fire a stale click (the caller's task is cancelled) but it's wasteful. Confirmed by audit-2.

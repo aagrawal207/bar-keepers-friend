@@ -69,8 +69,12 @@ final class SettingsModel {
     var launchAtLogin: Bool {
         get { preferences.launchAtLogin }
         set {
-            loginItem.setEnabled(newValue)
-            preferences.launchAtLogin = newValue
+            // Persist what ACTUALLY happened, not what was asked. If SMAppService rejects the
+            // change (e.g. the user must approve it in System Settings), `setEnabled` returns
+            // false and we keep the prior value — so the @Observable toggle snaps back instead
+            // of claiming "on" while the app won't actually launch.
+            let succeeded = loginItem.setEnabled(newValue)
+            preferences.launchAtLogin = succeeded ? newValue : preferences.launchAtLogin
         }
     }
 
@@ -178,9 +182,12 @@ final class SettingsModel {
     /// triggers `onChange`, so the whole app (engine, bar, hotkeys) re-applies at once.
     func importLayout() {
         do {
-            if let imported = try LayoutTransferService.importLayout() {
-                // Keep the login-item registration in sync with the imported flag.
-                loginItem.setEnabled(imported.launchAtLogin)
+            if var imported = try LayoutTransferService.importLayout() {
+                // Keep the login-item registration in sync with the imported flag, and record
+                // what actually took: if registration was rejected, don't persist a launchAtLogin
+                // the system didn't honor (same truth-over-intent rule as the toggle setter).
+                let succeeded = loginItem.setEnabled(imported.launchAtLogin)
+                if !succeeded { imported.launchAtLogin = loginItem.isEnabled }
                 preferences = imported
                 transferFailed = false
                 transferMessage = "Imported settings."
