@@ -82,7 +82,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **201 tests, 22 suites**).
+- Test: same command with `test` (currently **204 tests, 22 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -233,8 +233,16 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `LayoutConfigError.tooLarge(Int)`. Additive — never touches the accepted-file shape or any
   persistence key. Pure + 2 tests (oversize→`.tooLarge` before parsing; exact-cap + real export still
   decode). *Decode guard unit-tested; the App-side pre-read size check is review-only.*
-- **[LOW, open] `controlItemPositions`/sets serialize via array encoding** with `.sortedKeys` not
-  guaranteeing set element order — export diffs can be noisy across runs. Cosmetic. Confirmed by audit-2.
+- **[RESOLVED 2026-06-28] `ItemControlStore` sets serialized in non-deterministic order.** The three
+  `Set<String>` fields (`hiddenInMenuBar`, `shownInMenuBar`, `suppressedFromBar`) encoded via the
+  synthesized Codable as JSON arrays in `Set`'s per-process iteration order, and `JSONEncoder
+  .sortedKeys` sorts dictionary *keys*, not array *elements* — so re-exporting an unchanged layout
+  produced a spurious diff every run. Fixed with a custom `encode(to:)` that writes the three sets as
+  `.sorted()` arrays (dictionaries `barOrder`/`controlItemPositions`/`aliases` were already
+  deterministic under `.sortedKeys`). On-disk shape is unchanged — still JSON arrays — so `init(from:)`
+  reads new and old files identically; only the output order is now stable. Pure + 3 tests (byte-stable
+  across insertion orders, arrays sorted ascending, round-trip still equal). Cosmetic, but the last
+  Core-testable item in the backlog.
 - **[RESOLVED 2026-06-28] Hide silently, partially failed on a wide (5K/6K/ultrawide) display.**
   `ControlItemLength.expanded` clamped the divider width to `[500, 4000]`. The hide mechanism works
   by making the divider WIDER than the display so left-neighbors are pushed off-screen — but on any

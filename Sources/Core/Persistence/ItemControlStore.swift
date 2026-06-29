@@ -74,6 +74,22 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         barOrder = try container.decodeIfPresent([String: Int].self, forKey: .barOrder) ?? [:]
     }
 
+    /// Encodes the three sets as SORTED arrays so an export is byte-stable across runs.
+    ///
+    /// `Set`'s iteration order is seeded per-process, so the default Codable synthesis would emit
+    /// each set's JSON array in a different order each launch — and `JSONEncoder.sortedKeys` sorts
+    /// dictionary *keys*, not array *elements*, so it doesn't help. That made `LayoutConfig` exports
+    /// produce spurious diffs (re-exporting an unchanged layout looked changed). Sorting here makes
+    /// the same logical store always serialize identically. The on-disk shape is unchanged — still
+    /// JSON arrays — so `init(from:)` (which decodes `Set<String>`) reads new and old files alike.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(hiddenInMenuBar.sorted(), forKey: .hiddenInMenuBar)
+        try container.encode(shownInMenuBar.sorted(), forKey: .shownInMenuBar)
+        try container.encode(suppressedFromBar.sorted(), forKey: .suppressedFromBar)
+        try container.encode(barOrder, forKey: .barOrder)
+    }
+
     // MARK: - Key derivation
 
     /// The stable identity controls are keyed on, or `nil` if the item can't be controlled.

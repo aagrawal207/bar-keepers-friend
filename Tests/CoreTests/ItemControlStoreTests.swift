@@ -108,6 +108,47 @@ import Testing
         #expect(decoded == store)
     }
 
+    @Test func encodingSetsIsByteStableRegardlessOfInsertionOrder() throws {
+        // Two stores with the SAME logical contents but built in different insertion orders must
+        // encode to identical bytes. `Set` iteration order is seeded per-process, so the default
+        // synthesized encoder emits the array in an unstable order — which made LayoutConfig
+        // exports diff spuriously across runs. Sorting the sets on encode fixes that.
+        var a = ItemControlStore()
+        for k in ["com.c", "com.a", "com.b"] { a.setHidden(true, forKey: k) }
+        for k in ["zeta", "alpha", "mu"] { a.setSuppressed(true, forKey: k) }
+
+        var b = ItemControlStore()
+        for k in ["com.b", "com.c", "com.a"] { b.setHidden(true, forKey: k) }
+        for k in ["mu", "zeta", "alpha"] { b.setSuppressed(true, forKey: k) }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys] // matches LayoutConfig's exporter
+        #expect(try encoder.encode(a) == encoder.encode(b))
+    }
+
+    @Test func encodedSetArraysAreSorted() throws {
+        // The on-disk arrays themselves are sorted ascending, so a human reading or diffing the
+        // exported JSON sees a stable, predictable order.
+        var store = ItemControlStore()
+        for k in ["com.c", "com.a", "com.b"] { store.setHidden(true, forKey: k) }
+        let data = try JSONEncoder().encode(store)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["hiddenInMenuBar"] as? [String] == ["com.a", "com.b", "com.c"])
+    }
+
+    @Test func sortedEncodingStillDecodesBackToTheSameStore() throws {
+        // Sorting on encode must not change what decodes back — sets are unordered, so a round trip
+        // still yields an equal store, and old files (arrays in any order) still load.
+        var store = ItemControlStore()
+        store.setHidden(true, forKey: "com.b")
+        store.setHidden(true, forKey: "com.a")
+        store.setSuppressed(true, forKey: "s2")
+        store.setSuppressed(true, forKey: "s1")
+        store.setOrderIndex(5, forKey: "ord")
+        let decoded = try JSONDecoder().decode(ItemControlStore.self, from: JSONEncoder().encode(store))
+        #expect(decoded == store)
+    }
+
     // MARK: - visibleBarItems (the load-bearing filter)
 
     @Test func visibleBarItemsDropsSuppressed() {
