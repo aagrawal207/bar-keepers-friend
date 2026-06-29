@@ -236,10 +236,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **[LOW, open] Superseded activation's AX sweep isn't cancelled** (`AXActivator` detached task has
   no `Task.isCancelled` checks). A superseded sweep runs to completion (~1.5s) wasting work; it can't
   fire a stale click (the caller's task is cancelled) but it's wasteful. Confirmed by audit-2.
-- **[LOW, open] `click()` can warp the cursor to the item and not restore it** if the pre-warp
-  `CGEvent(source:nil)?.location` read returns nil (`SystemWindowServer.swift` ~L257/290). Rare;
-  leaves the pointer parked in the menu bar. Fix: skip the warp entirely when the save read failed.
-  Confirmed by audit-2.
+- **[RESOLVED 2026-06-29] `click()` could warp the cursor to the item and not restore it** if the
+  pre-warp `CGEvent(source:nil)?.location` read returned nil. The warp onto the item was
+  unconditional while the restore was guarded by `if let savedCursor`, so a nil read left the
+  pointer parked in the menu bar. Fixed by reading `savedCursor` with a `guard` that throws
+  `clickFailed` when nil — so we never warp without a paired restore point. The bail lands before
+  `CGDisplayHideCursor`/its balancing `defer`, so there's no half-set cursor state to unwind, and a
+  failed (recoverable) click beats a visibly-stranded pointer. Happy path (read succeeds — every
+  real invocation) is byte-identical; the warp/restore are now provably paired. App-target glue, no
+  Core seam; the guard's correctness is provable by inspection (existing 217 tests still green).
 - **[LOW, open] Attribution AX IPC is serial with per-app timeouts** (`AXAttributionProvider` ~L52)
   — N unresponsive apps cost N×timeout on the attribution path. Parallelize with a TaskGroup.
   Confirmed by audit-2.

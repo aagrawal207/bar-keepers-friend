@@ -265,7 +265,14 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         // Save the cursor's current position BEFORE warping, in CG global (top-left) space —
         // the same space as `centre` and the warp, so no coordinate flip and multi-display
         // safe. (NSEvent.mouseLocation is AppKit bottom-left and would need per-screen flipping.)
-        let savedCursor = CGEvent(source: nil)?.location
+        // If this read fails we have NO point to warp back to, so we must not warp the cursor onto
+        // the item at all — doing so would strand the pointer in the menu bar (the warp below was
+        // previously unconditional while the restore was guarded, which is exactly that bug). Bail
+        // cleanly instead: a nil read here is a degraded state where activation can't complete
+        // tidily anyway, and a failed click is recoverable where a parked cursor is a visible glitch.
+        guard let savedCursor = CGEvent(source: nil)?.location else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
 
         // Build the click events BEFORE touching the cursor, so the pointer spends the absolute
         // minimum time displaced (warp → post → restore with no allocation in between). This
@@ -297,13 +304,12 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         // failed), then immediately warp back to where the user left it so the pointer doesn't
         // stay parked in the menu bar. The warp emits no move event and the just-opened menu's
         // modal loop doesn't dismiss on cursor motion, so the restore is safe with no delay.
-        // Restore only if the pre-warp read succeeded — never warp to a fabricated point.
+        // `savedCursor` is guaranteed valid (we bailed above if the read failed), so the warp is
+        // always paired with a restore — the pointer never stays parked on the item.
         CGWarpMouseCursorPosition(centre)
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
-        if let savedCursor {
-            CGWarpMouseCursorPosition(savedCursor)
-        }
+        CGWarpMouseCursorPosition(savedCursor)
     }
 }
 
