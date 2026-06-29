@@ -169,6 +169,17 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-29] The anchor right-click menu's items did nothing when clicked** (user-
+  reported). `CosmeticHideEngine` is a plain Swift class, not an `NSObject` subclass. `NSMenu`
+  defaults to `autoenablesItems = true`, which asks the target via `respondsToSelector:`/
+  `validateMenuItem:` whether to enable each item before showing it — methods only an `NSObject`
+  responds to. So AppKit couldn't confirm the engine handled the actions and left every action item
+  (Pause / Settings / About / Quit) **disabled**, and a disabled item swallows the click. (The
+  status-bar buttons were unaffected: `NSControl` dispatches its `@objc` action directly, bypassing
+  validation.) Fixed by setting `menu.autoenablesItems = false` in `showAnchorMenu` — the action
+  items stay enabled and dispatch over the same `NSApp.sendAction` path the buttons use; the
+  informational header/status/version rows keep their explicit `isEnabled = false`. One-line glue
+  fix, no logic seam to unit-test; only observable when the menu is shown on device.
 - **[RESOLVED 2026-06-28] Click-activation was dead on a display left-of/above the primary.**
   `MenuBarItemSnapshot.isClickableOnScreen` tested `frame.minX >= 0` (absolute). A display with a
   negative global x-origin (positioned left of, or above, the primary) has all its on-screen items
@@ -398,6 +409,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested `AppStatus` enum in Core
     (`derive(paused:moving:capturing:updateAvailable:)`, precedence paused > update > move > capture
     > ready); the engine feeds it `reconcileInFlightCount`, `captureInFlightCount`, and `isPaused`.
+    > Note (2026-06-29): the menu's action items needed `menu.autoenablesItems = false` to fire at
+    > all — see the RESOLVED bug above; without it AppKit left every item disabled.
   - **[DONE] Pause** — a checkable menu item. Pausing reveals the hidden section in place (un-tucks
     the divider via `setHidden(collapsed: false)` + drives the state machine to `.shown`) and gates
     the automated triggers — left-click toggle, hotkey, and `reconcileHiddenItems` (the move) — with

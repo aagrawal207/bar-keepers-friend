@@ -476,6 +476,15 @@ final class CosmeticHideEngine {
     private func showAnchorMenu() {
         guard let anchor = anchorItem else { return }
         let menu = NSMenu()
+        // We manage each item's enabled state by hand. With AppKit's default auto-validation on,
+        // every action item would be silently DISABLED: this engine isn't an NSObject subclass, so
+        // AppKit can't query it via respondsToSelector:/validateMenuItem: to confirm it handles the
+        // action, and a disabled item eats the click ("nothing happens"). The status-bar buttons
+        // dodge this because NSControl dispatches the @objc selector directly; menu items don't.
+        // Turning auto-validation off keeps the action items enabled, and dispatch then runs over the
+        // same NSApp.sendAction path the buttons already use. The informational rows below stay
+        // disabled because we set isEnabled = false on them explicitly.
+        menu.autoenablesItems = false
 
         // Header: app name + version, as a disabled (informational) row.
         let header = NSMenuItem(title: Self.appName, action: nil, keyEquivalent: "")
