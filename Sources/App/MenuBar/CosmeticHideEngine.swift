@@ -78,6 +78,23 @@ final class CosmeticHideEngine {
     /// click during the launch capture window can't misread that state and eat the toggle.
     var captureInFlight: Bool { captureInFlightCount > 0 }
 
+    /// True while a reconcile (the physical synthesized move of items across the anchor) is running,
+    /// so the status line can show "Working…" — more specific than the "Collecting…" a plain
+    /// capture shows. A counter, like `captureInFlightCount`, in case two reconciles ever overlap.
+    private var reconcileInFlightCount = 0
+
+    /// A plain-language summary of what the engine is doing right now, for the anchor menu's status
+    /// line. Derived in Core (`AppStatus.derive`) from the engine's live counters so the label is
+    /// unit-tested rather than hand-assembled here. `updateAvailable` is wired false until Sparkle
+    /// lands (see "Features not yet built").
+    var currentStatus: AppStatus {
+        AppStatus.derive(
+            moving: reconcileInFlightCount > 0,
+            capturing: captureInFlightCount > 0,
+            updateAvailable: false
+        )
+    }
+
     /// Upper bound on a single capture sequence so a wedged ScreenCaptureKit call can't stall
     /// the chain forever (the next sequence waits on this one). Generous vs. the ~1s happy path.
     private static let captureSequenceTimeout: TimeInterval = 8
@@ -392,6 +409,8 @@ final class CosmeticHideEngine {
             // Reconcile while items are revealed (on-screen) so they're movable. Use the anchor's
             // live edges as the hide/show boundary.
             if let anchor = self.anchorFrame {
+                self.reconcileInFlightCount += 1
+                defer { self.reconcileInFlightCount -= 1 }
                 _ = await controller.reconcile(
                     anchorMinX: anchor.minX,
                     anchorMaxX: anchor.maxX,
@@ -427,17 +446,40 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Pops the anchor's right-click menu (Settings…, Quit). Built on demand and attached to the
-    /// status item only for the duration of the click, so a normal left-click still routes to
-    /// `anchorClicked` (a permanently-assigned `menu` would swallow left-clicks too).
+    /// Pops the anchor's right-click menu. Built on demand and attached to the status item only for
+    /// the duration of the click, so a normal left-click still routes to `anchorClicked` (a
+    /// permanently-assigned `menu` would swallow left-clicks too).
+    ///
+    /// Layout: an app-identity header (name + version) and a live status line (both disabled, so
+    /// they read as information, not actions), then the actions — Settings, About — and Quit.
     private func showAnchorMenu() {
         guard let anchor = anchorItem else { return }
         let menu = NSMenu()
+
+        // Header: app name + version, as a disabled (informational) row.
+        let header = NSMenuItem(title: Self.appName, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        let version = NSMenuItem(title: "Version \(Self.appVersion)", action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+
+        // Live status line — what the engine is doing right now (Ready / Working / Collecting).
+        menu.addItem(.separator())
+        let status = NSMenuItem(title: "Status: \(currentStatus.label)", action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        menu.addItem(status)
+
+        menu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(menuOpenSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        let about = NSMenuItem(title: "About \(Self.appName)", action: #selector(menuShowAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit Bar Keeper's Friend", action: #selector(menuQuit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit \(Self.appName)", action: #selector(menuQuit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
@@ -446,8 +488,26 @@ final class CosmeticHideEngine {
         anchor.menu = nil // restore left-click action handling
     }
 
+    /// The app's display name, falling back to the product name if Info.plist lacks it.
+    private static var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Bar Keeper's Friend"
+    }
+
+    /// The marketing version (CFBundleShortVersionString), e.g. "1.0". Falls back to "—" if absent.
+    private static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    }
+
     @objc private func menuOpenSettings() { onOpenSettings?() }
     @objc private func menuQuit() { onQuit?() }
+
+    /// Shows the standard AppKit About panel. The agent app has no menu bar of its own, so we
+    /// surface it from here. `orderFrontStandardAboutPanel` reads name/version/copyright from
+    /// Info.plist; activate first so the panel comes forward (an accessory app isn't frontmost).
+    @objc private func menuShowAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
 
     /// Shows or hides the floating bar from the cached mirror — instantly, with no capture on
     /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
