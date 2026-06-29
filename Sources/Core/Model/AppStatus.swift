@@ -7,6 +7,9 @@ import Foundation
 /// is computed (and unit-tested) here rather than assembled ad-hoc in the menu builder. Ordered by
 /// precedence: when several conditions hold at once, `derive` returns the most informative one.
 public enum AppStatus: Equatable, Sendable {
+    /// The user has paused the app: it reveals hidden items in place and stops all hiding,
+    /// revealing, and moving until un-paused. A deliberate mode, not a transient activity.
+    case paused
     /// Idle — nothing in flight.
     case ready
     /// Physically moving items across the anchor (a reconcile / synthesized move is running).
@@ -20,6 +23,7 @@ public enum AppStatus: Equatable, Sendable {
     /// The user-facing label for the menu's status line.
     public var label: String {
         switch self {
+        case .paused: return "Paused"
         case .ready: return "Ready"
         case .working: return "Working…"
         case .collecting: return "Collecting icons…"
@@ -29,15 +33,18 @@ public enum AppStatus: Equatable, Sendable {
 
     /// Derives the status from the engine's live signals, most-informative-first.
     ///
-    /// `updateAvailable` wins because it's a standing fact the user should act on, not a transient
-    /// busy state; then the two transient busy states (a move, then a capture); else `ready`. The
-    /// caller passes whatever it tracks — `moving` from the reconcile path, `capturing` from
+    /// `paused` wins over everything: it's the dominant mode the user chose, and while paused the
+    /// app does nothing else anyway. Then `updateAvailable` (a standing fact to act on), then the
+    /// two transient busy states (a move, then a capture), else `ready`. The caller passes whatever
+    /// it tracks — `paused` from the pause flag, `moving` from the reconcile path, `capturing` from
     /// `captureInFlight`, `updateAvailable` from the (future) updater.
     public static func derive(
+        paused: Bool,
         moving: Bool,
         capturing: Bool,
         updateAvailable: Bool
     ) -> AppStatus {
+        if paused { return .paused }
         if updateAvailable { return .updateAvailable }
         if moving { return .working }
         if capturing { return .collecting }

@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **210 tests, 23 suites**).
+- Test: same command with `test` (currently **211 tests, 23 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -133,9 +133,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `HiddenLayoutPlanner` decides moves; tested against `FakeWindowServer` (162 tests).
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
-- **Anchor right-click menu** — app name + version header, a live **status line** (Ready / Working…
-  / Collecting icons…, from the pure `AppStatus` enum in Core), **About** (standard panel), Settings,
-  Quit. *(Pause / Restart / Check-for-Updates still to come — see "Rich anchor right-click menu".)*
+- **Anchor right-click menu** — app name + version header, a live **status line** (Paused / Ready /
+  Working… / Collecting icons…, from the pure `AppStatus` enum in Core), a checkable **Pause** (reveals
+  items in place and stops all automated hide/reveal/move; session-only), **About** (standard panel),
+  Settings, Quit. *(Restart / Check-for-Updates still to come — see "Rich anchor right-click menu".)*
 - **Auto re-hide**, **dismiss-on-mouse-exit** (gated on the pointer having first entered the
   panel, so a revealed bar doesn't vanish instantly), **launch at login**, **layout
   export/import** (versioned JSON), **per-item display aliases** (nicknames in the bar/Items
@@ -386,19 +387,25 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   for what "refined" looks like here (UX observation only — clean-room, no code).
 - **Rich anchor right-click menu — IN PROGRESS (greenlit 2026-06-29).** The menu was Settings/Quit
   only; the user wants App name + version, a status line, Pause, About, Check for Updates, Restart.
-  - **[DONE this pass]** App name + version header (disabled rows from `CFBundleName` /
-    `CFBundleShortVersionString`), a live **status line** (`Status: Ready / Working… / Collecting
-    icons…`), an **About** item (standard AppKit about panel), plus the existing Settings/Quit — all
-    in `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested `AppStatus` enum in
-    Core (`derive(moving:capturing:updateAvailable:)`, precedence update > move > capture > ready);
-    the engine feeds it `reconcileInFlightCount` (new) and `captureInFlightCount`.
-  - **[TODO, follow-up fires]** **Pause** — suspend hide/reveal + reconcile + auto-rehide + hotkey so
-    the bar behaves like a vanilla menu bar; un-tuck the divider (`setHidden(collapsed: false)`),
-    gate the toggle/reconcile/hotkey paths on a persisted `paused` flag, surface as a checkable item.
-    Self-contained but higher blast radius (touches several engine entry points) so it gets its own
-    commit. **Restart** — relaunch the app (interacts with the single-instance guard in
-    `AppCoordinator.anotherInstanceIsRunning`; sequence the new process carefully). **Check for
-    Updates** — needs **Sparkle** wired (see below); `AppStatus.updateAvailable` already exists so
+  - **[DONE]** App name + version header (disabled rows from `CFBundleName` /
+    `CFBundleShortVersionString`), a live **status line** (`Status: Paused / Ready / Working… /
+    Collecting icons…`), an **About** item (standard AppKit about panel), plus the existing
+    Settings/Quit — all in `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested
+    `AppStatus` enum in Core (`derive(paused:moving:capturing:updateAvailable:)`, precedence
+    paused > update > move > capture > ready); the engine feeds it `reconcileInFlightCount`,
+    `captureInFlightCount`, and `isPaused`.
+  - **[DONE] Pause** — a checkable menu item. Pausing reveals the hidden section in place (un-tucks
+    the divider via `setHidden(collapsed: false)` + drives the state machine to `.shown`) and gates
+    the automated triggers — left-click toggle, hotkey, and `reconcileHiddenItems` (the move) — with
+    additive `!isPaused` guards, so while paused the bar behaves like a vanilla menu bar. Un-pausing
+    collapses to baseline and re-applies saved per-item intent. DESIGN: `isPaused` is **session-only**
+    (NOT persisted) — pause is an "I'm hunting for something right now" mode; a silently-paused app
+    after reboot would be a worse surprise, and it keeps the change off the launch path. The gates
+    are pure subtraction (the app does *less* while paused), so a bug can only mean "pause didn't
+    fully take", never layout corruption — and it never touches the synthesized-move path.
+  - **[TODO, follow-up fires]** **Restart** — relaunch the app (interacts with the single-instance
+    guard in `AppCoordinator.anotherInstanceIsRunning`; sequence the new process carefully). **Check
+    for Updates** — needs **Sparkle** wired (see below); `AppStatus.updateAvailable` already exists so
     the status line and that item will share one source of truth. Until Sparkle lands, it's omitted
     (not shown-disabled), since there's nothing to check.
 - **Per-item / global hotkeys** to toggle a *specific* item. (Deferred until the synthesized move

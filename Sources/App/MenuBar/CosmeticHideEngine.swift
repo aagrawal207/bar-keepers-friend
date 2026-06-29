@@ -83,17 +83,28 @@ final class CosmeticHideEngine {
     /// capture shows. A counter, like `captureInFlightCount`, in case two reconciles ever overlap.
     private var reconcileInFlightCount = 0
 
+    /// Whether the user has paused the app from the anchor menu. While paused the engine reveals
+    /// hidden items in place and ignores every hide/reveal/reconcile/auto-rehide/hotkey trigger, so
+    /// the menu bar behaves like a vanilla one. SESSION-ONLY (not persisted): pause is an "I'm
+    /// looking for something right now" mode, and a silently-paused app after reboot would be a
+    /// worse surprise than just starting un-paused. Also keeps the change off the launch path.
+    private var isPaused = false
+
     /// A plain-language summary of what the engine is doing right now, for the anchor menu's status
     /// line. Derived in Core (`AppStatus.derive`) from the engine's live counters so the label is
     /// unit-tested rather than hand-assembled here. `updateAvailable` is wired false until Sparkle
     /// lands (see "Features not yet built").
     var currentStatus: AppStatus {
         AppStatus.derive(
+            paused: isPaused,
             moving: reconcileInFlightCount > 0,
             capturing: captureInFlightCount > 0,
             updateAvailable: false
         )
     }
+
+    /// Whether the app is currently paused (for the menu's checkmark).
+    var paused: Bool { isPaused }
 
     /// Upper bound on a single capture sequence so a wedged ScreenCaptureKit call can't stall
     /// the chain forever (the next sequence waits on this one). Generous vs. the ~1s happy path.
@@ -379,6 +390,13 @@ final class CosmeticHideEngine {
     /// there's no mover wired. If moving needs Accessibility and it's missing, route to the prompt
     /// instead of silently failing.
     func reconcileHiddenItems() {
+        // Paused: don't move any items. The user wants the bar left alone; a Settings toggle or a
+        // display change still records intent in preferences, and it's applied on the next reconcile
+        // after un-pausing (un-pause collapses to baseline, and the saved intent reconciles then).
+        guard !isPaused else {
+            DebugLog.log("reconcileHiddenItems: skipped (paused)")
+            return
+        }
         guard let controller = hiddenItemController else {
             DebugLog.log("reconcileHiddenItems: skipped (no controller)")
             return
@@ -439,6 +457,9 @@ final class CosmeticHideEngine {
             showAnchorMenu()
             return
         }
+        // While paused the section is revealed in place; a left-click does nothing (the right-click
+        // menu, with the Pause toggle, is always available above).
+        guard !isPaused else { return }
         if preferences.useFloatingBar, floatingBar != nil {
             toggleFloatingBar()
         } else {
@@ -471,6 +492,14 @@ final class CosmeticHideEngine {
         menu.addItem(status)
 
         menu.addItem(.separator())
+        // Pause: a checkable mode toggle. Checked while paused; reveals items in place and stops
+        // all automated hide/reveal/move until toggled off.
+        let pause = NSMenuItem(title: "Pause Bar Keeper's Friend", action: #selector(menuTogglePause), keyEquivalent: "")
+        pause.target = self
+        pause.state = isPaused ? .on : .off
+        menu.addItem(pause)
+
+        menu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(menuOpenSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
@@ -500,6 +529,34 @@ final class CosmeticHideEngine {
 
     @objc private func menuOpenSettings() { onOpenSettings?() }
     @objc private func menuQuit() { onQuit?() }
+
+    /// Toggles pause. Pausing reveals the hidden section in place (un-tucks the divider) and stops
+    /// all automated hiding/revealing/moving until un-paused, so the menu bar acts like a vanilla
+    /// one while the user hunts for something. Un-pausing returns to the hidden baseline.
+    ///
+    /// Deliberately uses ONLY the permission-free baseline mechanism (`setHidden`/the state machine)
+    /// — it never triggers the synthesized item move. The gates elsewhere are additive `guard`s, so
+    /// the worst a bug here can do is "pause didn't fully take", never corrupt the layout.
+    @objc private func menuTogglePause() {
+        isPaused.toggle()
+        autoRehideWorkItem?.cancel()
+        autoRehideWorkItem = nil
+        if isPaused {
+            // Reveal in place: hide the mirror panel if open, drive the state machine to shown so no
+            // stray refresh re-collapses it, and un-tuck the divider so left-of-anchor items return.
+            floatingBar?.hide()
+            _ = stateMachine.apply(.show(.hidden))
+            setHidden(collapsed: false)
+        } else {
+            // Back to baseline: collapse the section again, then re-apply the saved per-item Hidden
+            // intent (a Settings toggle or display change made WHILE paused recorded intent but was
+            // not moved). reconcileHiddenItems now passes its `!isPaused` guard and no-ops cheaply
+            // when there's nothing hidden or the mover isn't wired.
+            _ = stateMachine.apply(.hide(.hidden))
+            setHidden(collapsed: true)
+            reconcileHiddenItems()
+        }
+    }
 
     /// Shows the standard AppKit About panel. The agent app has no menu bar of its own, so we
     /// surface it from here. `orderFrontStandardAboutPanel` reads name/version/copyright from
@@ -582,6 +639,8 @@ final class CosmeticHideEngine {
     /// click in floating-bar mode; in reflow mode it toggles the hidden section instead, so the
     /// shortcut does the right thing either way. A keypress *toggling* is expected behavior.
     func toggleFromShortcut() {
+        // Paused means "stop reacting" — the hotkey is inert until the user un-pauses from the menu.
+        guard !isPaused else { return }
         if preferences.useFloatingBar, floatingBar != nil {
             // A keyboard toggle is deliberate: keep the bar open until the user presses the
             // shortcut again (or interacts with it), rather than auto-dismissing a bar they never
