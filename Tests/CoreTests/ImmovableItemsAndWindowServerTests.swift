@@ -22,6 +22,24 @@ import Testing
         #expect(!ImmovableItems.isImmovable(item(id: 1, bundle: "com.dropbox.Dropbox")))
     }
 
+    @Test func controlCenterDisplayNameIsImmovable() {
+        // The attribution layer (and CGWindowList enumeration) populate `ownerBundleID` with a
+        // DISPLAY NAME, not a reverse-DNS id — so the real string seen at runtime is
+        // "Control Center", which must be caught. (Before the display-name denylist this was
+        // movable: the reverse-DNS "com.apple.controlcenter" entry never matched the actual value.)
+        #expect(ImmovableItems.isImmovable(item(id: 1, bundle: "Control Center")))
+    }
+
+    @Test func controlCenterDisplayNameIsFilteredOut() {
+        let items = [
+            item(id: 1, bundle: "Maccy"),
+            item(id: 2, bundle: "Control Center"),
+            item(id: 3, bundle: "com.apple.controlcenter"),
+        ]
+        // Both the display-name (id 2) and reverse-DNS (id 3) Control Center items are dropped.
+        #expect(ImmovableItems.movableItems(from: items).map(\.windowID) == [1])
+    }
+
     @Test func clockTitleIsImmovableEvenWithUnknownOwner() {
         // On Tahoe, owner attribution is unreliable, so the title fallback matters.
         #expect(ImmovableItems.isImmovable(item(id: 1, bundle: nil, title: "Clock 12:45")))

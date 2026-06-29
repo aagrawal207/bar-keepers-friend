@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **217 tests, 24 suites**).
+- Test: same command with `test` (currently **219 tests, 24 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -169,6 +169,25 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-29] The immovable-items bundle-id denylist never matched, so Control Center
+  could be moved.** `ImmovableItems.denylistedBundleIDs` holds reverse-DNS ids
+  (`com.apple.controlcenter`, …), but `MenuBarItemSnapshot.ownerBundleID` is populated with a
+  *display name*, not a bundle id — both at enumeration (`SystemWindowServer` uses
+  `kCGWindowOwnerName`) and at attribution (`AXAttributionProvider` uses `localizedName` / a module
+  title). A display name can never equal a reverse-DNS id, so the entire bundle-id branch was dead:
+  the only thing actually protecting system items was the title-fragment list, and on Tahoe
+  `kCGWindowName` is the generic "Item-0", so that's weak too. Net effect: a Control-Center item
+  could pass `key != nil && !isImmovable` (`FloatingBarController` ~L595) and show up as a movable,
+  toggleable row — and moving it corrupts the bar, exactly what the denylist exists to prevent.
+  Fixed by adding a `denylistedOwnerLabels` set (display names) checked alongside the bundle-id set;
+  it contains just `"Control Center"`, the exact string `AXAttributionProvider` already treats as
+  canonical (`app.name == "Control Center"`), so it's a known invariant, not a guess. Pure Core,
+  strictly protective (can only make *more* items immovable — worst case is today's status quo), +2
+  tests (display-name immovable; filter drops both display-name and reverse-DNS forms). The bundle-id
+  list is kept (a no-op today) for any future caller that sets a real id. **Residual** (see "Needs
+  hardware verification"): other system owners (Spotlight, Now Playing) and the localized Control
+  Center *module* labels (Wi-Fi, Battery, …) need on-device observation of their real attributed
+  strings before they can be added safely — didn't guess them blind.
 - **[RESOLVED 2026-06-29] The anchor right-click menu's items did nothing when clicked** (user-
   reported). `CosmeticHideEngine` is a plain Swift class, not an `NSObject` subclass. `NSMenu`
   defaults to `autoenablesItems = true`, which asks the target via `respondsToSelector:`/
@@ -379,6 +398,13 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
+- **Immovable denylist completeness** — the display-name guard now protects "Control Center" (see
+  the RESOLVED bug). What's left needs a live `BKF-diag.json` to read the *real* attributed
+  `ownerBundleID` strings: (1) other system owners — Spotlight, Now Playing/`mediaremote`,
+  `systemuiserver` — to add their display names; (2) the localized Control Center *module* labels
+  (Wi-Fi, Battery, Sound, …) the attribution layer substitutes, which currently are NOT caught by
+  `"Control Center"` and so could be individually movable. Don't add these blind — confirm the exact
+  strings on-device first, then extend `denylistedOwnerLabels`.
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
 - **Capture returns 0/N, deterministically (new evidence 2026-06-29).** A live standalone-built run
