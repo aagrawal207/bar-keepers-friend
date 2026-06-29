@@ -169,6 +169,19 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-29] The Settings Items picker could list BKF's own anchor as a hideable row.**
+  Two "exclude our own control items" paths had diverged: the floating-bar resolver
+  (`HiddenItemsResolver.hiddenItems`) excludes by window id **and** the `isOwnControlItem` name-prefix
+  check, but the Settings picker (`FloatingBarController.allManageableItems`) excluded by window id
+  **only**. The name-prefix guard exists in Core precisely because the window-id set can be stale on
+  Tahoe (ids are reassigned when a status item is recreated; `publishControlItemWindowIDs` refreshes
+  it before a *show*, but the picker enumerates independently). With a stale id set, BKF's own anchor
+  /divider would pass the picker's filter (and the downstream `key != nil && !isImmovable`, since the
+  control items' owner name isn't denylisted) and appear as a manageable, hideable row — letting the
+  user hide their own anchor. Fixed by adding `&& !HiddenItemsResolver.isOwnControlItem($0)` to the
+  picker's candidate filter, matching the resolver's belt-and-suspenders. Reuses the pure, already-
+  tested Core guard; strictly subtractive (only ever excludes our own items); no capture/move/baseline
+  path touched. App-target glue, so no new test — `isOwnControlItem` is already unit-tested in Core.
 - **[RESOLVED 2026-06-29] A lapsed permission silently downgraded to "Not granted" after ~1s.**
   `PermissionState.refresh` marked a permission `.lapsed` (was-granted-now-not, the recurring
   Sequoia/Tahoe re-prompt → UI shows "Needs re-approval") only when `previous == .granted`. The app

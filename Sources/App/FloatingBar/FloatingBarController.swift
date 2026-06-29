@@ -588,7 +588,16 @@ final class FloatingBarController {
     /// Excludes our own control items and immovable system items (which can't be managed).
     func allManageableItems() async -> [FloatingBarItem] {
         let snapshots = (try? windowServer.menuBarItems()) ?? []
-        let candidates = snapshots.filter { !controlItemWindowIDs.contains($0.windowID) }
+        // Exclude our own control items by window id AND name prefix — the same belt-and-suspenders
+        // the floating-bar resolver uses. The window-id set is refreshed before a show, but it can
+        // still be stale on Tahoe (ids are reassigned when a status item is recreated), and the
+        // Settings picker can enumerate at any time; without the name-prefix backstop a stale id set
+        // would surface BKF's own anchor/divider as a hideable row (it passes the key/immovable
+        // filter below, since its owner name isn't denylisted) — letting the user hide their own
+        // anchor. `isOwnControlItem` is the pure, tested guard for exactly this.
+        let candidates = snapshots.filter {
+            !controlItemWindowIDs.contains($0.windowID) && !HiddenItemsResolver.isOwnControlItem($0)
+        }
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(candidates)
         let attributed = await AXAttributionProvider.attribute(deduped)
         return attributed
