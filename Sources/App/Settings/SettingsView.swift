@@ -1,20 +1,62 @@
+import AppKit
 import BarKeepersFriendCore
 import SwiftUI
 
-/// The settings UI: a tabbed window. "General" holds the behavior toggles; "Items" is the
-/// per-item manager (show-in-bar / search-only, alias, order) plus an honest, read-only
-/// reflection of the OS-owned visible/hidden state.
+/// The settings UI: an app-identity header above a tabbed body. "General" holds the behavior
+/// toggles; "Items" is the per-item manager (show-in-bar / search-only, alias, order) plus an
+/// honest, read-only reflection of the OS-owned visible/hidden state.
 struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        TabView {
-            GeneralSettingsTab(model: model)
-                .tabItem { Label("General", systemImage: "gearshape") }
-            ItemsSettingsTab(model: model)
-                .tabItem { Label("Items", systemImage: "menubar.rectangle") }
+        VStack(spacing: 0) {
+            AppIdentityHeader()
+            Divider()
+            TabView {
+                GeneralSettingsTab(model: model)
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                ItemsSettingsTab(model: model)
+                    .tabItem { Label("Items", systemImage: "menubar.rectangle") }
+            }
+            .padding(.top, 8)
         }
-        .frame(width: 460, height: 580)
+        .frame(width: 460, height: 620)
+    }
+}
+
+/// A small app-identity banner — icon, name, version — so the Settings window reads like a real
+/// app's rather than a bare tab strip. The user's note was that it "looks like someone new built
+/// it"; giving it a clear identity is the first, lowest-risk step. Values come from the bundle;
+/// the version string is composed by the pure, tested `AppInfo.displayVersion`.
+private struct AppIdentityHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 48, height: 48)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.appName)
+                    .font(.headline)
+                Text("Version \(Self.versionString)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private static var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Bar Keeper's Friend"
+    }
+
+    private static var versionString: String {
+        AppInfo.displayVersion(
+            short: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        )
     }
 }
 

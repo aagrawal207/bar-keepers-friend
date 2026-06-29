@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **211 tests, 23 suites**).
+- Test: same command with `test` (currently **217 tests, 24 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -379,12 +379,16 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 ### Features not yet built (from the plan, roughly prioritized)
 
 - **Settings window refinement (UX polish).** *(User feedback 2026-06-28: "looks like someone new
-  built it… refine it and make it a proper app." Low priority, loop item.)* It's currently a bare
-  two-tab `Form` (`SettingsView.swift`, 460×580) with no app identity, no header, default control
-  density. Make it feel shipped: an app header (icon + name + version), a sidebar/`NavigationSplit`
-  layout instead of a cramped tab strip, consistent section spacing and footnotes, an About area.
-  Pure-logic content is fine as-is; this is presentation. Bartender/Ice are good visual references
-  for what "refined" looks like here (UX observation only — clean-room, no code).
+  built it… refine it and make it a proper app." Low priority, loop item.)*
+  - **[DONE this pass] App-identity header.** `SettingsView` now leads with an icon (the real
+    `NSApp.applicationIconImage`) + app name + version banner above the tab strip — the concrete
+    "no app identity" gap. The version string is composed by a pure, tested `AppInfo.displayVersion`
+    (short + build → `"0.1.0 (1)"`, drops the parenthetical when build is missing/equal, `"—"`
+    fallback). Window grew 580→620 to fit the header.
+  - **[TODO, follow-up fires]** the rest is genuinely aesthetic and **can't be verified from this
+    rig** (no menu-bar/Settings visibility): a sidebar/`NavigationSplit` layout instead of the tab
+    strip, consistent section spacing/footnotes, an About area. These need either hardware QA or the
+    user's eye — don't ship blind restyling. Bartender/Ice are clean-room visual references only.
 - **Rich anchor right-click menu — IN PROGRESS (greenlit 2026-06-29).** The menu was Settings/Quit
   only; the user wants App name + version, a status line, Pause, About, Check for Updates, Restart.
   - **[DONE]** App name + version header (disabled rows from `CFBundleName` /
