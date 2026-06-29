@@ -82,7 +82,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **199 tests, 22 suites**).
+- Test: same command with `test` (currently **201 tests, 22 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -224,9 +224,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **[LOW, open] Attribution AX IPC is serial with per-app timeouts** (`AXAttributionProvider` ~L52)
   — N unresponsive apps cost N×timeout on the attribution path. Parallelize with a TaskGroup.
   Confirmed by audit-2.
-- **[LOW, open] Import has no file-size cap** (`LayoutTransferService` ~L68) — `Data(contentsOf:)`
-  then full `JSONDecoder` on a user-chosen file; a huge file is read whole. Cap the read size.
-  Confirmed by audit-2.
+- **[RESOLVED 2026-06-28] Import had no file-size cap.** `LayoutTransferService.importLayout` did
+  `Data(contentsOf:)` then a full `JSONDecoder` on a user-chosen file with no bound, so a huge (or
+  hostile) file was read whole into memory. Fixed with one Core constant (`LayoutConfig.maxEncodedSize`
+  = 5 MB, ~1000× any real export) used in two layers: the importer checks the file size via
+  `resourceValues(.fileSizeKey)` **before** reading (the real fix — never reads a multi-GB file), and
+  `LayoutConfig.decode` re-checks `data.count` as a backstop for any other caller, throwing a new
+  `LayoutConfigError.tooLarge(Int)`. Additive — never touches the accepted-file shape or any
+  persistence key. Pure + 2 tests (oversize→`.tooLarge` before parsing; exact-cap + real export still
+  decode). *Decode guard unit-tested; the App-side pre-read size check is review-only.*
 - **[LOW, open] `controlItemPositions`/sets serialize via array encoding** with `.sortedKeys` not
   guaranteeing set element order — export diffs can be noisy across runs. Cosmetic. Confirmed by audit-2.
 - **[RESOLVED 2026-06-28] Hide silently, partially failed on a wide (5K/6K/ultrawide) display.**

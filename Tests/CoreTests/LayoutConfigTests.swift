@@ -85,4 +85,26 @@ import Testing
             }
         }
     }
+
+    @Test func decodeRejectsOversizeDataBeforeParsing() {
+        // A file larger than the cap is rejected as `.tooLarge` (with its byte count) rather than
+        // being handed to JSONDecoder, which would build an object graph from the whole blob. The
+        // bytes here are garbage on purpose: the size check must fire BEFORE the parse, so this
+        // must throw .tooLarge, not .malformed.
+        let oversize = LayoutConfig.maxEncodedSize + 1
+        let data = Data(count: oversize)
+        #expect(throws: LayoutConfigError.tooLarge(oversize)) {
+            _ = try LayoutConfig.decode(from: data)
+        }
+    }
+
+    @Test func decodeAcceptsDataExactlyAtTheSizeCap() throws {
+        // The bound is inclusive: a real export is far under the cap, and a file landing exactly on
+        // it must still parse (the guard rejects only `> maxEncodedSize`). A genuine encoded config
+        // is a few KB, well within the cap, so a normal round-trip proves the cap doesn't interfere.
+        let data = try LayoutConfig(preferences: .default).encoded()
+        #expect(data.count <= LayoutConfig.maxEncodedSize)
+        let decoded = try LayoutConfig.decode(from: data)
+        #expect(decoded.preferences == .default)
+    }
 }

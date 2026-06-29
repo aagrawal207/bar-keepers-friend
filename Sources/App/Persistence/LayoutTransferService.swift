@@ -63,6 +63,15 @@ enum LayoutTransferService {
 
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
+        // Check the file size BEFORE reading it whole — a layout file is a few KB, so a huge
+        // file is either not ours or chosen to exhaust memory. `decode` re-checks the in-memory
+        // size as a backstop, but this avoids reading a multi-GB file into memory at all.
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > LayoutConfig.maxEncodedSize {
+            DebugLog.log("Layout import rejected: file is \(size) bytes (> \(LayoutConfig.maxEncodedSize))")
+            throw LayoutConfigError.tooLarge(size)
+        }
+
         let data: Data
         do {
             data = try Data(contentsOf: url)
