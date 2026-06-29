@@ -13,6 +13,57 @@ Amazon address.
 User's bar: **flawless, very well tested**, effort no object. Default to removing confusing
 options over adding power-user knobs.
 
+## Loop charter (read first if you are an automated loop fire)
+
+A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
+CLAUDE.md current"). The app is now in good shape; the easy, safe, high-value backlog is draining.
+That changes the risk: a prompt that says *do something every 30 minutes* eventually pressures you
+to invent work, chase phantoms, or touch fragile unverifiable paths just to have shipped something.
+**Don't.** The real goal is not "ship a change every fire" — it is **leave the app at least as good
+as you found it.** Doing nothing and reporting is a first-class, encouraged outcome.
+
+### Pre-flight gate — a candidate must clear ALL THREE before you start work
+1. **Real.** Reproduce the bug or trace its reachability in the actual code first. Don't fix what a
+   log line or a hunch *suggests* — confirm it exists. (We once nearly "fixed" a capture-storm loop
+   that didn't exist; a 40s probe showed zero events. There is no periodic capture loop.)
+2. **Verifiable from this rig.** Either pure Core logic covered by Swift Testing, or a change whose
+   correctness you can prove without seeing the menu bar. This machine **cannot** see the bar
+   (`screencapture` of the strip returns black) and **cannot** signal an Xcode-launched instance.
+   Anything provable only on-device goes to "Needs hardware verification" — never ship it blind.
+3. **Low blast radius.** Prefer pure Core behind an existing seam. Be very cautious touching the
+   capture / synthesized-move / floating-bar paths or the permission-free cosmetic baseline.
+
+If no candidate clears all three, the correct turn is a one-line status ("no safe high-value work
+this fire; top blocked items are X, Y — need hardware QA / user input") and **stop**.
+
+### Hard "do not" list
+- **Do not change the attribution label or any persistence key.** The owner-label string is the key
+  for Hidden/Shown intent (`ItemControlStore`) and aliases (`ItemAliasStore`); changing how a key is
+  formed silently evaporates every user's saved config. This is the scariest landmine here.
+- **Do not re-add removed features** (search, section dividers, reveal-on-hover) — see **Removed**.
+  NOTE: the old plan file `~/.claude/plans/polished-nibbling-pizza.md` still *describes* search and
+  the read-only picker — it is stale; CLAUDE.md is the source of truth, not the plan.
+- **Do not weaken, skip, or delete a test to get green.** A failing test is a finding, not an
+  obstacle. Fix the root cause or report it.
+- **Do not invent features or add knobs.** The user prefers *removing* options. New features need
+  sign-off; the loop's default lane is bug-fixing, verifiable hardening, and honest docs.
+- **Do not break locked decisions:** macOS 26 only; MIT clean-room (study Ice/Bartender for
+  mechanism/UX only, copy no code); the cosmetic baseline must survive any OS change.
+
+### Definition of done for a fire
+Build + the full test suite green; security scan (`scan_diff`) clean on the diff; one focused commit
+with a surgical diff (every changed line traces to the task); CLAUDE.md updated **honestly** — mark
+something RESOLVED only when it is actually verified (distinguish "pure + tested" from "compiles, but
+needs hardware verification"; never call a compile a verification). Git rules: never `git push` /
+force-push / rewrite pushed history; commits use the GitHub noreply email.
+
+### Circuit breakers — stop and report instead of pushing through
+- Backlog has no item that clears the pre-flight gate → report and idle.
+- The only work left is high-blast-radius **and** unverifiable here → surface it for a
+  hardware/human session; don't attempt it blind.
+- You've churned the same area several fires running with no user feedback → stop and ask.
+- A change would require disabling a safety check, a test, or a guard to land → stop and ask.
+
 ## Architecture (the seam is the point)
 
 Every OS-touching capability sits behind a protocol so the fragile parts are mockable and the
