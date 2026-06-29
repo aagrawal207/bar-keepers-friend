@@ -348,6 +348,25 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
+- **Capture returns 0/N, deterministically (new evidence 2026-06-29).** A live standalone-built run
+  logged at 10:22 (`~/Library/Logs/BarKeepersFriend.log`) shows the full-display grab SUCCEEDING
+  (`capture: full display 3024x1964 px (scale 2.0)`) but every strip crop coming back blank —
+  `capture: strip-cropped 0/9 … opaque[]` empty on *all three* retry attempts, then `stalled at 0/9`.
+  The monotonic cache masks it (`glyphs=6 appIconFallback=3` from an earlier good capture), so the
+  bar still looks populated. This is sharper than the old "oscillates 7/7→0/7" note: it's now a
+  *consistent* 0/N, which points at the composited menu-bar glyphs being absent from the
+  ScreenCaptureKit full-display image on this Tahoe rig (the strip is wallpaper-only) — i.e. a
+  capture-source problem, NOT a keying-threshold tuning bug in `removingBackground`. Frames look
+  correct (e.g. `178360=46x33@766`), so cropping geometry is fine. **Why this can't be fixed from an
+  agent:** capture is the highest-blast-radius path, the fix is unverifiable here (`screencapture` of
+  the strip is black on this rig), and the only running instance is Xcode-launched (state `SX`, can't
+  be signalled for a `kill -USR1` diag). **Hardware-session next steps:** (1) launch the binary
+  directly with `BKF_DUMP_CROPS=1` and inspect a `BKF-crop-*.png` — is it wallpaper-only (capture
+  source) or a real glyph the keying drops (tuning)? (2) if the source is blank, try a per-item
+  `SCContentFilter` of just the status windows, or the legacy `CGWindowListCreateImage` of the status
+  layer, instead of the full-display grab; (3) compare with Screen Recording freshly re-granted (the
+  Sequoia/Tahoe monthly re-prompt can silently lapse it — `CGPreflightScreenCaptureAccess` only
+  reflects launch-time state).
 
 ### Features not yet built (from the plan, roughly prioritized)
 
