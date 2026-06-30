@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **221 tests, 24 suites**).
+- Test: same command with `test` (currently **224 tests, 24 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -194,6 +194,28 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `.lapsed` as "was granted" too, so a lapse stays sticky across repeated ungranted polls; a fresh
   `.granted` from the probe still wins and clears it. Pure Core, behind the `PermissionProbe` seam,
   one-line condition change + 2 tests (sticky across 3 polls; re-grant clears it).
+- **[RESOLVED 2026-06-30] REGRESSION (introduced by `02a7cc8`): 7 real third-party items vanished
+  from the floating bar ("No hidden items" while the menu bar was near-empty).** User-reported with a
+  screenshot; reproduced from live `CGWindowListCopyWindowInfo` enumeration — 7 status windows pushed
+  off-screen at x=-804…-605, all reporting raw `owner="Control Center"`, yet the bar showed nothing.
+  Root cause: `02a7cc8` added the display name `"Control Center"` to `ImmovableItems
+  .denylistedOwnerLabels` to protect the *real* Control Center from being MOVED — correct for the move
+  path, which attributes snapshots to their true owner FIRST. But `HiddenItemsResolver.hiddenItems`
+  (the floating-bar resolver) runs on RAW, pre-attribution snapshots (`captureAndCache` calls
+  `attribute()` AFTER the resolver), and on Tahoe (FB18327911) raw `kCGWindowOwnerName` is the bogus
+  blanket `"Control Center"` for MANY genuine third-party items. So the resolver's `!isImmovable`
+  filter (a dormant no-op on raw labels since `5a06887`, which `02a7cc8` accidentally activated)
+  dropped all 7. They were cosmetically hidden but unreachable. Fixed by splitting the predicate:
+  `ImmovableItems.isImmovable` (full, for ATTRIBUTED callers — the move planner + Settings picker) vs
+  new `isImmovableOnRawSnapshot` (reverse-DNS ids + title fragments only, NO display-name label) for
+  the raw resolver; `hiddenItems` now calls the raw-safe variant. The real Control Center is excluded
+  from the hidden set by POSITION (it lives right of the anchor) and the move path's denylist is
+  untouched, so CC still can't be moved. Pure Core + 3 tests (raw "Control Center" third-party items
+  kept; raw-safe still drops reverse-DNS/titles; full vs raw split pinned). Design adversarially
+  verified via workflow (Approach B — split predicate — chosen over remove-filter and
+  attribute-first; the latter would have tripled hot-path AX cost). *Logic proven by unit tests;
+  on-device confirmation that the 7 items reappear pending a relaunch of the new build (the live
+  instance, PID 10650, is the old binary).*
 - **[RESOLVED 2026-06-29] The immovable-items bundle-id denylist never matched, so Control Center
   could be moved.** `ImmovableItems.denylistedBundleIDs` holds reverse-DNS ids
   (`com.apple.controlcenter`, …), but `MenuBarItemSnapshot.ownerBundleID` is populated with a

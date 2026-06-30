@@ -36,13 +36,32 @@ import Testing
         #expect(hidden.map(\.windowID) == [1])
     }
 
-    @Test func excludesImmovableSystemItems() {
+    @Test func excludesRawSafeImmovableSystemItems() {
+        // The resolver runs on RAW snapshots, so it uses the raw-safe immovability predicate:
+        // a reverse-DNS id (com.apple.controlcenter) is still a trustworthy signal and is dropped.
         let items = [
             item(id: 1, x: 100, bundle: "com.dropbox.Dropbox"),
             item(id: 2, x: 200, bundle: "com.apple.controlcenter"),
         ]
         let hidden = HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 1000)
         #expect(hidden.map(\.windowID) == [1])
+    }
+
+    @Test func keepsThirdPartyItemsRawLabeledControlCenter() {
+        // Regression (the 7-missing-items bug, commit 02a7cc8): on Tahoe (FB18327911) MANY genuine
+        // third-party items report the bogus blanket owner "Control Center" in the RAW enumeration
+        // the resolver sees, until attribution corrects them. The resolver must NOT drop them via
+        // the display-name denylist — doing so left 7 real items pushed off-screen yet absent from
+        // the bar ("No hidden items"). The real Control Center is excluded by POSITION (right of the
+        // anchor), and the display-name denylist still applies on ATTRIBUTED snapshots in the move
+        // and picker paths.
+        let items = [
+            item(id: 1, x: 100, bundle: "Control Center"),   // really a third-party item (raw label)
+            item(id: 2, x: 200, bundle: "Control Center"),
+            item(id: 3, x: 1100, bundle: "Control Center"),  // real CC, right of anchor at 1000
+        ]
+        let hidden = HiddenItemsResolver.hiddenItems(from: items, leftOfAnchorX: 1000)
+        #expect(hidden.map(\.windowID) == [1, 2])
     }
 
     @Test func ordersLeftToRight() {

@@ -40,13 +40,30 @@ public enum ImmovableItems {
         "BentoBox",        // Control Center's container
     ]
 
-    /// Returns `true` if the given item must not be moved or hidden.
+    /// Returns `true` if the given item must not be moved or hidden. Call this on ATTRIBUTED
+    /// snapshots (post-`AXAttributionProvider`), where `ownerBundleID` is the item's real owner
+    /// label — so "Control Center" means the genuine Control Center. The move planner runs here.
     public static func isImmovable(_ item: MenuBarItemSnapshot) -> Bool {
         // `ownerBundleID` carries a display name in practice, so check it against BOTH the
         // display-name denylist (the one that actually fires) and the reverse-DNS list (a no-op
         // today, kept correct for any future caller that sets a real bundle id).
-        if let owner = item.ownerBundleID,
-           denylistedOwnerLabels.contains(owner) || denylistedBundleIDs.contains(owner) {
+        if let owner = item.ownerBundleID, denylistedOwnerLabels.contains(owner) {
+            return true
+        }
+        return isImmovableOnRawSnapshot(item)
+    }
+
+    /// Raw-safe immovability: the subset of `isImmovable`'s signals that are valid BEFORE
+    /// attribution. On Tahoe (FB18327911) the RAW `kCGWindowOwnerName` reports many genuine
+    /// third-party items as "Control Center", so the `denylistedOwnerLabels` display-name guard
+    /// must NOT run on raw snapshots — it would drop real, hideable items. The reverse-DNS
+    /// bundle-id set and the title-fragment list stay: a raw snapshot never carries a real
+    /// reverse-DNS id today (so that branch is an inert no-op, kept for any future raw caller that
+    /// does set one) and a real "Clock"/"iPhone Mirroring" title is a trustworthy signal on raw
+    /// input. The floating-bar resolver (which filters raw snapshots, attribution runs AFTER it)
+    /// uses this; the move planner uses the full `isImmovable` on attributed snapshots.
+    public static func isImmovableOnRawSnapshot(_ item: MenuBarItemSnapshot) -> Bool {
+        if let owner = item.ownerBundleID, denylistedBundleIDs.contains(owner) {
             return true
         }
         if let title = item.title {

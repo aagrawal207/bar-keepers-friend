@@ -20,8 +20,10 @@ public enum HiddenItemsResolver {
 
     /// Returns the hidden items: those lying entirely to the left of `anchorMinX` (the
     /// anchor control item's leading edge). The app's own control items are excluded by
-    /// window id AND by name prefix, and system items that must not be touched are dropped
-    /// via the immovable denylist.
+    /// window id AND by name prefix, and only RAW-SAFE immovable items (reverse-DNS ids /
+    /// title fragments — see `ImmovableItems.isImmovableOnRawSnapshot`) are dropped. We do NOT
+    /// apply the display-name denylist here: this runs on PRE-attribution snapshots, where on
+    /// Tahoe the bogus blanket "Control Center" label would drop genuine third-party items.
     ///
     /// Results are ordered left-to-right by position, the order the user sees in the menu bar.
     public static func hiddenItems(
@@ -34,7 +36,14 @@ public enum HiddenItemsResolver {
             .filter { isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop) }
             .filter { !controlItemWindowIDs.contains($0.windowID) }
             .filter { !isOwnControlItem($0) }
-            .filter { !ImmovableItems.isImmovable($0) }
+            // RAW-SAFE immovability only. This resolver runs on PRE-attribution snapshots, where on
+            // Tahoe (FB18327911) many genuine third-party items carry the bogus blanket owner label
+            // "Control Center"; the full `isImmovable` display-name guard would drop every one of
+            // them (the 7-missing-items regression from commit 02a7cc8). The raw-safe variant keeps
+            // only the signals trustworthy before attribution (reverse-DNS ids + title fragments).
+            // Real Control Center modules live right of the anchor and are excluded by position
+            // below; the move planner still applies the FULL denylist on attributed snapshots.
+            .filter { !ImmovableItems.isImmovableOnRawSnapshot($0) }
             .filter { $0.frame.maxX <= anchorMinX }
             .sorted { $0.frame.minX < $1.frame.minX }
     }

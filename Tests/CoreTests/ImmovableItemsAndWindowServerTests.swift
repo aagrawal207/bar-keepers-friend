@@ -49,6 +49,17 @@ import Testing
         #expect(ImmovableItems.isImmovable(item(id: 1, bundle: nil, title: "iPhone Mirroring")))
     }
 
+    @Test func rawSnapshotImmovabilityIgnoresControlCenterDisplayLabel() {
+        #expect(!ImmovableItems.isImmovableOnRawSnapshot(item(id: 1, bundle: "Control Center")))
+        #expect(ImmovableItems.isImmovable(item(id: 1, bundle: "Control Center")))
+    }
+
+    @Test func rawSnapshotStillBlocksReverseDNSAndTitles() {
+        #expect(ImmovableItems.isImmovableOnRawSnapshot(item(id: 1, bundle: "com.apple.controlcenter")))
+        #expect(ImmovableItems.isImmovableOnRawSnapshot(item(id: 2, bundle: nil, title: "Clock 12:45")))
+        #expect(ImmovableItems.isImmovableOnRawSnapshot(item(id: 3, bundle: nil, title: "iPhone Mirroring")))
+    }
+
     @Test func filterKeepsOnlyMovableItems() {
         let items = [
             item(id: 1, bundle: "com.dropbox.Dropbox"),
