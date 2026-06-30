@@ -694,17 +694,7 @@ final class FloatingBarController {
 
             // Re-find the item by window id to get its current (on-screen) frame.
             let snapshots = (try? windowServer.menuBarItems()) ?? []
-            let raw = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
-            // The click now ROUTES BY PID through the scromble relay (no cursor warp), so the
-            // snapshot must carry the item's REAL attributed owning pid — not the broken
-            // Control-Center pid the raw re-enumeration reports on Tahoe (FB18327911). Take the
-            // fresh on-screen frame from the raw re-read but the attributed pid from the cache
-            // (`windowIDToPID`, built from the attributed `cachedHiddenOrder`); fall back to the
-            // cached snapshot's pid, then the raw pid, so a missing entry still posts something.
-            let attributedPID = windowIDToPID[raw.windowID]
-                ?? cachedHiddenOrder.first { $0.windowID == raw.windowID }?.ownerPID
-                ?? raw.ownerPID
-            let current = raw.attributed(bundleID: raw.ownerBundleID, pid: attributedPID)
+            let current = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
             // On-screen is relative to the item's OWN display: a display left of/above the primary
             // has a negative global x-origin, so a revealed item there has minX < 0 yet is fully
             // on-screen. Resolve the display origin from the item's (now-revealed) midpoint.

@@ -178,29 +178,33 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
-- **[AWAITING LIVE VERIFICATION 2026-06-30] Activation click warped the cursor ("the whole mouse
-  moves").** User-reported: clicking a mirrored item visibly darts the pointer into the menu bar and
-  back. Root cause: `SystemWindowServer.click` warped the REAL cursor onto the item, posted a plain
-  position-based click, and warped back — because status-item hit-testing tracks the physical pointer.
-  The `CGDisplayHideCursor` meant to mask it is a no-op for our `.nonactivatingPanel` (honored only
-  while foreground). **Fix (user greenlit "build it, I verify live"):** route the activation click by
-  **windowID** through the existing `scrombleEvent` relay + `stampWindowID` — the exact mechanism the
-  MOVE already uses — so the click is delivered to the item's owning process with NO cursor warp at
-  all. Plain (no-modifier) left down/up posted at the item centre (so the menu anchors there) but
-  routed by id. This is the documented private-API direction (memory `bkf-private-api-direction` item
-  #3: "route the click by windowID like the MOVE already does … so no cursor warp at all"). The click
-  needs the item's REAL attributed pid (the relay round-trips to it); `activate()` now threads the
-  attributed pid from `windowIDToPID`/`cachedHiddenOrder` instead of the raw re-enumeration's broken
-  Control-Center pid. Builds clean, 234 tests green (the click is behind the `WindowServer` seam;
-  `FakeWindowServer` just records the id). **NOT verified working** — whether a windowID-routed plain
-  click actually OPENS the owning app's menu (vs. the warp-based click that did) can only be seen on
-  the real menu bar, which this rig can't. Relaunched standalone (PID 14697) for the user to confirm:
-  (a) menu opens, (b) cursor stays put. If the menu does NOT open, the fallback is to revert to the
-  warp path (git `093c3d2`) or keep warp behind a pref. **Do not mark RESOLVED until the user confirms
-  a menu opens.** *Related follow-ups deferred until this is confirmed: (#2) the strip still reveals
-  on-screen during activation ("menu bar items pop up again") — only worth changing once we know the
-  windowID click works; (#3) the displaced Battery CC-module still sits in the bar — separate
-  hardware-QA item below.*
+- **[OPEN 2026-06-30] Activation click visibly moves the cursor ("the whole mouse moves"), and some
+  items' menus don't open.** User-reported. The activation click (`SystemWindowServer.click`) warps
+  the REAL pointer onto the item, posts a positioned click, warps back — because status-item
+  hit-testing tracks the physical pointer and the owning app anchors its menu where the cursor is.
+  The `CGDisplayHideCursor` meant to mask the warp is a no-op for our `.nonactivatingPanel` (honored
+  only while foreground), so the dart-and-return is visible.
+  - **ATTEMPT 1 (commit `987c3d6`) — FAILED LIVE, REVERTED (this commit).** Tried routing the click
+    by windowID through the `scrombleEvent` relay (like the MOVE), per the `bkf-private-api-direction`
+    memo's premise "route by windowID → no cursor warp at all." On-device the user reported it was
+    **worse**: the cursor still moved (and now stayed displaced — I posted at the item centre and
+    dropped the warp-back), and only SOME menus opened. **Why it can't work as imagined:** posting any
+    `CGEvent` with a `mouseCursorPosition` MOVES the system cursor regardless of windowID stamping —
+    that's why the MOVE path itself still hides+warps-back the cursor (`move()` L120-128, memo line 20
+    "Cursor hidden + warped back, never dragged"). And a windowID-routed *plain* click is less reliable
+    at opening a menu than a real positioned click — the server's by-windowID special-casing is for the
+    ⌘-drag rearrange, not a menu-open. So the premise was wrong; reverted to the known-good warp click
+    (opens menus reliably; cursor flickers but returns). Lesson recorded so no future fire retries it.
+  - **REAL next option (NOT yet attempted): disassociate the HID cursor during the warp.** Wrap the
+    existing warp click in `CGAssociateMouseAndMouseCursorPosition(false)` … `(true)` so the synthetic
+    event posts at the item position WITHOUT the visible hardware cursor following — the "batch cursor
+    guard" pattern already noted as verified-safe in `bkf-private-api-direction` NEXT #2. This keeps
+    the menu-opening reliability of the positioned click (unchanged) while hiding the motion. Small,
+    contained change to the known-good path — but still fragile + on-device-only verifiable, so it
+    needs a live user check too. Deferred to a deliberate attempt, not piled on after this revert.
+  - *Related, still open: (#2) activation reveals the strip on-screen ("menu bar items pop up again")
+    — inherent to needing the menu on-screen; revisit only with a confirmed click path. (#3) displaced
+    Battery CC-module still in the bar — separate hardware-QA item below.*
 
 - **[RESOLVED 2026-06-30] "Hide All" swept Control Center modules + BKF itself into the hidden set,
   so reconcile thrashed forever and the app became unusable** (user-reported with 3 screenshots:

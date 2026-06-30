@@ -235,31 +235,14 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     /// itself is faster, so this is generous headroom that still can't wedge the per-item loop.
     private static let scrombleTimeout: TimeInterval = 0.1
 
-    /// Synthesizes a click on the given status item, routed by **windowID** to the item's owning
-    /// process — the same delivery mechanism as `move`, so the physical cursor never moves.
+    /// Synthesizes a left click at the centre of the item's frame.
     ///
-    /// ## Why this changed (2026-06-30)
+    /// The item must be ON-SCREEN: a click at an off-screen point would open the item's menu
+    /// off-screen. The floating bar therefore reveals the hidden section before routing a
+    /// click here. Requires Accessibility permission to post events into other processes.
     ///
-    /// The OLD path warped the real pointer onto the item, posted a plain click, then warped it
-    /// back: a position-based click only lands where the cursor physically is, because status-item
-    /// hit-testing tracks the real pointer. We hid the cursor across the warp, but the hide is a
-    /// no-op for our `.nonactivatingPanel` (it's only honored while foreground), so the user saw the
-    /// pointer dart into the menu bar and back on every activation — the "the whole mouse moves"
-    /// complaint. The MOVE gesture already side-steps this by routing on a **windowID stamped into
-    /// the event fields** (91/92/0x33) and round-tripping through the owning process (the "scromble"
-    /// relay) so the window server treats the synthetic event as real — no cursor involved. This
-    /// reuses that exact mechanism for the activation click: a plain (no-modifier) left down/up,
-    /// stamped with the item's windowID and delivered to its pid, so the menu opens with the pointer
-    /// untouched. This is the documented private-API direction (replace the warp workaround).
-    ///
-    /// `item.ownerPID` MUST be the item's REAL (attributed) owning pid, not Tahoe's blanket
-    /// Control-Center pid (FB18327911) — the relay round-trips to that pid, so a wrong pid taps the
-    /// wrong process and the click is lost. The caller threads the attributed pid in.
-    ///
-    /// The item must still be ON-SCREEN: the owning app anchors its menu at the item's location, so
-    /// the floating bar reveals the hidden section first (an off-screen menu would be invisible).
-    /// Frames are already top-left global, the space `CGEvent` positions use, so no flip is needed.
-    /// Requires Accessibility to post events into other processes.
+    /// Menu bar item frames are already in the top-left global coordinate space that
+    /// `CGEvent` mouse positions use, so no flipping is needed.
     var canSynthesizeClicks: Bool { AXIsProcessTrusted() }
 
     func click(item: MenuBarItemSnapshot) throws {
@@ -278,10 +261,23 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         guard let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .privateState) else {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
-        // Post the click AT the item's centre so the opened menu anchors there, but ROUTE it by
-        // windowID — the pointer is never warped, so the user sees no cursor jump. No modifier: a
-        // plain click means "open this item", vs. the move's ⌘-down which means "rearrange it".
         let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
+        // Save the cursor's current position BEFORE warping, in CG global (top-left) space —
+        // the same space as `centre` and the warp, so no coordinate flip and multi-display
+        // safe. (NSEvent.mouseLocation is AppKit bottom-left and would need per-screen flipping.)
+        // If this read fails we have NO point to warp back to, so we must not warp the cursor onto
+        // the item at all — doing so would strand the pointer in the menu bar (the warp below was
+        // previously unconditional while the restore was guarded, which is exactly that bug). Bail
+        // cleanly instead: a nil read here is a degraded state where activation can't complete
+        // tidily anyway, and a failed click is recoverable where a parked cursor is a visible glitch.
+        guard let savedCursor = CGEvent(source: nil)?.location else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+
+        // Build the click events BEFORE touching the cursor, so the pointer spends the absolute
+        // minimum time displaced (warp → post → restore with no allocation in between). This
+        // shrinks the visible jump to a sub-frame blip on its own — and on the throw path we
+        // never moved the cursor at all.
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
             let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: centre, mouseButton: .left)
@@ -290,13 +286,30 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         }
         down.setIntegerValueField(.mouseEventClickState, value: 1)
         up.setIntegerValueField(.mouseEventClickState, value: 1)
-        stampWindowID(item.windowID, pid: item.ownerPID, into: down)
-        stampWindowID(item.windowID, pid: item.ownerPID, into: up)
-        // Deliver through the scromble relay (makes the synthetic event "real" to the owning
-        // process); on relay-setup failure fall back to a direct stamped post so we still emit
-        // something — the same primary/fallback shape as the move's `postMoveGesture`.
-        if !scrombleEvent(down, toPid: item.ownerPID, timeout: Self.scrombleTimeout) { down.post(tap: .cgSessionEventTap) }
-        if !scrombleEvent(up, toPid: item.ownerPID, timeout: Self.scrombleTimeout) { up.post(tap: .cgSessionEventTap) }
+
+        // Hide the cursor across the warp→click→restore so the user never SEES it dart into the
+        // menu bar and back — the jarring part of activation. We still physically move the pointer
+        // (status-item hit-testing tracks the REAL cursor, so the warp is unavoidable), but it's
+        // hidden. `CGDisplayHideCursor`/`ShowCursor` are reference-counted; `defer` balances the
+        // show on every exit so we can never strand a hidden cursor. NOTE: `CGDisplayHideCursor`
+        // is honored only while the calling app is foreground, and our panel is a
+        // .nonactivatingPanel (we don't steal focus), so the hide may no-op — which is exactly why
+        // the events are pre-built and the cursor is restored immediately, bounding any still-
+        // visible motion to a single-frame flicker rather than a travel-and-return.
+        CGDisplayHideCursor(kCGNullDirectDisplay)
+        defer { CGDisplayShowCursor(kCGNullDirectDisplay) }
+
+        // Warp onto the item, post via the session tap (the .cghidEventTap HID layer bypasses the
+        // dispatcher the menu bar's tracking loop listens on, which is why the old path silently
+        // failed), then immediately warp back to where the user left it so the pointer doesn't
+        // stay parked in the menu bar. The warp emits no move event and the just-opened menu's
+        // modal loop doesn't dismiss on cursor motion, so the restore is safe with no delay.
+        // `savedCursor` is guaranteed valid (we bailed above if the read failed), so the warp is
+        // always paired with a restore — the pointer never stays parked on the item.
+        CGWarpMouseCursorPosition(centre)
+        down.post(tap: .cgSessionEventTap)
+        up.post(tap: .cgSessionEventTap)
+        CGWarpMouseCursorPosition(savedCursor)
     }
 }
 
