@@ -499,9 +499,14 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   broader `sectionInUse`, so a user item-toggle can still collapse a section an activation revealed
   for an open menu — by design (reconcile owns its reveal→move→collapse), but worth revisiting.
 - **[LOW, open] `colorAlpha` bbox test skips the first/last crop columns** (`IconCaptureService`
-  ~L225): a thin colored badge touching the crop edge can lose its outer column, and `p-4` at `x==0`
-  is a latent out-of-bounds-row neighbor read. Impact bounded by the 2pt pad. Cleanup; hard to
-  unit-test (needs pixel fixtures). Confirmed by the audit.
+  ~L225): a thin colored badge touching the crop edge can lose its outer column. Impact bounded by
+  the 2pt pad. Cleanup; hard to unit-test (needs pixel fixtures). Confirmed by the audit. NOTE
+  (2026-06-30): re-read the code — the `p-4` "latent OOB row read at x==0" mentioned in older notes
+  is NOT live: the `x > 0, x < w - 1` guard on L225 means `colorAlpha(p-4)`/`(p+4)` are never called
+  at the edge columns, so there's no out-of-bounds access today. This is purely the cosmetic
+  edge-column skip, not a safety bug — don't chase it as one. Also: the fix lives on the fragile
+  capture keying path whose *visual* result can't be verified from this rig, so it's not a clean
+  loop candidate even though the math could be characterization-tested.
 - **[RESOLVED 2026-06-28] Items on a display stacked above/below the primary were dropped.** The
   plausibility filter (`isPlausibleMenuBarItem`) used an ABSOLUTE `minY ≤ 40` to reject windows far
   down the screen — correct for a transient notification window, but it conflated "near the top of
