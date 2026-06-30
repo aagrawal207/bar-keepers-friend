@@ -86,7 +86,7 @@ pure logic (~70%) is unit-tested without launching the app.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **224 tests, 24 suites**).
+- Test: same command with `test` (currently **228 tests, 25 suites**).
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -194,6 +194,29 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `.lapsed` as "was granted" too, so a lapse stays sticky across repeated ungranted polls; a fresh
   `.granted` from the probe still wins and clears it. Pure Core, behind the `PermissionProbe` seam,
   one-line condition change + 2 tests (sticky across 3 polls; re-grant clears it).
+- **[RESOLVED 2026-06-30] Cold-launch glyphs never filled in — the bar showed app-icon fallbacks
+  until an incidental refresh.** Reproduced on-device with a live signalable instance: on a cold
+  launch the menu-bar glyphs don't composite into the capturable display image for ~tens of seconds
+  (measured ~60s this session: launch 15:31:30 → first glyphs 15:32:30), but the launch warm-up (its
+  clean pass + a fallback pass 220ms later) and the in-loop capture retries (≤6×180ms, bailing after
+  2 stalled) ALL finish within ~1.5s — every one captures 0 glyphs. Nothing then re-captured until an
+  incidental event (screen-param change, user open, diag) happened to run after the compositor warmed,
+  so the bar sat on app-icon fallbacks. (This is the corrected diagnosis of the old "deterministic
+  0/N / wallpaper-only" note — falsified because warm captures DO pull real glyphs.) Fixed with a
+  small, bounded set of escalating warm-up retries: pure `WarmUpRetrySchedule` in Core (offsets
+  2s/5s/12s/25s/45s/70s — bracketing the measured ~60s on both sides, escalating, ≤6 so the privacy
+  indicator flashes at most a handful of extra times) consumed by `CosmeticHideEngine.scheduleWarmUp-
+  Retries`/`fireWarmUpRetry`. Each retry runs ONE more `runCaptureSequence` warm-up pass, but only
+  while `hasIncompleteGlyphs` is true — the set self-cancels the instant glyphs complete, and
+  `cancelWarmUpRetries()` drops the rest when the user opens the bar, a reconcile takes over, the app
+  is paused, the bar is disabled, or on uninstall. Rides the existing serialized `captureChain`/epoch
+  machinery (reuses the exact launch warm-up closure), so it can't race a refresh or capture under an
+  open panel. Pure schedule + 4 tests (bounded ≤6, strictly escalating, positive, window straddles
+  the measured warm-up). Design adversarially verified via workflow (Approach A — escalating
+  scheduled retries — verifiers confirmed rides-chain / self-cancels / bounded). *On-device: a
+  relaunch landed glyphs=3 autonomously with no manual trigger; the true cold-from-boot gap (~60s)
+  is bracketed by the schedule but a reboot-level repro wasn't run — the logic + reproduction are
+  proven, the full boot path is the residual.*
 - **[RESOLVED 2026-06-30] REGRESSION (introduced by `02a7cc8`): 7 real third-party items vanished
   from the floating bar ("No hidden items" while the menu bar was near-empty).** User-reported with a
   screenshot; reproduced from live `CGWindowListCopyWindowInfo` enumeration — 7 status windows pushed
@@ -464,31 +487,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   fight `repairControlItemOrderIfNeeded`.
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
-- **Capture is TRANSIENT/timing-dependent, NOT a deterministic 0/N (corrected 2026-06-30 with
-  live evidence; supersedes the earlier "wallpaper-only capture-source" diagnosis).** A standalone,
-  signalable run on 2026-06-30 logged TWO capture sequences ~90s apart on the same display/scale with
-  near-identical frames: at 01:34 a cold sequence got `strip-cropped 0/10 … opaque[]` (empty, the old
-  "0/N"), but at 01:36 a warmed-up sequence got `6/11`, `5/11`, then `7/11` with **real, non-zero
-  opaque pixel counts** (e.g. `opaque[176603=457,176597=249,178360=125,176599=677,…]`). That single
-  fact **falsifies** the previous note's core claim — if the menu-bar glyphs were genuinely absent
-  from the ScreenCaptureKit image ("the strip is wallpaper-only, a capture-source problem"), a later
-  grab could not have pulled 7 real glyphs with hundreds of opaque pixels each. So:
-  - The signature is **partial + oscillating + warm-up-sensitive** (cold-after-launch → 0; settled →
-    most glyphs), which points back at **timing / capture warm-up / retry cadence**, NOT a dead
-    capture source and NOT (on this evidence) a `removingBackground` keying threshold — the glyphs
-    that DO land key fine.
-  - Frames are always correct (`46x33@593` etc.), so cropping geometry remains fine.
-  - Screen Recording is clearly granted on this rig (non-zero opaque pixels prove the strip is
-    captured), so the "freshly re-grant SR" step is not the lead.
-  **Still not fixed blind from here:** capture is the highest-blast-radius path and the *intermittency*
-  makes any change hard to prove from logs alone. **Revised hardware-session next steps:** (1) reproduce
-  the cold→warm transition deliberately — capture immediately on launch vs after a few seconds — and
-  see if the 0/N only ever happens cold; (2) if so, the fix is in the warm-up/retry sequencing (e.g.
-  an initial discard-and-retry, or gating the first capture on the stream being ready), NOT swapping
-  the capture source; (3) `BKF_DUMP_CROPS=1` on a COLD launch to confirm whether the cold crop is
-  wallpaper (source not ready yet) vs a real-but-keyed-out glyph. Do NOT act on the old "replace the
-  capture source with per-item SCContentFilter / CGWindowListCreateImage" plan — it was premised on
-  the now-falsified wallpaper-only theory.
+- **Capture cold-launch warm-up — RESOLVED 2026-06-30 (see the Bugs entry "cold-launch glyphs never
+  filled in").** The earlier "deterministic 0/N / wallpaper-only capture-source" theory was falsified
+  by live evidence (warm captures pull real glyphs); the true cause was timing — glyphs don't
+  composite for ~tens of seconds after a cold launch, while the warm-up + retries all finished at
+  ~1.5s. Fixed with bounded escalating warm-up retries. Kept here only as a pointer.
 
 ### Features not yet built (from the plan, roughly prioritized)
 

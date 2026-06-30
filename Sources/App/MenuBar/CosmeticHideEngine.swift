@@ -46,6 +46,17 @@ final class CosmeticHideEngine {
 
     private var autoRehideWorkItem: DispatchWorkItem?
 
+    /// Pending escalating warm-up retries scheduled by `warmUpFloatingBarCache`, one per
+    /// `WarmUpRetrySchedule` offset. They bridge the COLD-LAUNCH glyph gap: on a cold launch the
+    /// menu-bar glyphs don't composite into the capturable image for ~tens of seconds, long after
+    /// the launch warm-up (and its in-loop retries) have all finished at ~1.5s capturing 0 glyphs.
+    /// Each fires one more `runCaptureSequence` pass, but only WHILE glyphs are still incomplete —
+    /// each re-checks `hasIncompleteGlyphs` when it fires and self-cancels the rest once the set is
+    /// complete. Cancelled wholesale (`cancelWarmUpRetries`) when the user opens the bar, a reconcile
+    /// runs, the app is paused, the bar is disabled, or on uninstall — so they never fight a
+    /// user-driven open or multiply the privacy-indicator flashes beyond the bounded schedule.
+    private var warmUpRetryWorkItems: [DispatchWorkItem] = []
+
     /// Coalesces bursts of `didChangeScreenParametersNotification`. macOS posts that notification
     /// multiple times for a single user-visible change (display sleep/wake, mode negotiation, Stage
     /// Manager, an external display handshaking), and each one would otherwise drive a full
@@ -336,6 +347,7 @@ final class CosmeticHideEngine {
     func uninstall() {
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
+        cancelWarmUpRetries()
         if let anchor = anchorItem { NSStatusBar.system.removeStatusItem(anchor) }
         if let divider = hiddenDivider { NSStatusBar.system.removeStatusItem(divider) }
         anchorItem = nil
@@ -386,6 +398,71 @@ final class CosmeticHideEngine {
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
             }
         }
+        // Bridge the cold-launch glyph gap. The pass above (like all the warm-up + in-loop retries)
+        // finishes within ~1.5s; on a cold launch the menu-bar glyphs haven't composited into the
+        // capturable image yet, so it lands app-icon fallbacks. Schedule a SMALL, BOUNDED set of
+        // escalating retries that each run one more capture pass over the window where the
+        // compositor typically warms up — but only while glyphs are still incomplete.
+        scheduleWarmUpRetries()
+    }
+
+    /// Arms the escalating warm-up retries (`WarmUpRetrySchedule`). Each is a one-shot timer that,
+    /// when it fires, runs ONE more `runCaptureSequence` warm-up pass — but only if the bar still
+    /// has incomplete glyphs and isn't in active use. The moment a pass completes the set
+    /// (`hasIncompleteGlyphs == false`) the remaining timers cancel themselves, so a fast machine
+    /// pays for at most one or two extra captures and a slow one stops as soon as glyphs land. The
+    /// whole set is bounded by the schedule (at most `WarmUpRetrySchedule.count` extra captures, so
+    /// at most that many extra privacy-indicator flashes).
+    ///
+    /// Always starts from a clean slate (`cancelWarmUpRetries`) so a re-arm (e.g. the Settings
+    /// enable-at-runtime path calling `warmUpFloatingBarCache` again) can't stack two sets of timers.
+    private func scheduleWarmUpRetries() {
+        cancelWarmUpRetries()
+        guard preferences.useFloatingBar, floatingBar != nil else { return }
+        for offsetMs in WarmUpRetrySchedule.offsetsMs {
+            let work = DispatchWorkItem { [weak self] in self?.fireWarmUpRetry() }
+            warmUpRetryWorkItems.append(work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(offsetMs), execute: work)
+        }
+    }
+
+    /// One escalating warm-up retry firing. No-op (and cancels the rest) once glyphs are complete,
+    /// the bar is disabled, the app is paused, or the section is in active use — so it never fights
+    /// a user-driven open / an open menu, and self-cancels the instant the work is done.
+    private func fireWarmUpRetry() {
+        guard preferences.useFloatingBar, let bar = floatingBar, !isPaused else {
+            cancelWarmUpRetries()
+            return
+        }
+        // Glyphs are complete — nothing left to bridge. Drop the remaining timers.
+        guard bar.hasIncompleteGlyphs else {
+            cancelWarmUpRetries()
+            return
+        }
+        // The section is in active use (panel open, or an activation revealed it for an open menu):
+        // don't disturb it. Leave the LATER timers armed — by the time one of them fires the user
+        // may be done, glyphs may still need filling, and a calmer moment can pick it up.
+        guard !sectionInUse else { return }
+        // Re-use the very same serialized warm-up pass as launch (clean pass, then a
+        // fallback-allowing reconcile only if still incomplete), so it rides the captureChain/epoch
+        // machinery exactly like every other capture and can't race a refresh or a launch pass.
+        runCaptureSequence(forceCollapseAfter: true) { [weak self] in
+            guard let self, let bar = self.floatingBar else { return }
+            let anchorX = self.anchorFrame?.minX ?? 1115
+            await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
+            if bar.hasIncompleteGlyphs {
+                try? await Task.sleep(for: .milliseconds(220))
+                await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+            }
+        }
+    }
+
+    /// Cancels every pending warm-up retry. Called when the set completes, when the user opens the
+    /// bar / a reconcile takes over the divider, when the app is paused or the bar disabled, and on
+    /// uninstall — so a stale timer never drives a capture after warm-up is moot.
+    private func cancelWarmUpRetries() {
+        warmUpRetryWorkItems.forEach { $0.cancel() }
+        warmUpRetryWorkItems.removeAll()
     }
 
     /// Brings the real menu bar in line with the user's per-item Shown/Hidden intent, then
@@ -424,6 +501,15 @@ final class CosmeticHideEngine {
             return
         }
         DebugLog.log("reconcileHiddenItems: proceeding, hidden=\(preferences.itemControls.hiddenInMenuBar)")
+        // Drop the pending warm-up retries while THIS reconcile runs: its own reveal→move→capture
+        // sequence is about to fill the cache, and firing an escalating warm-up pass on top of it
+        // would just double the privacy-indicator flash. But do NOT assume reconcile finishes the
+        // glyphs — at launch this reconcile is called synchronously right after the warm-up (see
+        // install()), so its re-capture is just as COLD as the warm-up's and lands the same 0/N when
+        // the compositor hasn't warmed up yet. The reconcile body therefore RE-ARMS the schedule if
+        // its own capture still comes back incomplete (the cold-launch bridge that was the whole
+        // point). On the warm path the re-capture completes the glyphs and nothing is re-armed.
+        cancelWarmUpRetries()
         // Make sure our own control-item window ids are excluded from any move.
         publishControlItemWindowIDs()
         controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []
@@ -450,6 +536,17 @@ final class CosmeticHideEngine {
                 if bar.hasIncompleteGlyphs {
                     try? await Task.sleep(for: .milliseconds(220))
                     await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
+                }
+                // Cold-launch bridge. At launch this reconcile runs right after the warm-up, before
+                // the menu-bar glyphs have composited into the capturable image, so the re-capture
+                // above lands the same app-icon fallbacks the warm-up did. Re-arm the escalating
+                // retries so a later pass (once the compositor is warm) upgrades them to real glyphs;
+                // the schedule self-cancels the instant `hasIncompleteGlyphs` flips false. On the warm
+                // path glyphs are already complete here, so nothing is armed. `scheduleWarmUpRetries`
+                // is a no-op when the bar is disabled and clears any prior set first, so re-arming
+                // can't stack timers or fire after the feature is turned off.
+                if bar.hasIncompleteGlyphs {
+                    self.scheduleWarmUpRetries()
                 }
             }
         }
@@ -562,6 +659,9 @@ final class CosmeticHideEngine {
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
+            // Pausing stops all automated activity; the cold-launch warm-up retries are exactly that,
+            // so drop them rather than let one fire and no-op (or flash a reveal) while paused.
+            cancelWarmUpRetries()
             // Reveal in place: hide the mirror panel if open, drive the state machine to shown so no
             // stray refresh re-collapses it, and un-tuck the divider so left-of-anchor items return.
             floatingBar?.hide()
@@ -601,6 +701,12 @@ final class CosmeticHideEngine {
         // cancel here covers every re-open path.
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
+        // A deliberate user open takes over the bar: drop any pending cold-launch warm-up retries.
+        // The user is about to look at (or just toggled) the bar, so a later background warm-up pass
+        // must not reveal/re-hide the section or re-lay-it-out under them. If glyphs are still
+        // incomplete the on-screen-while-open re-capture and the existing event-driven refreshes
+        // remain the backstop, exactly as before this change.
+        cancelWarmUpRetries()
         // A click during the one-time launch capture: don't eat it (that felt broken), and don't
         // touch the divider/state machine (the capture is mid-reveal and owns it — collapsing now
         // would yank the section out from under the screenshot). Just show the panel; it renders a
