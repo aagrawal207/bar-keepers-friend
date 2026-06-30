@@ -202,11 +202,23 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   for 17 min (vs every ~40s before) — it converges. Pure Core + 6 tests (CC-module-by-pid, own-app-by-pid,
   unlisted-pid still moves, empty-set == label-only). *RESIDUAL (separate, pre-existing): the user's
   persisted `hiddenInMenuBar` still CONTAINS those bogus keys — the fix makes them inert no-ops (never
-  planned, never listed), so the app is usable and real items hide correctly, but "Show All" is the
-  clean-slate reset if wanted. NOT auto-purged (mutating persisted intent is the persistence-key
-  landmine). Also observed during the repro: an Accessibility-attribution LAPSE (all items briefly
-  attributed "Control Center" — the recurring Tahoe AX re-prompt), which is unrelated to this fix and
-  resolves when AX is healthy.*
+  planned, never listed). NOT auto-purged (mutating persisted intent is the persistence-key landmine).*
+  - **RE-VERIFIED 2026-06-30 ~14:53 (live PID 27050, 25 min after the fix):** reconcile has not
+    self-triggered since 19:45 UTC (anchor stable at 1559; pre-fix it fired every ~40s with the anchor
+    walking 993→3260→1356→…), and `BKF-bar.png` renders 6 real items with real glyphs (Karabiner-Menu,
+    Battery, Wisp, Amazon Persist, Maccy, Hammerspoon). Attribution also fully RECOVERED — the 14:01
+    "all Control Center" reading was the transient AX lapse, now resolved (all 7 items attribute to
+    distinct real owners), confirming it was never a code regression.
+  - **NEWLY FOUND — "Show All" can't recover a CC module the OLD buggy binary already displaced.**
+    The live diag shows **Battery** (pid 22986 = Control Center) sitting at x=1335, LEFT of the anchor
+    (1559) — i.e. dragged into the hidden section by the pre-fix thrash, so it now renders in the
+    floating bar. Because the planner now (correctly) refuses to move any pid-22986 item, "Show All"
+    sets its intent to Shown but CANNOT physically move it back — it stays stuck left until Control
+    Center relaunches (`killall ControlCenter`) or a reboot re-lays-out its modules. This is the right
+    trade (forbidding CC-module moves is what stopped the thrash; a "recover displaced CC module" move
+    would re-enter the exact un-relocatable-move territory we just removed, and is unverifiable from
+    this rig anyway — see "Needs hardware verification"). The earlier RESIDUAL line calling "Show All"
+    a full clean-slate reset was therefore incomplete for already-displaced CC modules; corrected here.
 
 > **Pure-Core audit clean (2026-06-30).** A full read-through of all 28 `Sources/Core` files this
 > fire found **no open Core bug** — every pure value type / planner / store / state machine is
@@ -546,6 +558,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     them correctly — smells like an Accessibility re-prompt lapse rather than a code regression.
     Don't touch attribution on this alone (it's the persistence-key landmine); confirm with AX
     freshly granted first.*
+- **Recover a CC module the old buggy binary displaced left of the anchor** (found 2026-06-30, see the
+  RESOLVED "Hide All" bug). A Control Center module dragged into the hidden section by the pre-fix
+  thrash (live: Battery at x=1335 < anchor 1559) can't be moved back, because the planner now refuses
+  all pid-22986 moves. Today's workaround is `killall ControlCenter` (or a reboot) — Control Center
+  re-lays-out its modules on the right. A code fix would mean a ONE-TIME, narrowly-scoped "evict a
+  CC-owned item that's wrongly left-of-anchor back to the right" path that bypasses the immovable-pid
+  guard — but that re-enters un-relocatable-move territory and is only verifiable on-device (whether
+  the CC module actually relocates can't be seen from this rig). Don't build it blind; needs a
+  hardware session to confirm the move even takes before trusting it.
 - **Control-item slot persistence via `Preferences.controlItemPositions`** — currently dead (see the
   doc-reconciliation gotcha): slots persist via AppKit's own UserDefaults keys + launch-repair, and
   this field is never written. If a deliberate status-item removal ever proves to lose the slot
