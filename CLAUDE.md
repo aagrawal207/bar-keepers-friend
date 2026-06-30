@@ -430,6 +430,13 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   (Wi-Fi, Battery, Sound, …) the attribution layer substitutes, which currently are NOT caught by
   `"Control Center"` and so could be individually movable. Don't add these blind — confirm the exact
   strings on-device first, then extend `denylistedOwnerLabels`.
+- **Control-item slot persistence via `Preferences.controlItemPositions`** — currently dead (see the
+  doc-reconciliation gotcha): slots persist via AppKit's own UserDefaults keys + launch-repair, and
+  this field is never written. If a deliberate status-item removal ever proves to lose the slot
+  on-device (the original motivation), wire `CosmeticHideEngine` to write the live slots into this
+  field via the already-present `onPreferencesChanged` seam and restore them in `install()`. Don't
+  build it blind — it touches the control-item lifecycle (can't be seen from this rig) and must not
+  fight `repairControlItemOrderIfNeeded`.
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
 - **Capture returns 0/N, deterministically (new evidence 2026-06-29).** A live standalone-built run
@@ -526,8 +533,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - Don't `pkill` an Xcode-launched instance (state `SX`); ask the user to press Stop.
 - Keep this file current: when you finish a feature move it to **Built**, when you find a bug add
   it under **Bugs**, when you remove something note it under **Removed**.
-- **Doc comments are reconciled with shipped reality (2026-06-28).** The old scaffolding
-  `AGENT: implement…` comments in `LayoutConfig`/`LayoutTransferService` and a stale
+- **Doc comments are reconciled with shipped reality (2026-06-28, extended 2026-06-29).** The old
+  scaffolding `AGENT: implement…` comments in `LayoutConfig`/`LayoutTransferService` and a stale
   `SystemWindowServer` header claiming move/click "throw `notImplemented`" were corrected — all
-  three are fully implemented (the move is verified on-device). If you add a new stubbed seam,
-  prefer a real type (`WindowServerError.notImplemented`) over a comment that can rot out of sync.
+  three are fully implemented (the move is verified on-device). 2026-06-29: also corrected two
+  comments that described an *unimplemented* mechanism as if live — `Preferences.controlItemPositions`
+  ("we cache them ourselves…") and `CosmeticHideEngine.onPreferencesChanged`. Neither is wired:
+  control-item slots are persisted **directly** under AppKit's `"NSStatusItem Preferred Position …"`
+  UserDefaults keys and self-healed on launch by `repairControlItemOrderIfNeeded`; `controlItemPositions`
+  is never written (always `[:]`) and `onPreferencesChanged` is never invoked. Both are retained
+  (the field is in the `Preferences`/`LayoutConfig` Codable shape; the callback is a pre-wired seam)
+  but now documented as unused. If you add a new stubbed seam, prefer a real type
+  (`WindowServerError.notImplemented`) over a comment that can rot out of sync.

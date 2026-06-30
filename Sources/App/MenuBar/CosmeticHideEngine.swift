@@ -36,6 +36,12 @@ final class CosmeticHideEngine {
 
     private var stateMachine: HideShowStateMachine
     private var preferences: Preferences
+    /// Callback to persist preference changes the engine itself makes. CURRENTLY UNUSED: the engine
+    /// mutates no persisted preference on its own — it rewrites the control-item slots directly under
+    /// AppKit's `UserDefaults` keys (`repairControlItemOrderIfNeeded`), and all user-facing changes
+    /// flow the other way (Settings → `apply(preferences:)`). Retained as a wired seam so a future
+    /// engine-originated change (e.g. persisting `controlItemPositions`) has somewhere to report to
+    /// without re-threading the call site; see the note on `Preferences.controlItemPositions`.
     private let onPreferencesChanged: (Preferences) -> Void
 
     private var autoRehideWorkItem: DispatchWorkItem?

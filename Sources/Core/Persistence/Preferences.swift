@@ -26,9 +26,17 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// genuinely open via AXShowMenu.
     public var useAXActivation: Bool
 
-    /// Persisted on-screen positions of the control items, keyed by autosave name. This
-    /// mirrors the values AppKit stores under "NSStatusItem Preferred Position <name>";
-    /// we cache them ourselves because removing a status item deletes AppKit's copy.
+    /// On-screen positions of the control items, keyed by autosave name, mirroring AppKit's
+    /// "NSStatusItem Preferred Position <name>" values.
+    ///
+    /// CURRENTLY UNUSED at runtime: the engine reads and rewrites those slots **directly** via
+    /// `UserDefaults` under AppKit's own keys (see `CosmeticHideEngine.repairControlItemOrderIfNeeded`,
+    /// which self-heals an inverted divider/anchor order on launch), and nothing reads or writes this
+    /// field. It is retained in the schema because it is part of the Codable `Preferences` and the
+    /// exported `LayoutConfig`, so dropping it would change the persisted/exported shape. The original
+    /// intent — caching the slots here so they survive a deliberate status-item removal (which deletes
+    /// AppKit's copy) — was superseded by the direct-UserDefaults + launch-repair approach and is not
+    /// wired; revisit only with on-device verification (see CLAUDE.md "Needs hardware verification").
     public var controlItemPositions: [String: Double]
 
     // MARK: - Global hotkey (toggle the floating bar)
