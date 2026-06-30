@@ -213,9 +213,12 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   untouched, so CC still can't be moved. Pure Core + 3 tests (raw "Control Center" third-party items
   kept; raw-safe still drops reverse-DNS/titles; full vs raw split pinned). Design adversarially
   verified via workflow (Approach B — split predicate — chosen over remove-filter and
-  attribute-first; the latter would have tripled hot-path AX cost). *Logic proven by unit tests;
-  on-device confirmation that the 7 items reappear pending a relaunch of the new build (the live
-  instance, PID 10650, is the old binary).*
+  attribute-first; the latter would have tripled hot-path AX cost). **CONFIRMED ON-DEVICE
+  2026-06-30:** relaunched the fixed build standalone; the resolver now reports `3 hidden -> 3
+  deduped` (vs the old binary's "No hidden items"/0), and the diag attributes all three correctly —
+  Neru, Karabiner-Menu, ACME (each `rawTitle:"Item-0"` → real `attributedOwner`), exactly the
+  genuine third-party items the buggy build dropped as "Control Center". The inverted control-item
+  order also self-healed on launch (anchor=470/divider=454 → 471) so the anchor returned on-screen.
 - **[RESOLVED 2026-06-29] The immovable-items bundle-id denylist never matched, so Control Center
   could be moved.** `ImmovableItems.denylistedBundleIDs` holds reverse-DNS ids
   (`com.apple.controlcenter`, …), but `MenuBarItemSnapshot.ownerBundleID` is populated with a
