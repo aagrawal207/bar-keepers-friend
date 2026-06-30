@@ -60,6 +60,35 @@ import Testing
         #expect(ImmovableItems.isImmovableOnRawSnapshot(item(id: 3, bundle: nil, title: "iPhone Mirroring")))
     }
 
+    private func pidItem(id: CGWindowID, pid: pid_t, bundle: String?) -> MenuBarItemSnapshot {
+        MenuBarItemSnapshot(
+            windowID: id, ownerPID: pid, ownerBundleID: bundle,
+            title: nil, frame: CGRect(x: 0, y: 0, width: 20, height: 22)
+        )
+    }
+
+    @Test func immovablePIDMakesAnyItemImmovableRegardlessOfLabel() {
+        // The whole point of the pid overload: a Control Center MODULE attributes to a localized
+        // label (e.g. "Battery") that the display-name denylist deliberately doesn't list, yet it
+        // shares Control Center's pid. Passing that pid catches it without enumerating module names.
+        let battery = pidItem(id: 1, pid: 501, bundle: "Battery")
+        #expect(!ImmovableItems.isImmovable(battery))                       // label alone: movable
+        #expect(ImmovableItems.isImmovable(battery, immovablePIDs: [501]))  // by pid: immovable
+    }
+
+    @Test func emptyImmovablePIDSetMatchesLabelOnlyBehavior() {
+        // With no pids, the overload must reduce exactly to the label/title check — a strict superset.
+        let maccy = pidItem(id: 1, pid: 999, bundle: "Maccy")
+        let cc = pidItem(id: 2, pid: 501, bundle: "Control Center")
+        #expect(ImmovableItems.isImmovable(maccy, immovablePIDs: []) == ImmovableItems.isImmovable(maccy))
+        #expect(ImmovableItems.isImmovable(cc, immovablePIDs: []) == ImmovableItems.isImmovable(cc))
+    }
+
+    @Test func immovablePIDDoesNotAffectAnUnlistedPID() {
+        let maccy = pidItem(id: 1, pid: 999, bundle: "Maccy")
+        #expect(!ImmovableItems.isImmovable(maccy, immovablePIDs: [501, 4242]))
+    }
+
     @Test func filterKeepsOnlyMovableItems() {
         let items = [
             item(id: 1, bundle: "com.dropbox.Dropbox"),

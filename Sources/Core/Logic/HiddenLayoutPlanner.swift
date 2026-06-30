@@ -52,6 +52,7 @@ public enum HiddenLayoutPlanner {
         anchorMaxX: CGFloat,
         controls: ItemControlStore,
         excludingWindowIDs: Set<CGWindowID> = [],
+        immovablePIDs: Set<pid_t> = [],
         displayXRange: ClosedRange<CGFloat>? = nil,
         displayMenuBarTop: CGFloat = 0
     ) -> [Move] {
@@ -80,8 +81,11 @@ public enum HiddenLayoutPlanner {
             guard HiddenItemsResolver.isPlausibleMenuBarItem(item, displayMenuBarTop: displayMenuBarTop) else { continue }
             // No stable identity → intent can't be keyed to it → leave it where the user put it.
             guard ItemControlStore.key(for: item) != nil else { continue }
-            // System items that corrupt the layout if moved are never targeted.
-            guard !ImmovableItems.isImmovable(item) else { continue }
+            // System items that corrupt the layout if moved are never targeted. Pass the
+            // immovable-pid set so every Control Center module (they all share Control Center's pid)
+            // and the app's own status windows are refused in one check — locale-independent, and it
+            // stops a stray "Hide All" from trying (and forever failing) to relocate them.
+            guard !ImmovableItems.isImmovable(item, immovablePIDs: immovablePIDs) else { continue }
             // Only move items the user has EXPLICITLY placed (Hidden or Shown). An item the user
             // never toggled has no intent, so we leave it exactly where it is — otherwise hiding a
             // single item would yank every other not-hidden item to the shown side of the anchor.

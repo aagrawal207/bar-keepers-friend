@@ -76,6 +76,12 @@ final class HiddenItemController {
             anchorMaxX: anchorMaxX,
             controls: controls,
             excludingWindowIDs: controlItemWindowIDs,
+            // Never plan a move for Control Center's modules (one shared pid) or our own status
+            // windows. Without this a "Hide All" that swept them in makes reconcile re-plan the same
+            // un-relocatable moves on every pass and never converge — the bug where the anchor walks
+            // across the bar and nothing settles. Snapshots are attributed just above, so each
+            // carries its real owning pid (the only state in which a pid set is valid).
+            immovablePIDs: ImmovableProcessIDs.current(),
             displayXRange: displayXRange,
             displayMenuBarTop: displayMenuBarTop
         )

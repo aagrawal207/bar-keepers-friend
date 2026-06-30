@@ -77,6 +77,56 @@ import Testing
         #expect(moves([controlCenter], controls).isEmpty)
     }
 
+    @Test func itemOwnedByAnImmovablePIDIsNeverMovedEvenIfMarkedHidden() {
+        // A Control Center module: a genuine third-party-looking label can still be attributed, but
+        // its owning pid is Control Center's, which is in the immovable set. It must never be planned
+        // — this is the "Hide All swept in Battery/Sound/Clock and reconcile thrashed forever" bug.
+        let ccModule = MenuBarItemSnapshot(
+            windowID: 7, ownerPID: 501, ownerBundleID: "Battery",
+            title: "Battery", frame: CGRect(x: 1100, y: 0, width: 22, height: 22)
+        )
+        var controls = ItemControlStore()
+        controls.setHidden(true, for: ccModule)
+        let result = HiddenLayoutPlanner.moves(
+            for: [ccModule], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls, immovablePIDs: [501]
+        )
+        #expect(result.isEmpty)
+    }
+
+    @Test func ownAppPIDIsNeverMovedEvenIfMarkedHidden() {
+        // Belt-and-suspenders for our own status windows beyond the window-id exclusion: if our own
+        // pid is in the immovable set, a marked-hidden own item is refused (moving our anchor would
+        // shift the very hide/show boundary and send reconcile into an endless re-plan loop).
+        let ownItem = MenuBarItemSnapshot(
+            windowID: 8, ownerPID: 4242, ownerBundleID: "Bar Keeper's Friend",
+            title: "BKFAnchor", frame: CGRect(x: 1100, y: 0, width: 22, height: 22)
+        )
+        var controls = ItemControlStore()
+        controls.setHidden(true, for: ownItem)
+        let result = HiddenLayoutPlanner.moves(
+            for: [ownItem], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls, immovablePIDs: [4242]
+        )
+        #expect(result.isEmpty)
+    }
+
+    @Test func itemWhosePIDIsNotImmovableStillMovesNormally() {
+        // The pid set is strictly additive: an ordinary item with a non-immovable pid is unaffected.
+        let maccy = MenuBarItemSnapshot(
+            windowID: 9, ownerPID: 999, ownerBundleID: "com.maccy.Maccy",
+            title: "Item-0", frame: CGRect(x: 1100, y: 0, width: 22, height: 22)
+        )
+        var controls = ItemControlStore()
+        controls.setHidden(true, for: maccy)
+        let result = HiddenLayoutPlanner.moves(
+            for: [maccy], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            controls: controls, immovablePIDs: [501, 4242]
+        )
+        #expect(result.count == 1)
+        #expect(result.first?.targetX ?? 0 < anchorMinX)
+    }
+
     @Test func keylessItemIsNeverMoved() {
         let controls = ItemControlStore()
         // No bundle id → no stable identity → can't carry intent → leave it alone.

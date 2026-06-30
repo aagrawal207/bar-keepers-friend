@@ -600,8 +600,13 @@ final class FloatingBarController {
         }
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(candidates)
         let attributed = await AXAttributionProvider.attribute(deduped)
+        // Drop items owned by Control Center (every module shares its pid) and by our own process,
+        // so they can never be listed — let alone toggled — as hideable rows. Matches the pid set
+        // the move planner refuses, so the picker and the planner agree on what's manageable. The
+        // snapshots are attributed just above, so each carries its real owning pid.
+        let immovablePIDs = ImmovableProcessIDs.current()
         return attributed
-            .filter { !ImmovableItems.isImmovable($0) && ItemControlStore.key(for: $0) != nil }
+            .filter { !ImmovableItems.isImmovable($0, immovablePIDs: immovablePIDs) && ItemControlStore.key(for: $0) != nil }
             .sorted { $0.frame.minX < $1.frame.minX } // left-to-right, stable order
             .map { snapshot in
                 let image = iconCache[snapshot.windowID] ?? AppIconProvider.icon(forPID: snapshot.ownerPID)

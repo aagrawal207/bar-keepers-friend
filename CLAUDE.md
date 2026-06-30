@@ -178,6 +178,36 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[RESOLVED 2026-06-30] "Hide All" swept Control Center modules + BKF itself into the hidden set,
+  so reconcile thrashed forever and the app became unusable** (user-reported with 3 screenshots:
+  floating bar showed only 1 item, Settings showed "Hidden (20)", yet nothing was physically hidden).
+  Reproduced from the LIVE standalone instance's reconcile log: `hiddenInMenuBar` contained `"Battery"`,
+  `"Sound"`, `"Clock"`, `"Audio and Video Controls"`, the screen-recording privacy string, AND
+  `"Bar Keeper's Friend"` — i.e. "Hide All" had marked Control Center's own modules and the app itself
+  as hidden. Every reconcile then planned moves for them; CC modules can't be relocated by the window
+  server (they snap back) and moving our own anchor shifts the very hide/show boundary, so the pass
+  NEVER reached zero moves — the anchor walked across the bar each cycle (logged: 993→1163→1147→3260→
+  1356→1489) and the mirrored set was different every refresh (hence "only 1 item"). The fullscreen
+  transitions the user noticed just re-triggered the already-broken reconcile; fullscreen was not the
+  cause. **Fix:** an `immovablePIDs` set — Control Center's pid (caught via `NSRunningApplication`
+  bundle id `com.apple.controlcenter`) + our own `getpid()` — threaded into `HiddenLayoutPlanner.moves`
+  and the Settings picker (`allManageableItems`), both of which operate on ATTRIBUTED snapshots where
+  each item carries its real owning pid. One Control-Center pid catches EVERY module at once
+  (locale-independent — far better than enumerating localized labels like "Wi-Fi"/"Battery", which is
+  exactly the residual the old `denylistedOwnerLabels` note said needed on-device confirmation). Pure
+  `ImmovableItems.isImmovable(_:immovablePIDs:)` overload (raw-snapshot-unsafe by contract — documented)
+  + new App helper `ImmovableProcessIDs`. **VERIFIED ON-DEVICE 2026-06-30:** relaunched the fixed build
+  standalone; the reconcile plan dropped Control Center modules (pid 22986) and "Bar Keeper's Friend",
+  the anchor settled (stable at 1489 across consecutive passes) and reconcile stopped self-retriggering
+  for 17 min (vs every ~40s before) — it converges. Pure Core + 6 tests (CC-module-by-pid, own-app-by-pid,
+  unlisted-pid still moves, empty-set == label-only). *RESIDUAL (separate, pre-existing): the user's
+  persisted `hiddenInMenuBar` still CONTAINS those bogus keys — the fix makes them inert no-ops (never
+  planned, never listed), so the app is usable and real items hide correctly, but "Show All" is the
+  clean-slate reset if wanted. NOT auto-purged (mutating persisted intent is the persistence-key
+  landmine). Also observed during the repro: an Accessibility-attribution LAPSE (all items briefly
+  attributed "Control Center" — the recurring Tahoe AX re-prompt), which is unrelated to this fix and
+  resolves when AX is healthy.*
+
 > **Pure-Core audit clean (2026-06-30).** A full read-through of all 28 `Sources/Core` files this
 > fire found **no open Core bug** — every pure value type / planner / store / state machine is
 > correct and unit-tested. The only opens below are the two **[LOW, open]** App-target items
@@ -498,13 +528,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
-- **Immovable denylist completeness** — the display-name guard now protects "Control Center" (see
-  the RESOLVED bug). What's left needs a live `BKF-diag.json` to read the *real* attributed
-  `ownerBundleID` strings: (1) other system owners — Spotlight, Now Playing/`mediaremote`,
-  `systemuiserver` — to add their display names; (2) the localized Control Center *module* labels
-  (Wi-Fi, Battery, Sound, …) the attribution layer substitutes, which currently are NOT caught by
-  `"Control Center"` and so could be individually movable. Don't add these blind — confirm the exact
-  strings on-device first, then extend `denylistedOwnerLabels`.
+- **Immovable denylist completeness** — the display-name guard protects "Control Center", AND (as of
+  2026-06-30) the `immovablePIDs` set now catches **all Control Center modules at once by pid** —
+  so the localized module labels (Wi-Fi, Battery, Sound, …) no longer need to be enumerated by string
+  (that sub-item is RESOLVED by the pid approach; verified on-device that Battery/Audio modules at
+  pid 22986 are excluded). What's still open: other system owners that run as their OWN process —
+  Spotlight, Now Playing/`mediaremote`, `systemuiserver` — would need either their pids added to
+  `ImmovableProcessIDs` or their display names confirmed on-device and added to `denylistedOwnerLabels`.
+  Lower urgency now (they're not Control-Center-owned, so the common case is covered), but confirm the
+  real attributed strings/pids on-device before adding — don't guess blind.
   - *Diag pulled 2026-06-30 14:01 (PID 5746, standalone, signalable): only 4 status windows present
     — the real CC audio cluster, Karabiner, ACME, and our own anchor. Spotlight / Now Playing / the
     CC modules simply aren't in the current bar to observe, so this stays blocked by **layout**, not

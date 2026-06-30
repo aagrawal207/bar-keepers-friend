@@ -40,6 +40,24 @@ public enum ImmovableItems {
         "BentoBox",        // Control Center's container
     ]
 
+    /// Returns `true` if the item must not be moved or hidden, given a set of owning PIDs whose
+    /// items are off-limits. Use on ATTRIBUTED snapshots, where each item carries its REAL owning
+    /// pid (post-`AXAttributionProvider`): a single Control-Center pid then catches EVERY Control
+    /// Center module (Wi-Fi, Battery, Sound, Clock, the screen-recording privacy indicator, …) at
+    /// once — locale-independent and complete, unlike listing each module's display name, which
+    /// `denylistedOwnerLabels` deliberately does not attempt (the labels are localized and the set
+    /// is open-ended). Passing the app's OWN pid likewise guarantees a stray "Hide All" can never
+    /// sweep the app's own status windows into a move.
+    ///
+    /// CRITICAL: only valid on ATTRIBUTED snapshots. On RAW snapshots every item reports the bogus
+    /// blanket Control-Center pid (FB18327911), so a pid set applied there would mark *everything*
+    /// immovable — the same trap as the display-name guard (see `isImmovableOnRawSnapshot`). The
+    /// move planner and the Settings picker both attribute first, so both may pass a pid set here.
+    public static func isImmovable(_ item: MenuBarItemSnapshot, immovablePIDs: Set<pid_t>) -> Bool {
+        if immovablePIDs.contains(item.ownerPID) { return true }
+        return isImmovable(item)
+    }
+
     /// Returns `true` if the given item must not be moved or hidden. Call this on ATTRIBUTED
     /// snapshots (post-`AXAttributionProvider`), where `ownerBundleID` is the item's real owner
     /// label — so "Control Center" means the genuine Control Center. The move planner runs here.
