@@ -211,12 +211,22 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `cancelWarmUpRetries()` drops the rest when the user opens the bar, a reconcile takes over, the app
   is paused, the bar is disabled, or on uninstall. Rides the existing serialized `captureChain`/epoch
   machinery (reuses the exact launch warm-up closure), so it can't race a refresh or capture under an
-  open panel. Pure schedule + 4 tests (bounded ≤6, strictly escalating, positive, window straddles
-  the measured warm-up). Design adversarially verified via workflow (Approach A — escalating
-  scheduled retries — verifiers confirmed rides-chain / self-cancels / bounded). *On-device: a
-  relaunch landed glyphs=3 autonomously with no manual trigger; the true cold-from-boot gap (~60s)
-  is bracketed by the schedule but a reboot-level repro wasn't run — the logic + reproduction are
-  proven, the full boot path is the residual.*
+  open panel. **Load-bearing subtlety (caught by the verification workflow):** `install()` calls
+  `warmUpFloatingBarCache()` (which arms the timers) and then `reconcileHiddenItems()` synchronously
+  — and reconcile *cancels* the pending retries (its own reveal→move→capture supersedes them). So for
+  a user WITH saved Hidden intent (exactly the bug's configuration), the first-armed set is wiped at
+  T+0. The bridge therefore **re-arms** at the END of reconcile's own sequence (`reconcileHiddenItems`
+  L548-549: `if bar.hasIncompleteGlyphs { scheduleWarmUpRetries() }`) — reconcile's capture is just as
+  cold (~1.5s) and lands the same 0/N, so the escalating retries are armed *after* it and fire across
+  the warm-up window. On the warm path glyphs are already complete there, so nothing re-arms. Pure
+  schedule + 4 tests (bounded ≤6, strictly escalating, positive, window straddles the measured
+  warm-up). Design adversarially verified via workflow (Approach A; verifiers confirmed rides-chain /
+  self-cancels / bounded AND surfaced the reconcile-cancels-the-bridge hole, which the committed code
+  closes via the re-arm). *RESIDUAL — NOT fully on-device-verified: a relaunch landed glyphs=3
+  autonomously, but the compositor was already warm, so it did NOT exercise the true cold path. The
+  one configuration that matters — a cold-from-BOOT launch with saved Hidden intent + Accessibility
+  granted, watching the log for a `glyphs=N` landing on a re-armed retry rather than an incidental
+  event — is unverified from this rig and is the real proof still owed before this is fully trusted.*
 - **[RESOLVED 2026-06-30] REGRESSION (introduced by `02a7cc8`): 7 real third-party items vanished
   from the floating bar ("No hidden items" while the menu bar was near-empty).** User-reported with a
   screenshot; reproduced from live `CGWindowListCopyWindowInfo` enumeration — 7 status windows pushed
