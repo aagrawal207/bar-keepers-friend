@@ -178,6 +178,14 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+> **Pure-Core audit clean (2026-06-30).** A full read-through of all 28 `Sources/Core` files this
+> fire found **no open Core bug** — every pure value type / planner / store / state machine is
+> correct and unit-tested. The only opens below are the two **[LOW, open]** App-target items
+> (`AXAttributionProvider` serial AX IPC; `IconCaptureService` `colorAlpha` edge columns), both
+> blocked on hardware verification / pixel fixtures. Future loop fires: don't re-audit Core for bugs
+> — it's drained. The next real work is App-target/on-device (hardware QA) or a documented feature
+> from "Features not yet built", not a Core bug-hunt.
+
 - **[RESOLVED 2026-06-29] The Settings Items picker could list BKF's own anchor as a hideable row.**
   Two "exclude our own control items" paths had diverged: the floating-bar resolver
   (`HiddenItemsResolver.hiddenItems`) excludes by window id **and** the `isOwnControlItem` name-prefix
