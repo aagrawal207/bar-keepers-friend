@@ -56,6 +56,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.agraabhi.BarKeepersFriend
+        # App icon from Sources/App/Assets.xcassets (globbed in as a resource). Even though
+        # this is an agent app (no Dock icon), the icon is shown in the Settings header and
+        # the standard About panel, both of which read NSApp.applicationIconImage.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Sources/App/Info.plist
       properties:

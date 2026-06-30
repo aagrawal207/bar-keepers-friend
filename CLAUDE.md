@@ -158,6 +158,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **Hide All / Show All** — bulk buttons in the Items header flip every item's intent in ONE
   mutation (single reconcile, persisted once), each disabled when it'd be a no-op. Backed by
   `SettingsModel.setHidden(_:forAll:)` + tested store semantics.
+- **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
+  menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
+  sparkle, on a teal→blue squircle — the Bar Keepers Friend pun). Rendered by `Scripts/render_icon.swift`
+  (pure Core Graphics, no SVG toolchain needed) at the 10 standard macOS renditions; wired via
+  `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`. Verified in the built bundle (`AppIcon.icns` +
+  `Assets.car`, `CFBundleIconName=AppIcon`, `assetutil` lists all renditions). Matters even for an
+  agent app: the Settings header and the About panel both render `NSApp.applicationIconImage`
+  (previously the blank generic icon). *Large/mid sizes verified by eye here; the in-Settings/About
+  appearance is review-only (no Settings visibility from this rig).*
 
 ## Removed (intentionally — don't re-add without asking)
 
@@ -488,6 +497,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   (Wi-Fi, Battery, Sound, …) the attribution layer substitutes, which currently are NOT caught by
   `"Control Center"` and so could be individually movable. Don't add these blind — confirm the exact
   strings on-device first, then extend `denylistedOwnerLabels`.
+  - *Diag pulled 2026-06-30 14:01 (PID 5746, standalone, signalable): only 4 status windows present
+    — the real CC audio cluster, Karabiner, ACME, and our own anchor. Spotlight / Now Playing / the
+    CC modules simply aren't in the current bar to observe, so this stays blocked by **layout**, not
+    by the rig — re-pull when those items are present. Also worth a recheck: that run's diag came
+    back with `attributedOwner: "Control Center"` for ALL four (incl. Karabiner `rawTitle:
+    org.pqrs.Karabiner-Menu` and ACME `com.amazon.ACME`), whereas an earlier-today diag attributed
+    them correctly — smells like an Accessibility re-prompt lapse rather than a code regression.
+    Don't touch attribution on this alone (it's the persistence-key landmine); confirm with AX
+    freshly granted first.*
 - **Control-item slot persistence via `Preferences.controlItemPositions`** — currently dead (see the
   doc-reconciliation gotcha): slots persist via AppKit's own UserDefaults keys + launch-repair, and
   this field is never written. If a deliberate status-item removal ever proves to lose the slot
