@@ -439,25 +439,31 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   fight `repairControlItemOrderIfNeeded`.
 - **AXPress activation failure** — items advertise `AXPress` but it returns a non-success error;
   why is open (error-code logging was added). Synthesized click is the working default.
-- **Capture returns 0/N, deterministically (new evidence 2026-06-29).** A live standalone-built run
-  logged at 10:22 (`~/Library/Logs/BarKeepersFriend.log`) shows the full-display grab SUCCEEDING
-  (`capture: full display 3024x1964 px (scale 2.0)`) but every strip crop coming back blank —
-  `capture: strip-cropped 0/9 … opaque[]` empty on *all three* retry attempts, then `stalled at 0/9`.
-  The monotonic cache masks it (`glyphs=6 appIconFallback=3` from an earlier good capture), so the
-  bar still looks populated. This is sharper than the old "oscillates 7/7→0/7" note: it's now a
-  *consistent* 0/N, which points at the composited menu-bar glyphs being absent from the
-  ScreenCaptureKit full-display image on this Tahoe rig (the strip is wallpaper-only) — i.e. a
-  capture-source problem, NOT a keying-threshold tuning bug in `removingBackground`. Frames look
-  correct (e.g. `178360=46x33@766`), so cropping geometry is fine. **Why this can't be fixed from an
-  agent:** capture is the highest-blast-radius path, the fix is unverifiable here (`screencapture` of
-  the strip is black on this rig), and the only running instance is Xcode-launched (state `SX`, can't
-  be signalled for a `kill -USR1` diag). **Hardware-session next steps:** (1) launch the binary
-  directly with `BKF_DUMP_CROPS=1` and inspect a `BKF-crop-*.png` — is it wallpaper-only (capture
-  source) or a real glyph the keying drops (tuning)? (2) if the source is blank, try a per-item
-  `SCContentFilter` of just the status windows, or the legacy `CGWindowListCreateImage` of the status
-  layer, instead of the full-display grab; (3) compare with Screen Recording freshly re-granted (the
-  Sequoia/Tahoe monthly re-prompt can silently lapse it — `CGPreflightScreenCaptureAccess` only
-  reflects launch-time state).
+- **Capture is TRANSIENT/timing-dependent, NOT a deterministic 0/N (corrected 2026-06-30 with
+  live evidence; supersedes the earlier "wallpaper-only capture-source" diagnosis).** A standalone,
+  signalable run on 2026-06-30 logged TWO capture sequences ~90s apart on the same display/scale with
+  near-identical frames: at 01:34 a cold sequence got `strip-cropped 0/10 … opaque[]` (empty, the old
+  "0/N"), but at 01:36 a warmed-up sequence got `6/11`, `5/11`, then `7/11` with **real, non-zero
+  opaque pixel counts** (e.g. `opaque[176603=457,176597=249,178360=125,176599=677,…]`). That single
+  fact **falsifies** the previous note's core claim — if the menu-bar glyphs were genuinely absent
+  from the ScreenCaptureKit image ("the strip is wallpaper-only, a capture-source problem"), a later
+  grab could not have pulled 7 real glyphs with hundreds of opaque pixels each. So:
+  - The signature is **partial + oscillating + warm-up-sensitive** (cold-after-launch → 0; settled →
+    most glyphs), which points back at **timing / capture warm-up / retry cadence**, NOT a dead
+    capture source and NOT (on this evidence) a `removingBackground` keying threshold — the glyphs
+    that DO land key fine.
+  - Frames are always correct (`46x33@593` etc.), so cropping geometry remains fine.
+  - Screen Recording is clearly granted on this rig (non-zero opaque pixels prove the strip is
+    captured), so the "freshly re-grant SR" step is not the lead.
+  **Still not fixed blind from here:** capture is the highest-blast-radius path and the *intermittency*
+  makes any change hard to prove from logs alone. **Revised hardware-session next steps:** (1) reproduce
+  the cold→warm transition deliberately — capture immediately on launch vs after a few seconds — and
+  see if the 0/N only ever happens cold; (2) if so, the fix is in the warm-up/retry sequencing (e.g.
+  an initial discard-and-retry, or gating the first capture on the stream being ready), NOT swapping
+  the capture source; (3) `BKF_DUMP_CROPS=1` on a COLD launch to confirm whether the cold crop is
+  wallpaper (source not ready yet) vs a real-but-keyed-out glyph. Do NOT act on the old "replace the
+  capture source with per-item SCContentFilter / CGWindowListCreateImage" plan — it was premised on
+  the now-falsified wallpaper-only theory.
 
 ### Features not yet built (from the plan, roughly prioritized)
 
