@@ -53,7 +53,7 @@ final class HotkeyService {
     /// (Re)registers the global hotkey to match `preferences`. Tears down whatever was
     /// registered before, then registers the toggle-bar combo when `enableGlobalHotkey` is on and
     /// its combo is valid. (There is one slot, `.toggle`; the old search hotkey was removed — see
-    /// CLAUDE.md "Removed".) Safe to call repeatedly (e.g. after a settings change): it fully
+    /// AGENTS.md "Removed".) Safe to call repeatedly (e.g. after a settings change): it fully
     /// rebuilds, so it never double-registers.
     func apply(preferences: Preferences) {
         // Start clean so a disabled/changed combo doesn't linger. We keep the event handler.

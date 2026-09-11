@@ -4,9 +4,10 @@ import Testing
 
 @Suite struct HiddenLayoutPlannerTests {
 
-    /// Anchor occupies x ∈ [1000, 1024]. Items left of 1000 are "hidden"; right of 1024 "shown".
+    /// The divider starts at 976; the anchor spans 1000...1024. The gap satisfies neither intent.
     private let anchorMinX: CGFloat = 1000
     private let anchorMaxX: CGFloat = 1024
+    private let dividerMinX: CGFloat = 976
 
     private func item(_ bundle: String?, x: CGFloat, id: CGWindowID = 1, title: String? = nil) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(
@@ -23,6 +24,7 @@ import Testing
             for: items,
             anchorMinX: anchorMinX,
             anchorMaxX: anchorMaxX,
+            dividerMinX: dividerMinX,
             controls: controls,
             excludingWindowIDs: exclude
         )
@@ -36,7 +38,7 @@ import Testing
         let result = moves([maccy], controls)
         #expect(result.count == 1)
         #expect(result.first?.item.windowID == 1)
-        #expect(result.first!.targetX < anchorMinX) // moved to the hidden (left) side
+        #expect(result.first!.targetX == dividerMinX - 8)
     }
 
     @Test func itemMarkedShownButCurrentlyHiddenGetsMovedRight() {
@@ -49,6 +51,7 @@ import Testing
         let result = moves([maccy], controls)
         #expect(result.count == 1)
         #expect(result.first!.targetX > anchorMaxX)
+        #expect(result.first!.targetX == anchorMaxX + 8)
     }
 
     @Test func unconfiguredItemIsNeverMovedEvenIfLeftOfAnchor() {
@@ -64,6 +67,7 @@ import Testing
         let hiddenWanted = item("com.a.app", x: 400, id: 1)   // already left, wants hidden
         let shownWanted = item("com.b.app", x: 1100, id: 2)   // already right, wants shown
         controls.setHidden(true, for: hiddenWanted)
+        controls.setHidden(false, for: shownWanted)
 
         let result = moves([hiddenWanted, shownWanted], controls)
         #expect(result.isEmpty)
@@ -88,7 +92,7 @@ import Testing
         var controls = ItemControlStore()
         controls.setHidden(true, for: ccModule)
         let result = HiddenLayoutPlanner.moves(
-            for: [ccModule], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            for: [ccModule], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls, immovablePIDs: [501]
         )
         #expect(result.isEmpty)
@@ -100,12 +104,12 @@ import Testing
         // shift the very hide/show boundary and send reconcile into an endless re-plan loop).
         let ownItem = MenuBarItemSnapshot(
             windowID: 8, ownerPID: 4242, ownerBundleID: "Bar Keeper's Friend",
-            title: "BKFAnchor", frame: CGRect(x: 1100, y: 0, width: 22, height: 22)
+            title: "Item-0", frame: CGRect(x: 1100, y: 0, width: 22, height: 22)
         )
         var controls = ItemControlStore()
         controls.setHidden(true, for: ownItem)
         let result = HiddenLayoutPlanner.moves(
-            for: [ownItem], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            for: [ownItem], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls, immovablePIDs: [4242]
         )
         #expect(result.isEmpty)
@@ -120,11 +124,11 @@ import Testing
         var controls = ItemControlStore()
         controls.setHidden(true, for: maccy)
         let result = HiddenLayoutPlanner.moves(
-            for: [maccy], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            for: [maccy], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls, immovablePIDs: [501, 4242]
         )
         #expect(result.count == 1)
-        #expect(result.first?.targetX ?? 0 < anchorMinX)
+        #expect(result.first?.targetX == dividerMinX - 8)
     }
 
     @Test func keylessItemIsNeverMoved() {
@@ -140,6 +144,71 @@ import Testing
         let anchor = item("com.agraabhi.BarKeepersFriend", x: 1100, id: 99)
         controls.setHidden(true, for: anchor)
         #expect(moves([anchor], controls, exclude: [99]).isEmpty)
+    }
+
+    @Test(arguments: ["BKFAnchor", "BKFHidden", "BKFAlwaysHidden"])
+    func ownControlTitlesAreSafeWithStaleWindowIDs(title: String) {
+        let ownItem = item("Bar Keeper's Friend", x: 1100, id: 99, title: title)
+        let controls = ItemControlStore(hiddenInMenuBar: ["Bar Keeper's Friend"])
+        #expect(moves([ownItem], controls, exclude: [98]).isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func anItemBetweenTheControlsNeedsPlacement(hidden: Bool) {
+        let between = item("com.a.app", x: 978)
+        var controls = ItemControlStore()
+        controls.setHidden(hidden, for: between)
+
+        #expect(!HiddenLayoutPlanner.isPlacementSatisfied(
+            item: between, hidden: hidden, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX
+        ))
+        let result = moves([between], controls)
+        #expect(result.count == 1)
+        #expect(result.first?.targetX == (hidden ? dividerMinX - 8 : anchorMaxX + 8))
+    }
+
+    @Test(arguments: [false, true])
+    func placementAcceptsExactBoundaryButNotOnePointOverlap(hidden: Bool) {
+        let boundaryX = hidden ? dividerMinX - 22 : anchorMaxX
+        let placed = item("com.a.app", x: boundaryX)
+        let overlapping = item("com.a.app", x: boundaryX + (hidden ? 1 : -1))
+        var controls = ItemControlStore()
+        controls.setHidden(hidden, for: placed)
+
+        #expect(HiddenLayoutPlanner.isPlacementSatisfied(
+            item: placed, hidden: hidden, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX
+        ))
+        #expect(!HiddenLayoutPlanner.isPlacementSatisfied(
+            item: overlapping, hidden: hidden, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX
+        ))
+        #expect(moves([placed], controls).isEmpty)
+        #expect(moves([overlapping], controls).count == 1)
+    }
+
+    @Test func wideHiddenItemMustClearTheDividerWithItsTrailingEdge() {
+        let wide = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: "com.a.app",
+            frame: CGRect(x: 800, y: 0, width: 200, height: 22)
+        )
+        let controls = ItemControlStore(hiddenInMenuBar: ["com.a.app"])
+        #expect(wide.frame.minX < dividerMinX)
+        #expect(!HiddenLayoutPlanner.isPlacementSatisfied(
+            item: wide, hidden: true, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX
+        ))
+        #expect(moves([wide], controls).first?.targetX == dividerMinX - 8)
+    }
+
+    @Test func invertedControlEdgesProduceNoPlan() {
+        let misplaced = item("com.a.app", x: 1100)
+        let controls = ItemControlStore(hiddenInMenuBar: ["com.a.app"])
+        #expect(HiddenLayoutPlanner.moves(
+            for: [misplaced], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            dividerMinX: anchorMaxX + 1, controls: controls
+        ).isEmpty)
+        #expect(HiddenLayoutPlanner.moves(
+            for: [misplaced], anchorMinX: anchorMaxX, anchorMaxX: anchorMinX,
+            dividerMinX: dividerMinX, controls: controls
+        ).isEmpty)
     }
 
     @Test func mixedSetMovesOnlyTheWrongSideItems() {
@@ -182,7 +251,7 @@ import Testing
 
         let result = HiddenLayoutPlanner.moves(
             for: [onDisplay, offDisplay],
-            anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls, excludingWindowIDs: [],
             displayXRange: 0...1512
         )
@@ -200,12 +269,12 @@ import Testing
         controls.setHidden(true, for: item)
 
         let rejected = HiddenLayoutPlanner.moves(
-            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls) // default displayMenuBarTop: 0 → wrongly skipped
         #expect(rejected.isEmpty)
 
         let planned = HiddenLayoutPlanner.moves(
-            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX,
+            for: [item], anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
             controls: controls, displayMenuBarTop: 982)
         #expect(planned.map { $0.item.windowID } == [1])
     }

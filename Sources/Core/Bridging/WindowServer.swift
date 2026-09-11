@@ -19,12 +19,9 @@ public protocol WindowServer: Sendable {
     /// The frame of the system menu bar on the display containing the given point.
     func menuBarFrame(forDisplayContaining point: CGPoint) throws -> CGRect
 
-    /// Physically moves a status item so it lands near the target x-position (on the
-    /// corresponding side of the nearest reference item, typically our anchor). Implementations
-    /// confirm the move by observing a frame change and retry on failure. Async because the real
-    /// implementation synthesizes events and polls for the resulting frame change over up to a
-    /// couple of seconds, which must not block the main thread.
-    func move(item: MenuBarItemSnapshot, toX targetX: CGFloat) async throws
+    /// Drops a status item at a cursor x-position relative to the specified reference window.
+    /// Implementations verify the requested side, not merely movement; `targetX` is not an item edge.
+    func move(item: MenuBarItemSnapshot, toX targetX: CGFloat, relativeTo targetWindowID: CGWindowID) async throws
 
     /// Synthesizes a click on the given status item.
     func click(item: MenuBarItemSnapshot) throws

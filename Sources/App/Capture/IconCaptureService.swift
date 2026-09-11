@@ -38,10 +38,12 @@ final class IconCaptureService {
     /// window id → image for those that succeeded. Only items currently on-screen
     /// (`frame.minX >= 0`) can be captured.
     func captureIcons(for items: [MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] {
+        guard !Task.isCancelled else { return [:] }
         let onScreen = items.filter { $0.frame.minX >= 0 }
         guard !onScreen.isEmpty else { return [:] }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               !content.displays.isEmpty else { return [:] }
+        guard !Task.isCancelled else { return [:] }
 
         let probe = onScreen.first.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) }
         let display = displayContaining(probe, in: content.displays) ?? content.displays[0]
@@ -51,6 +53,7 @@ final class IconCaptureService {
             DebugLog.log("capture: full-display capture failed")
             return [:]
         }
+        guard !Task.isCancelled else { return [:] }
 
         // Derive the scale from the returned image rather than assuming 2x: external displays
         // can be 1x and some panels aren't exactly 2x. This keeps crops pixel-accurate.

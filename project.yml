@@ -15,6 +15,7 @@ schemes:
       config: Debug
       targets:
         - BarKeepersFriendTests
+        - BarKeepersFriendAppTests
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -93,3 +94,25 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.agraabhi.BarKeepersFriend.Tests
+
+  # Exercise the real AppKit adapters without starting the menu-bar app or requesting permissions.
+  BarKeepersFriendAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/AppTests
+      - path: Sources/App
+        excludes:
+          - main.swift
+          - AppDelegate.swift
+          - AppCoordinator.swift
+          - Assets.xcassets
+          - Info.plist
+          - BarKeepersFriend.entitlements
+    dependencies:
+      - target: BarKeepersFriendCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.agraabhi.BarKeepersFriend.AppTests
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) BKF_TESTING"

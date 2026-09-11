@@ -102,22 +102,61 @@ import Testing
 
 @Suite struct FakeWindowServerTests {
 
-    private func item(id: CGWindowID, x: CGFloat) -> MenuBarItemSnapshot {
-        MenuBarItemSnapshot(windowID: id, ownerPID: 1, frame: CGRect(x: x, y: 0, width: 20, height: 22))
+    private func item(id: CGWindowID, x: CGFloat, width: CGFloat = 20) -> MenuBarItemSnapshot {
+        MenuBarItemSnapshot(windowID: id, ownerPID: 1, frame: CGRect(x: x, y: 0, width: width, height: 22))
     }
 
     @Test func moveUpdatesItemFrame() async throws {
-        let server = FakeWindowServer(items: [item(id: 1, x: 100)])
+        let reference = item(id: 99, x: 476)
+        let server = FakeWindowServer(items: [item(id: 1, x: 100), reference])
         let target = try server.menuBarItems()[0]
-        try await server.move(item: target, toX: 500)
+        try await server.move(item: target, toX: 500, relativeTo: reference.windowID)
         #expect(try server.menuBarItems()[0].frame.minX == 500)
+        #expect(try server.menuBarItems()[1] == reference)
         #expect(server.moveRequests.count == 1)
+        #expect(server.moveRequests.first?.windowID == 1)
+        #expect(server.moveRequests.first?.targetX == 500)
+        #expect(server.moveRequests.first?.targetWindowID == reference.windowID)
+    }
+
+    @Test(arguments: [CGFloat(20), CGFloat(240)])
+    func dropBeforeReferencePlacesTheEntireItemToItsLeft(width: CGFloat) async throws {
+        let reference = item(id: 99, x: 600)
+        let target = item(id: 1, x: 800, width: width)
+        let server = FakeWindowServer(items: [target, reference])
+
+        try await server.move(item: target, toX: 592, relativeTo: reference.windowID)
+
+        #expect(try server.menuBarItems()[0].frame.maxX == 592)
+        #expect(try server.menuBarItems()[0].frame.width == width)
+        #expect(try server.menuBarItems()[1] == reference)
+        #expect(server.moveRequests.first?.targetWindowID == reference.windowID)
+    }
+
+    @Test func aFixtureWithoutAReferenceStillRecordsTheRequestedWindow() async throws {
+        let target = item(id: 1, x: 100)
+        let server = FakeWindowServer(items: [target])
+
+        try await server.move(item: target, toX: 200, relativeTo: 99)
+
+        #expect(try server.menuBarItems()[0].frame.minX == 200)
+        #expect(server.moveRequests.first?.targetWindowID == 99)
     }
 
     @Test func clickIsRecorded() throws {
         let server = FakeWindowServer(items: [item(id: 7, x: 100)])
         try server.click(item: server.menuBarItems()[0])
         #expect(server.clickedWindowIDs == [7])
+    }
+
+    @Test func clickErrorPropagatesWithoutRecordingSuccess() {
+        let target = item(id: 7, x: 100)
+        let server = FakeWindowServer(items: [target])
+        server.clickError = .clickFailed(windowID: 7)
+        #expect(throws: WindowServerError.clickFailed(windowID: 7)) {
+            try server.click(item: target)
+        }
+        #expect(server.clickedWindowIDs.isEmpty)
     }
 
     @Test func enumerationErrorPropagates() {
@@ -129,11 +168,11 @@ import Testing
     }
 
     @Test func moveErrorPropagates() async throws {
-        let server = FakeWindowServer(items: [item(id: 1, x: 100)])
+        let server = FakeWindowServer(items: [item(id: 1, x: 100), item(id: 99, x: 176)])
         server.moveError = .moveFailed(windowID: 1)
         let target = try #require(try server.menuBarItems().first)
         await #expect(throws: WindowServerError.self) {
-            try await server.move(item: target, toX: 200)
+            try await server.move(item: target, toX: 200, relativeTo: 99)
         }
     }
 }

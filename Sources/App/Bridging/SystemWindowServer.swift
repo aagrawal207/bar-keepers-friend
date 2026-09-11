@@ -9,7 +9,7 @@ import CoreGraphics
 /// `CGWindowListCopyWindowInfo` (the public, non-private path) so the floating bar can find
 /// hidden items. `move(...)` and `click(...)` are the fragile private-API parts — they
 /// synthesize CGEvents routed to the item's owning process (the move is verified working
-/// on-device; see CLAUDE.md "Built") — and are isolated here behind the `WindowServer` seam so
+/// on-device; see AGENTS.md "Built") — and are isolated here behind the `WindowServer` seam so
 /// the rest of the app depends only on the protocol and the permission-free baseline is unaffected
 /// if they ever break.
 ///
@@ -72,41 +72,20 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         )
     }
 
-    /// Physically moves another app's status item by synthesizing the same gesture the user makes
-    /// to rearrange the menu bar: a Command-down, then an up at the destination. This is the one
-    /// genuinely fragile, undocumented capability in the app, so it is fenced in here and is fully
-    /// self-validating — it confirms the item's frame actually changed and retries, throwing if it
-    /// can't, so a caller can fall back gracefully.
-    ///
-    /// ## Mechanism (from studying Ice's MenuBarItemManager — clean-room, mechanism only)
-    ///
-    /// macOS routes a status-item rearrange not by where the cursor is but by a **windowID stamped
-    /// into the mouse event's fields**. So we do NOT drag the physical pointer across the bar.
-    /// Instead, for the item being moved:
-    ///   1. post a `leftMouseDown` carrying `.maskCommand` at a far OFF-SCREEN point, with the
-    ///      moved item's windowID stamped into the routing fields; then
-    ///   2. post a `leftMouseUp` (no modifier) at the DESTINATION x (just past the anchor edge),
-    ///      again stamped with the item's windowID.
-    /// The window server interprets that as "the user ⌘-grabbed this item and dropped it there"
-    /// and snaps it into the nearest slot on that side of the anchor.
-    ///
-    /// The windowID goes into THREE integer fields — the two documented routing fields
-    /// (`kCGMouseEventWindowUnderMousePointer` = 91, `...ThatCanHandleThisEvent` = 92) plus an
-    /// undocumented private field (51 / 0x33) that Ice also sets — because the field the server
-    /// actually routes on has varied across releases; stamping all three is belt-and-suspenders.
-    /// Command is on the DOWN event only (that's the gesture the server recognizes as "begin
-    /// rearrange"); the UP carries no modifier.
-    ///
-    /// Coordinates are CoreGraphics global, top-left origin (same space as `item.frame`).
-    ///
-    /// Retry: the mechanism is known to go sluggish/intermittent (notably on Tahoe, where many
-    /// items live under Control Center). So we attempt up to `maxMoveAttempts`, re-reading the
-    /// item's live frame after each to confirm it actually moved, with a short settle between
-    /// tries. The cursor is hidden for the duration and restored after.
-    func move(item: MenuBarItemSnapshot, toX targetX: CGFloat) async throws {
+    /// Uses a Command grab and a drop identified by the destination control's native window ID.
+    /// Each attempt revalidates the requested side; a neighbor's reflow is not a successful move.
+    func move(item: MenuBarItemSnapshot, toX targetX: CGFloat, relativeTo targetWindowID: CGWindowID) async throws {
+        try Task.checkCancellation()
         guard AXIsProcessTrusted() else {
             throw WindowServerError.missingPermission(.accessibility)
         }
+        let initial = try menuBarItems()
+        guard targetWindowID != item.windowID,
+              let reference = initial.first(where: { $0.windowID == targetWindowID }),
+              targetX < reference.frame.minX || targetX > reference.frame.maxX else {
+            throw WindowServerError.moveFailed(windowID: item.windowID)
+        }
+        let beforeReference = targetX < reference.frame.minX
         guard let source = CGEventSource(stateID: .hidSystemState) else {
             throw WindowServerError.moveFailed(windowID: item.windowID)
         }
@@ -127,30 +106,52 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             CGDisplayShowCursor(kCGNullDirectDisplay)
         }
 
-        let startFrame = item.frame
-        // Destination point: the target x at the item's own vertical midline (menu bar row).
-        let destination = CGPoint(x: targetX, y: item.frame.midY)
-
         for attempt in 1...Self.maxMoveAttempts {
-            postMoveGesture(source: source, windowID: item.windowID, pid: item.ownerPID, destination: destination)
+            // Finish each down/up pair atomically; cancellation only stops subsequent gestures.
+            try Task.checkCancellation()
+            let current = try menuBarItems()
+            guard let liveItem = current.first(where: { $0.windowID == item.windowID }),
+                  let liveReference = current.first(where: { $0.windowID == targetWindowID }) else {
+                throw WindowServerError.moveFailed(windowID: item.windowID)
+            }
+            if HiddenLayoutPlanner.isPlacementSatisfied(
+                item: liveItem, hidden: beforeReference,
+                anchorMaxX: liveReference.frame.maxX, dividerMinX: liveReference.frame.minX
+            ) { return }
+            let dropX = beforeReference
+                ? liveReference.frame.minX - HiddenLayoutPlanner.hiddenMargin
+                : liveReference.frame.maxX + HiddenLayoutPlanner.shownMargin
+            let destination = CGPoint(x: dropX, y: liveItem.frame.midY)
+            postMoveGesture(
+                source: source, windowID: item.windowID, pid: item.ownerPID,
+                targetWindowID: targetWindowID, destination: destination
+            )
 
-            // Confirm by re-reading the live frame: did THIS item actually move off its start x?
-            try? await Task.sleep(for: .milliseconds(Self.moveSettleMs))
-            if let live = liveFrame(forWindowID: item.windowID), abs(live.minX - startFrame.minX) > Self.moveConfirmEpsilon {
+            try await Task.sleep(for: .milliseconds(Self.moveSettleMs))
+            let after = try menuBarItems()
+            guard let placed = after.first(where: { $0.windowID == item.windowID }),
+                  let target = after.first(where: { $0.windowID == targetWindowID }) else {
+                throw WindowServerError.moveFailed(windowID: item.windowID)
+            }
+            let satisfied = HiddenLayoutPlanner.isPlacementSatisfied(
+                item: placed, hidden: beforeReference,
+                anchorMaxX: target.frame.maxX, dividerMinX: target.frame.minX
+            )
+            DebugLog.log("move: attempt=\(attempt) window=\(item.windowID) pid=\(item.ownerPID) startX=\(liveItem.frame.minX) targetWindow=\(targetWindowID) dropX=\(dropX) liveX=\(placed.frame.minX) placed=\(satisfied)")
+            if satisfied {
                 return
             }
             if attempt < Self.maxMoveAttempts {
                 // Nudge an unresponsive item with a plain (no-modifier) click at its current
                 // centre, the way Ice "wakes up" a stuck item, then retry.
-                wakeUp(source: source, item: item)
-                try? await Task.sleep(for: .milliseconds(Self.moveRetryDelayMs))
+                wakeUp(source: source, item: placed.attributed(bundleID: item.ownerBundleID, pid: item.ownerPID))
+                try await Task.sleep(for: .milliseconds(Self.moveRetryDelayMs))
             }
         }
         throw WindowServerError.moveFailed(windowID: item.windowID)
     }
 
-    /// Posts the two-event move gesture (Command-down off-screen, then up at the destination),
-    /// each stamped with the target window id so the server routes it to that item.
+    /// Posts a complete grab/drop pair through the same relay, including the balancing up on failure.
     ///
     /// CRITICAL (verified on-device 2026-06-28 + against Ice mainline source): a direct
     /// `CGEvent.post(tap: .cgSessionEventTap)` is INERT against another app's status item on macOS
@@ -158,27 +159,33 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     /// a legitimate item drag when each event is delivered to the item's OWNING PROCESS through a
     /// two-tap round-trip (the "scromble" relay). So we route each event via `scrombleEvent` instead
     /// of posting it directly.
-    private func postMoveGesture(source: CGEventSource, windowID: CGWindowID, pid: pid_t, destination: CGPoint) {
+    private func postMoveGesture(source: CGEventSource, windowID: CGWindowID, pid: pid_t, targetWindowID: CGWindowID, destination: CGPoint) {
+        guard let (down, up) = moveEvents(
+            source: source, windowID: windowID, pid: pid,
+            targetWindowID: targetWindowID, destination: destination
+        ) else { return }
+        let downRelayed = scrombleEvent(down, toPid: pid, timeout: Self.scrombleTimeout)
+        if !downRelayed { down.post(tap: .cgSessionEventTap) }
+        let upRelayed = scrombleEvent(up, toPid: pid, timeout: Self.scrombleTimeout)
+        if !upRelayed { up.post(tap: .cgSessionEventTap) }
+        DebugLog.log("move relay: window=\(windowID) targetWindow=\(targetWindowID) pid=\(pid) down=\(downRelayed) up=\(upRelayed)")
+    }
+
+    /// Builds events without posting them, so routing fields can be verified without moving the mouse.
+    func moveEvents(source: CGEventSource, windowID: CGWindowID, pid: pid_t, targetWindowID: CGWindowID, destination: CGPoint) -> (down: CGEvent, up: CGEvent)? {
         // Start far off-screen, like Ice: the down event's location is irrelevant (routing is by
         // windowID), and an off-screen point avoids perturbing anything under the real cursor.
         let offscreen = CGPoint(x: 20_000, y: 20_000)
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: offscreen, mouseButton: .left),
             let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: destination, mouseButton: .left)
-        else { return }
+        else { return nil }
 
         down.flags = .maskCommand   // Command on the DOWN only: "begin rearranging this item".
         up.flags = []
         stampWindowID(windowID, pid: pid, into: down)
-        stampWindowID(windowID, pid: pid, into: up)
-
-        // Deliver through the relay, not a direct post. If the relay can't be set up (e.g. a tap
-        // fails to create), fall back to a direct post so we still emit *something* — the move is
-        // self-validated by the frame re-read either way, so a failed relay degrades to the old
-        // (known-weak) behavior rather than emitting nothing. `scrombleEvent` is a free function
-        // (not a method) to keep it out of the actor-isolation region analysis.
-        if !scrombleEvent(down, toPid: pid, timeout: Self.scrombleTimeout) { down.post(tap: .cgSessionEventTap) }
-        if !scrombleEvent(up, toPid: pid, timeout: Self.scrombleTimeout) { up.post(tap: .cgSessionEventTap) }
+        stampWindowID(targetWindowID, pid: pid, into: up)
+        return (down, up)
     }
 
     /// A plain left click at the item's current centre (no modifier), used between failed move
@@ -210,27 +217,11 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         }
     }
 
-    /// Re-reads the live frame of a single status-item window by id, for move confirmation.
-    /// Returns nil if the window is no longer present.
-    private func liveFrame(forWindowID windowID: CGWindowID) -> CGRect? {
-        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
-        guard let raw = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return nil }
-        for info in raw {
-            guard (info[kCGWindowNumber as String] as? CGWindowID) == windowID,
-                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: boundsDict) else { continue }
-            return frame
-        }
-        return nil
-    }
-
     /// Move tuning. The mechanism is undocumented and known to be intermittent on recent macOS,
     /// so the retry loop with frame-change confirmation is load-bearing, not polish.
     private static let maxMoveAttempts = 5
     private static let moveSettleMs = 120
     private static let moveRetryDelayMs = 80
-    /// How many points the leading edge must shift to count the move as real (vs. layout jitter).
-    private static let moveConfirmEpsilon: CGFloat = 2
     /// Upper bound on a single scromble round-trip. Ice's frame-change wait is ~50ms; the relay
     /// itself is faster, so this is generous headroom that still can't wedge the per-item loop.
     private static let scrombleTimeout: TimeInterval = 0.1
@@ -385,7 +376,10 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
         eventsOfInterest: nullMask,
         callback: tap1Callback,
         userInfo: refcon
-    ) else { return false }
+    ) else {
+        DebugLog.log("move relay: pid tap unavailable pid=\(pid) postAccess=\(CGPreflightPostEventAccess()) listenAccess=\(CGPreflightListenEventAccess())")
+        return false
+    }
     relay.tap1 = tap1
 
     // Tap 2: LISTEN-ONLY tap at the session tap. On seeing the REAL event (matched by tag) it
@@ -412,6 +406,7 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
         callback: tap2Callback,
         userInfo: refcon
     ) else {
+        DebugLog.log("move relay: session tap unavailable pid=\(pid) postAccess=\(CGPreflightPostEventAccess()) listenAccess=\(CGPreflightListenEventAccess())")
         CFMachPortInvalidate(tap1)
         return false
     }

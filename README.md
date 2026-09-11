@@ -8,7 +8,7 @@ built ground-up for macOS 26 (Tahoe).
 
 ## Status
 
-Early development. Built in phases, robust core first:
+Working prototype, not yet a drop-in replacement for every Bartender workflow:
 
 - **Phase 0** — project skeleton, protocol seams, agent-app shell. ✅
 - **Phase 1** — cosmetic hide/show that needs **zero permissions and zero private APIs**.
@@ -20,7 +20,23 @@ Early development. Built in phases, robust core first:
 - **Phase 3** — per-item **Shown / Hidden** control in Settings that physically moves the real
   item across the anchor (the Bartender-style direct picker), plus a global toggle shortcut
   (⌥⌘B). Uses private window-server behavior, so it's fenced behind a protocol seam with a
-  self-validating retry loop. ✅ *(move not yet hardware-verified — see `CLAUDE.md`.)*
+  self-validating retry loop. ✅ *(Moves were verified on-device; activation limitations remain below.)*
+
+### Known limitations
+
+- Activating a mirrored icon reveals the real menu-bar section and can visibly move the cursor.
+  Some apps' menus still need compatibility testing.
+- Cold-start glyph capture is not fully verified from boot, and a stuck native capture call can
+  block later refreshes. The current queue timeout does not guarantee recovery.
+- Multi-display behavior and native mouse-event changes require live hardware checks. Passing
+  unit tests alone is not evidence that these paths work on every menu-bar layout.
+
+Current work and verification details are tracked in [AGENTS.md](AGENTS.md), with the remaining
+capability gaps in [PARITY.md](PARITY.md).
+
+The Shown/Hidden path was re-verified on macOS 26.6.2 on 2026-09-11. Placement is checked against
+live native control boundaries; Settings reports observed placement and errors instead of treating
+a saved preference as proof that an icon moved. These checks do not establish full Bartender parity.
 
 ### How it works
 
@@ -46,8 +62,8 @@ See [the plan](https://github.com/aagrawal207/bar-keepers-friend) for the full r
 
 Menu bar managers must run **unsandboxed** and use **private window-server APIs** to
 control other apps' status items. Both are automatic App Store rejections
-(guidelines 2.4.5(i) and 2.5.1). Distribution is Developer ID signed + notarized,
-outside the App Store — the same path Ice and Bartender take.
+(guidelines 2.4.5(i) and 2.5.1). Planned distribution is Developer ID signed and notarized,
+outside the App Store. Current builds use an Apple Development identity and are not notarized.
 
 ## Building
 
@@ -65,6 +81,11 @@ Run the tests:
 xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
   -destination 'platform=macOS' test
 ```
+
+The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
+SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
+launching the menu-bar app, taking screenshots, or moving the mouse.
+It currently contains 341 tests (432 invocations including parameterized cases).
 
 ## Credit
 

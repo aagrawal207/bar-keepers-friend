@@ -17,6 +17,8 @@ enum DebugLog {
     static func log(_ message: String) {
         // Mirror to the console too.
         NSLog("BKF: \(message)")
+        // Synthetic test activity must not contaminate the running app's diagnostic log.
+        #if !BKF_TESTING
         queue.async {
             let line = "\(Self.timestamp())  \(message)\n"
             guard let data = line.data(using: .utf8) else { return }
@@ -28,6 +30,7 @@ enum DebugLog {
                 try? data.write(to: url)
             }
         }
+        #endif
     }
 
     private static func timestamp() -> String {

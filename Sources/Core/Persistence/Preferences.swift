@@ -7,8 +7,12 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Whether the hidden section auto-recollapses after being revealed.
     public var autoRehide: Bool
 
-    /// Seconds before auto-rehide fires (when `autoRehide` is on).
-    public var autoRehideDelay: TimeInterval
+    public static let autoRehideDelayRange: ClosedRange<TimeInterval> = 2...120
+
+    /// Seconds before auto-rehide fires, kept finite and within `autoRehideDelayRange`.
+    public var autoRehideDelay: TimeInterval {
+        didSet { autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay) }
+    }
 
     /// Launch the app at login.
     public var launchAtLogin: Bool
@@ -36,7 +40,7 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// exported `LayoutConfig`, so dropping it would change the persisted/exported shape. The original
     /// intent — caching the slots here so they survive a deliberate status-item removal (which deletes
     /// AppKit's copy) — was superseded by the direct-UserDefaults + launch-repair approach and is not
-    /// wired; revisit only with on-device verification (see CLAUDE.md "Needs hardware verification").
+    /// wired; revisit only with on-device verification (see AGENTS.md "Needs hardware verification").
     public var controlItemPositions: [String: Double]
 
     // MARK: - Global hotkey (toggle the floating bar)
@@ -78,7 +82,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         dismissBarOnMouseExit: Bool = true
     ) {
         self.autoRehide = autoRehide
-        self.autoRehideDelay = autoRehideDelay
+        self.autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay)
         self.launchAtLogin = launchAtLogin
         self.useFloatingBar = useFloatingBar
         self.floatingBarStyle = floatingBarStyle
@@ -92,6 +96,12 @@ public struct Preferences: Equatable, Sendable, Codable {
     }
 
     public static let `default` = Preferences()
+
+    private static func normalizedAutoRehideDelay(_ delay: TimeInterval) -> TimeInterval {
+        // Nonfinite values must not reach timer arithmetic or the Settings integer conversion.
+        guard delay.isFinite else { return 15 }
+        return min(max(delay, autoRehideDelayRange.lowerBound), autoRehideDelayRange.upperBound)
+    }
 
     // Explicit keys so renaming a Swift property never silently drops stored data.
     enum CodingKeys: String, CodingKey {
@@ -115,7 +125,9 @@ public struct Preferences: Equatable, Sendable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let d = Preferences.default
         autoRehide = try container.decodeIfPresent(Bool.self, forKey: .autoRehide) ?? d.autoRehide
-        autoRehideDelay = try container.decodeIfPresent(TimeInterval.self, forKey: .autoRehideDelay) ?? d.autoRehideDelay
+        autoRehideDelay = Self.normalizedAutoRehideDelay(
+            try container.decodeIfPresent(TimeInterval.self, forKey: .autoRehideDelay) ?? d.autoRehideDelay
+        )
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         useFloatingBar = try container.decodeIfPresent(Bool.self, forKey: .useFloatingBar) ?? d.useFloatingBar
         floatingBarStyle = try container.decodeIfPresent(FloatingBarStyle.self, forKey: .floatingBarStyle) ?? d.floatingBarStyle

@@ -12,10 +12,14 @@ import SwiftUI
 final class FloatingBarController {
     private var panel: NSPanel?
     private let windowServer: WindowServer
-    private let capture: IconCaptureService
+    private let captureIcons: ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage]
+    private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
+    private let activateWithAX: (CGWindowID, pid_t, CGRect) async -> Bool
 
     /// Window ids of the app's own control items, excluded from the mirrored list.
     var controlItemWindowIDs: Set<CGWindowID> = []
+    /// The divider, not the visible anchor, determines which items expansion actually hides.
+    var hiddenDividerWindowID: CGWindowID?
 
     /// Current preferences (style, etc.). Updated by the coordinator.
     var preferences: Preferences
@@ -32,6 +36,7 @@ final class FloatingBarController {
     var scheduleAutoRehideAfterActivation: (() -> Void)?
 
     private(set) var isVisible = false
+    var onDidHide: (() -> Void)?
 
     /// True when at least one hidden item still lacks a real captured glyph (it was omitted or is
     /// showing an app-icon fallback). The launch warm-up uses this to decide whether a second,
@@ -39,11 +44,12 @@ final class FloatingBarController {
     var hasIncompleteGlyphs: Bool {
         !cachedHiddenOrder.allSatisfy { capturedGlyphIDs.contains($0.windowID) }
     }
+    var needsCapture: Bool { !hasCapturedOnce || hasIncompleteGlyphs }
 
     /// The in-flight activation, so a new click can supersede a previous one. Without this,
     /// a slow activation finishing late would warp the cursor and click the menu bar after
     /// the user already moved on.
-    private var currentActivationTask: Task<Void, Never>?
+    private(set) var currentActivationTask: Task<Void, Never>?
     /// Abandons an activation that takes longer than this — a backstop against stale clicks.
     private static let activationDeadline: TimeInterval = 5
 
@@ -52,15 +58,18 @@ final class FloatingBarController {
     private var iconCache: [CGWindowID: NSImage] = [:]
     /// The hidden items in display order at the time of the last capture.
     private var cachedHiddenOrder: [MenuBarItemSnapshot] = []
-    /// Maps each cached item's window id to the owning app pid resolved by attribution, so
-    /// activation can query that one app directly instead of sweeping every running app.
-    private var windowIDToPID: [CGWindowID: pid_t] = [:]
+    /// Trusted owners are presentation/AX fallbacks, never placement intent. Lifetimes prevent
+    /// late attribution from restoring an owner after its window disappeared and its ID was reused.
+    private var windowOwners: [CGWindowID: (
+        firstSeen: UInt64, resolvedAt: UInt64, owner: (name: String, pid: pid_t)?
+    )] = [:]
+    private var observationEpoch: UInt64 = 0
     /// Items whose last activation attempt failed via both AX and synthesized click — shown
     /// disabled so the user isn't left clicking a dead icon. Rebuilt on each capture.
     private var unactivatableWindowIDs: Set<CGWindowID> = []
-    /// The anchor's leading edge from the most recent capture/show, reused when re-hiding
-    /// after an activation.
-    private var lastAnchorMinX: CGFloat = 0
+    /// Last finite anchor supplied by capture/show; unknown until a caller supplies a position.
+    /// Used for membership only when the divider's raw frame is unavailable.
+    private var lastAnchorMinX: CGFloat?
     /// The anchor's trailing edge from the most recent show, reused when re-laying-out the
     /// panel in place (e.g. when a background capture fills in a glyph while the bar is open).
     private var lastAnchorRightX: CGFloat = 0
@@ -138,12 +147,16 @@ final class FloatingBarController {
 
     init(
         windowServer: WindowServer,
-        capture: IconCaptureService,
-        preferences: Preferences
+        captureIcons: @escaping ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage],
+        preferences: Preferences,
+        attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] = { await AXAttributionProvider.attribute($0) },
+        activateWithAX: @escaping (CGWindowID, pid_t, CGRect) async -> Bool = AXActivator.activate
     ) {
         self.windowServer = windowServer
-        self.capture = capture
+        self.captureIcons = captureIcons
         self.preferences = preferences
+        self.attribute = attribute
+        self.activateWithAX = activateWithAX
     }
 
     /// Toggles the floating bar. Returns the new visibility.
@@ -157,10 +170,8 @@ final class FloatingBarController {
         return isVisible
     }
 
-    /// Captures the icons of items left of the anchor and caches them. Must be called while
-    /// those items are still ON-SCREEN (before the divider hides them), because off-screen
-    /// status items cannot be captured. The engine calls this just before expanding the
-    /// divider, and refreshes it whenever the menu bar changes.
+    /// Captures items left of the hidden divider while they are on-screen, before expansion.
+    /// The caller's anchor is a fallback only when the divider's raw frame is unavailable.
     ///
     /// `allowFallback` controls what happens to an item that hasn't captured a real glyph this
     /// pass and has none cached: when `true` (a settled refresh, or the final warm-up pass) it
@@ -171,14 +182,15 @@ final class FloatingBarController {
     /// that just needs another beat to composite shows up correctly a moment later instead of
     /// flashing the wrong (app-icon) image first.
     func captureAndCache(anchorMinX: CGFloat, allowFallback: Bool = true) async {
-        lastAnchorMinX = anchorMinX
-        // The menu bar may have changed; forget which items were previously unactivatable so
-        // a now-fixed item isn't left disabled.
-        unactivatableWindowIDs.removeAll()
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        guard let snapshots = try? menuBarSnapshots() else { return }
+        lastAnchorMinX = anchorMinX.isFinite ? anchorMinX : nil
+        let observedAt = observationEpoch
+        let validate = observationValidator(for: snapshots)
+        let boundaryX = hiddenDividerMinX(in: snapshots) ?? anchorMinX
+        guard boundaryX.isFinite else { return }
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
-            leftOfAnchorX: anchorMinX,
+            leftOfAnchorX: boundaryX,
             excludingControlItems: controlItemWindowIDs,
             displayMenuBarTop: displayMenuBarTop
         )
@@ -189,6 +201,7 @@ final class FloatingBarController {
             cachedHiddenOrder = []
             iconCache.removeAll()
             capturedGlyphIDs.removeAll()
+            unactivatableWindowIDs.removeAll()
             hasCapturedOnce = true
             return
         }
@@ -197,7 +210,9 @@ final class FloatingBarController {
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
         // Runs off the main thread so it can't stall the run loop (and block bar clicks).
-        let attributed = await AXAttributionProvider.attribute(deduped)
+        guard let attributed = try? await attributePreservingOwners(
+            deduped, observedAt: observedAt, validate: validate
+        ) else { return }
 
         // Mirror the REAL menu bar glyph (Bartender-style) by capturing it while on-screen.
         // The capture can race the section's reveal: if the screenshot lands before the glyphs
@@ -216,7 +231,11 @@ final class FloatingBarController {
         var lastGot = -1
         var stalledAttempts = 0
         for attempt in 1...Self.maxCaptureAttempts {
-            let fresh = await capture.captureIcons(for: attributed)
+            guard (try? validate()) != nil else { return }
+            let current = applyingKnownOwners(to: attributed, observedAt: observedAt)
+            guard !current.isEmpty else { return }
+            let fresh = await captureIcons(current)
+            guard (try? validate()) != nil else { return }
             // Only accept non-blank crops; a blank one isn't progress and shouldn't be cached.
             for (id, cg) in fresh where images[id] == nil && !Self.isBlank(cg) { images[id] = cg }
             let got = capturable.filter { images[$0.windowID] != nil }.count
@@ -235,8 +254,11 @@ final class FloatingBarController {
         // Merge into the cache MONOTONICALLY: a real glyph captured this pass always wins (and
         // can upgrade a prior app-icon fallback); an item with no glyph this pass keeps the real
         // glyph it had before rather than being downgraded by a flaky capture.
+        let current = applyingKnownOwners(to: attributed, observedAt: observedAt)
+        guard !Task.isCancelled, !current.isEmpty else { return }
+        unactivatableWindowIDs.removeAll()
         var captured = 0, fellBack = 0, omitted = 0
-        for item in attributed {
+        for item in current {
             if let cg = images[item.windowID] {
                 // The captured glyph is trimmed to its bounding box; size the NSImage from the
                 // glyph's own pixel dimensions so its aspect ratio is preserved when scaled.
@@ -257,18 +279,17 @@ final class FloatingBarController {
                 omitted += 1
             }
         }
-        cachedHiddenOrder = attributed
+        cachedHiddenOrder = current
         // Prune cache entries for items no longer present so stale glyphs can't reappear.
-        let liveIDs = Set(attributed.map { $0.windowID })
+        let liveIDs = Set(current.map { $0.windowID })
         iconCache = iconCache.filter { liveIDs.contains($0.key) }
         capturedGlyphIDs = capturedGlyphIDs.intersection(liveIDs)
-        windowIDToPID = Dictionary(attributed.map { ($0.windowID, $0.ownerPID) }, uniquingKeysWith: { _, new in new })
         hasCapturedOnce = true
         DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack) omitted=\(omitted); cache size=\(iconCache.count)")
         // If the bar is open, re-lay-it-out so a freshly captured glyph (or a now-complete set)
         // appears without the user having to reopen it.
         if isVisible {
-            await show(anchorMinX: lastAnchorMinX, anchorRightX: lastAnchorRightX)
+            await show(anchorMinX: lastAnchorMinX ?? anchorMinX, anchorRightX: lastAnchorRightX)
         }
     }
 
@@ -287,7 +308,8 @@ final class FloatingBarController {
     /// re-layout show() while already visible): pointer-driven opens pass `true` so a bar the user
     /// never moves onto tidies away; a keyboard toggle passes `false` so it stays until re-toggled.
     func show(anchorMinX: CGFloat, anchorRightX: CGFloat, autoDismissWhenAbandoned: Bool = true) async {
-        lastAnchorMinX = anchorMinX
+        guard !Task.isCancelled else { return }
+        lastAnchorMinX = anchorMinX.isFinite ? anchorMinX : nil
         lastAnchorRightX = anchorRightX
         // The BAR renders the filtered set (any suppressed-from-bar items dropped, explicit order
         // applied). buildItemsFromCache() is the full mirrored set behind that filter.
@@ -313,29 +335,6 @@ final class FloatingBarController {
         // AppKit's bottom-left space using this screen's real maxY.
         let layoutFrame = CGRect(x: screenFrame.minX, y: 0, width: screenFrame.width, height: screenFrame.height)
 
-        // When empty, lay out as if for one item so the "no hidden items" message has a
-        // sensibly-sized panel. This gives visible feedback that the click registered.
-        let layout = FloatingBarLayout.layout(
-            style: preferences.floatingBarStyle,
-            itemCount: max(items.count, 1),
-            anchorRightX: anchorRightX,
-            menuBarHeight: menuBarHeight,
-            displayFrame: layoutFrame,
-            metrics: .default
-        )
-
-        // x is already global (the layout clamped in global x); only convert the top-left y to
-        // AppKit's bottom-left, anchored to the chosen screen's real top edge.
-        let appKitY = screenFrame.maxY - layout.panelFrame.maxY
-        let panelFrame = CGRect(
-            x: layout.panelFrame.minX,
-            y: appKitY,
-            width: layout.panelFrame.width,
-            height: layout.panelFrame.height
-        )
-
-        // The same per-line cap the panel frame was sized from, so the rendered grid matches the
-        // panel exactly (no clipping, no empty slack) and a large hidden set wraps on-screen.
         let perLine = FloatingBarLayout.itemsPerLine(
             style: preferences.floatingBarStyle,
             displayFrame: layoutFrame,
@@ -351,8 +350,21 @@ final class FloatingBarController {
             onActivate: { [weak self] item in self?.activate(item) }
         )
 
+        // Empty/preparing views are not one-cell grids; size the panel from its actual content.
+        let hosting = NSHostingController(rootView: root)
+        hosting.view.layoutSubtreeIfNeeded()
+        let frame = FloatingBarLayout.panelFrame(
+            contentSize: hosting.view.fittingSize,
+            anchorRightX: anchorRightX,
+            menuBarHeight: menuBarHeight,
+            displayFrame: layoutFrame
+        )
+        let panelFrame = CGRect(
+            x: frame.minX, y: screenFrame.maxY - frame.maxY,
+            width: frame.width, height: frame.height
+        )
         let panel = panel ?? makePanel()
-        panel.contentViewController = NSHostingController(rootView: root)
+        panel.contentViewController = hosting
         self.panel = panel
         // A FRESH open (not a re-layout show() while already visible) resets the mouse-exit
         // entry latch: the pointer hasn't been on this newly-shown bar yet, so the exit watchdog
@@ -418,7 +430,7 @@ final class FloatingBarController {
         }
     }
 
-    func hide() {
+    func hide(notifyDismissal: Bool = true) {
         // Cancel any in-flight activation: if the bar is being hidden (auto-rehide, an anchor
         // re-click, or the engine tearing down), a slow activation that hasn't fired yet must not
         // later warp the cursor and synthesize a click into the menu bar after the user moved on.
@@ -433,6 +445,7 @@ final class FloatingBarController {
         // flag; it was set false the first time hide() ran.
         guard isVisible else { return }
         isVisible = false
+        if notifyDismissal { onDidHide?() }
 
         // Tear down the mouse-exit watch and any pending grace dismissal so neither leaks nor
         // fires after the bar is closed. Always done, regardless of how we hide.
@@ -477,28 +490,36 @@ final class FloatingBarController {
 
     // MARK: - Diagnostics
 
-    /// Builds a read-only diagnostics report of the current hidden-item understanding: the
-    /// cached attribution plus a deep Accessibility dump of each item's extra element. Presses
-    /// nothing, mutates no state. Triggered by SIGUSR1 for inspection during development.
+    /// Inspects hidden items without pressing, revealing, or moving anything.
+    /// Only the presentation/AX caches are refreshed by this diagnostics read.
     func makeDiagnosticsReport() async -> DiagnosticsReport {
-        // Refresh the cache first so the report reflects the live menu bar (this reveals and
-        // re-hides briefly via captureAndCache's callers; here we just re-enumerate + attribute
-        // without touching the divider, to stay read-only).
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        var report = DiagnosticsReport(
+            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            anchorMinX: Double(lastAnchorMinX ?? 0),
+            items: []
+        )
+        guard let snapshots = try? menuBarSnapshots() else { return report }
+        let observedAt = observationEpoch
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
-            leftOfAnchorX: lastAnchorMinX,
+            leftOfAnchorX: hiddenDividerMinX(in: snapshots) ?? lastAnchorMinX ?? 0,
             excludingControlItems: controlItemWindowIDs,
             displayMenuBarTop: displayMenuBarTop
         )
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(hidden)
-        let attributed = await AXAttributionProvider.attribute(deduped)
+        guard let attributed = try? await attributePreservingOwners(
+            deduped, observedAt: observedAt, validate: observationValidator(for: snapshots)
+        ) else { return report }
 
-        let axInfo = await AXInspector.inspect(
-            targets: attributed.map { ($0.windowID, $0.frame.minX, $0.frame.width) }
-        )
+        var axInfo: [CGWindowID: AXInspector.ElementInfo] = [:]
+        if !Task.isCancelled, !attributed.isEmpty {
+            axInfo = await AXInspector.inspect(
+                targets: attributed.map { ($0.windowID, $0.frame.minX, $0.frame.width) }
+            )
+        }
 
-        let items = attributed.map { snapshot in
+        let current = Task.isCancelled ? [] : applyingKnownOwners(to: attributed, observedAt: observedAt)
+        report.items = current.map { snapshot in
             DiagnosticsReport.Item(
                 windowID: snapshot.windowID,
                 displayName: FloatingBarItem(snapshot: snapshot, image: NSImage()).displayName,
@@ -510,11 +531,7 @@ final class FloatingBarController {
                 axElement: axInfo[snapshot.windowID]
             )
         }
-        return DiagnosticsReport(
-            generatedAt: ISO8601DateFormatter().string(from: Date()),
-            anchorMinX: Double(lastAnchorMinX),
-            items: items
-        )
+        return report
     }
 
     /// Renders the current floating-bar contents to a PNG on disk for visual inspection during
@@ -557,55 +574,147 @@ final class FloatingBarController {
 
     // MARK: - Internals
 
-    /// Whether the cached mirror no longer matches the live menu bar — i.e. the set of hidden
-    /// items (left of the anchor) changed since the last capture, because an app added or
-    /// removed its status item. Cheap: one `CGWindowList` enumeration, no screenshot. The
-    /// caller shows the (slightly stale) cache instantly and refreshes in the background only
-    /// when this is true, so a normal open never pays for a capture.
+    private func hiddenDividerMinX(in snapshots: [MenuBarItemSnapshot]) -> CGFloat? {
+        if let divider = snapshots.first(where: { $0.windowID == hiddenDividerWindowID }), divider.frame.minX.isFinite {
+            return divider.frame.minX
+        }
+        let named = snapshots.filter { $0.title == ControlItem.Identifier.hiddenDivider.rawValue }
+        // Multiple display copies cannot be disambiguated by enumeration order.
+        guard named.count == 1, let minX = named.first?.frame.minX, minX.isFinite else { return nil }
+        return minX
+    }
+
+    private func menuBarSnapshots() throws -> [MenuBarItemSnapshot] {
+        try Task.checkCancellation()
+        let snapshots = try windowServer.menuBarItems()
+        try Task.checkCancellation()
+        // A shown or temporarily implausible window is still alive; only absence ends its identity.
+        let liveIDs = Set(snapshots.map(\.windowID))
+        guard liveIDs.count == snapshots.count,
+              snapshots.allSatisfy({ item in
+                  let frame = item.frame
+                  return frame.minX.isFinite && frame.maxX.isFinite
+                      && frame.minY.isFinite && frame.maxY.isFinite
+              }) else {
+            throw WindowServerError.invalidServerResponse("invalid menu bar window geometry")
+        }
+        observationEpoch &+= 1
+        windowOwners = windowOwners.filter { liveIDs.contains($0.key) }
+        for id in liveIDs where windowOwners[id] == nil {
+            windowOwners[id] = (observationEpoch, 0, nil)
+        }
+        iconCache = iconCache.filter { liveIDs.contains($0.key) }
+        capturedGlyphIDs.formIntersection(liveIDs)
+        cachedHiddenOrder.removeAll { !liveIDs.contains($0.windowID) }
+        unactivatableWindowIDs.formIntersection(liveIDs)
+        return snapshots
+    }
+
+    private func observationValidator(for snapshots: [MenuBarItemSnapshot]) -> @MainActor () throws -> Void {
+        let frames = observationFrames(snapshots)
+        let ownNames = Dictionary(uniqueKeysWithValues: snapshots.filter(HiddenItemsResolver.isOwnControlItem)
+            .map { ($0.windowID, $0.title) })
+        let controls = (controlItemWindowIDs, hiddenDividerWindowID, displayMenuBarTop)
+        let boundaryX = hiddenDividerMinX(in: snapshots)
+        let fallbackBoundaryX = boundaryX == nil ? lastAnchorMinX : nil
+        let observedAt = observationEpoch
+        return {
+            let fresh = try self.menuBarSnapshots()
+            let freshOwnNames = Dictionary(uniqueKeysWithValues: fresh.filter(HiddenItemsResolver.isOwnControlItem)
+                .map { ($0.windowID, $0.title) })
+            // AX matches positions; neither a reflow nor an observed ID reuse can share its sample.
+            guard frames == self.observationFrames(fresh), ownNames == freshOwnNames,
+                   controls == (self.controlItemWindowIDs, self.hiddenDividerWindowID, self.displayMenuBarTop),
+                   boundaryX == self.hiddenDividerMinX(in: fresh),
+                   fallbackBoundaryX == (boundaryX == nil ? self.lastAnchorMinX : nil),
+                  frames.keys.allSatisfy({ (self.windowOwners[$0]?.firstSeen ?? .max) <= observedAt }) else {
+                throw WindowServerError.invalidServerResponse("menu bar geometry changed during attribution")
+            }
+        }
+    }
+
+    private func observationFrames(_ snapshots: [MenuBarItemSnapshot]) -> [CGWindowID: CGRect] {
+        Self.framesByWindowID(snapshots.filter {
+            controlItemWindowIDs.contains($0.windowID) || $0.windowID == hiddenDividerWindowID
+                || HiddenItemsResolver.isOwnControlItem($0)
+                || HiddenItemsResolver.isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop)
+        })
+    }
+
+    private static func framesByWindowID(_ snapshots: [MenuBarItemSnapshot]) -> [CGWindowID: CGRect] {
+        Dictionary(snapshots.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    private func attributePreservingOwners(
+        _ snapshots: [MenuBarItemSnapshot], observedAt: UInt64, validate: @MainActor () throws -> Void
+    ) async throws -> [MenuBarItemSnapshot] {
+        try Task.checkCancellation()
+        guard !snapshots.isEmpty else { return [] }
+        let attributed = await attribute(snapshots)
+        try validate()
+        guard attributed.count == snapshots.count,
+              Self.framesByWindowID(attributed) == Self.framesByWindowID(snapshots) else {
+            throw WindowServerError.invalidServerResponse("attribution changed its candidate geometry")
+        }
+        for item in attributed {
+            // Tahoe's blanket owner and empty labels are unresolved, not replacement identities.
+            guard let name = item.ownerBundleID, !name.isEmpty, name != "Control Center",
+                  var cached = windowOwners[item.windowID], cached.firstSeen <= observedAt,
+                  cached.resolvedAt <= observedAt else { continue }
+            cached.owner = (name, item.ownerPID)
+            cached.resolvedAt = observedAt
+            windowOwners[item.windowID] = cached
+        }
+        return applyingKnownOwners(to: snapshots, observedAt: observedAt)
+    }
+
+    private func applyingKnownOwners(
+        to snapshots: [MenuBarItemSnapshot], observedAt: UInt64
+    ) -> [MenuBarItemSnapshot] {
+        snapshots.compactMap { snapshot in
+            guard let cached = windowOwners[snapshot.windowID], cached.firstSeen <= observedAt else { return nil }
+            guard let owner = cached.owner else { return snapshot }
+            return snapshot.attributed(bundleID: owner.name, pid: owner.pid)
+        }
+    }
+
+    /// Checks physical hidden membership with one enumeration, without capturing any images.
+    /// Failure requests a refresh without invalidating the cached mirror.
     func cachedMirrorIsStale(anchorMinX: CGFloat) -> Bool {
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
+        let cached = Set(cachedHiddenOrder.map { $0.windowID })
+        guard let snapshots = try? menuBarSnapshots() else { return true }
         let hidden = HiddenItemsResolver.hiddenItems(
             from: snapshots,
-            leftOfAnchorX: anchorMinX,
+            leftOfAnchorX: hiddenDividerMinX(in: snapshots) ?? anchorMinX,
             excludingControlItems: controlItemWindowIDs,
             displayMenuBarTop: displayMenuBarTop
         )
         let live = Set(HiddenItemsResolver.deduplicateByMidXProximity(hidden).map { $0.windowID })
-        let cached = Set(cachedHiddenOrder.map { $0.windowID })
         return live != cached
     }
 
     // MARK: - Shared accessors
 
-    /// Enumerates EVERY manageable menu bar item — both currently-shown (right of the anchor) and
-    /// hidden (left) — for the Settings Items list, where the user toggles each item Shown/Hidden.
-    /// This is broader than the mirrored (left-of-anchor) set: the picker must show items on both
-    /// sides so a shown item can be hidden and vice-versa.
-    ///
-    /// Read-only and non-disruptive: it enumerates + attributes without revealing or moving
-    /// anything. Each item gets its cached glyph if we have one (hidden items, captured earlier),
-    /// otherwise its owning app's icon — good enough for a settings list, and it never blanks.
-    /// Excludes our own control items and immovable system items (which can't be managed).
-    func allManageableItems() async -> [FloatingBarItem] {
-        let snapshots = (try? windowServer.menuBarItems()) ?? []
-        // Exclude our own control items by window id AND name prefix — the same belt-and-suspenders
-        // the floating-bar resolver uses. The window-id set is refreshed before a show, but it can
-        // still be stale on Tahoe (ids are reassigned when a status item is recreated), and the
-        // Settings picker can enumerate at any time; without the name-prefix backstop a stale id set
-        // would surface BKF's own anchor/divider as a hideable row (it passes the key/immovable
-        // filter below, since its owner name isn't denylisted) — letting the user hide their own
-        // anchor. `isOwnControlItem` is the pure, tested guard for exactly this.
+    /// Enumerates manageable items on both sides of the divider without revealing or moving them.
+    /// Failed or unstable observations throw so Settings can retain its existing rows.
+    func allManageableItems() async throws -> [FloatingBarItem] {
+        let snapshots = try menuBarSnapshots()
+        let observedAt = observationEpoch
+        let boundaryX = hiddenDividerMinX(in: snapshots) ?? lastAnchorMinX
+        // Filter raw geometry before AX matching, without discarding cosmetically tucked windows.
         let candidates = snapshots.filter {
-            !controlItemWindowIDs.contains($0.windowID) && !HiddenItemsResolver.isOwnControlItem($0)
+            !controlItemWindowIDs.contains($0.windowID) && $0.windowID != hiddenDividerWindowID
+                && !HiddenItemsResolver.isOwnControlItem($0)
+                && HiddenItemsResolver.isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop)
         }
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(candidates)
-        let attributed = await AXAttributionProvider.attribute(deduped)
-        // Drop items owned by Control Center (every module shares its pid) and by our own process,
-        // so they can never be listed — let alone toggled — as hideable rows. Matches the pid set
-        // the move planner refuses, so the picker and the planner agree on what's manageable. The
-        // snapshots are attributed just above, so each carries its real owning pid.
+        let attributed = try await attributePreservingOwners(
+            deduped, observedAt: observedAt, validate: observationValidator(for: snapshots)
+        )
+        try Task.checkCancellation()
+        // Apply PID exclusions only after attribution; Tahoe's raw PID can belong to Control Center.
         let immovablePIDs = ImmovableProcessIDs.current()
-        return attributed
+        return applyingKnownOwners(to: attributed, observedAt: observedAt)
             .filter { !ImmovableItems.isImmovable($0, immovablePIDs: immovablePIDs) && ItemControlStore.key(for: $0) != nil }
             .sorted { $0.frame.minX < $1.frame.minX } // left-to-right, stable order
             .map { snapshot in
@@ -614,7 +723,8 @@ final class FloatingBarController {
                     snapshot: snapshot,
                     image: image,
                     isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
-                    alias: preferences.itemAliases.alias(for: snapshot)
+                    alias: preferences.itemAliases.alias(for: snapshot),
+                    observedHidden: boundaryX.map { snapshot.frame.maxX <= $0 }
                 )
             }
     }
@@ -675,11 +785,12 @@ final class FloatingBarController {
             onNeedsAccessibility?()
             return
         }
-        hide()
+        hide(notifyDismissal: false)
         // Supersede any in-flight activation so a slow earlier one can't fire its
         // cursor-warping click late. Capture a per-task deadline as a second backstop.
         currentActivationTask?.cancel()
         let deadline = Date().addingTimeInterval(Self.activationDeadline)
+        let observedAt = observationEpoch
         currentActivationTask = Task { @MainActor in
             await revealHiddenItems?()
             // revealForActivation already settles ~120ms; a short extra wait covers reflow.
@@ -687,14 +798,25 @@ final class FloatingBarController {
 
             // Superseded by a newer click, or this task is ancient. Don't re-hide — the
             // successor task (or the anchor) owns the divider's state.
-            guard !Task.isCancelled, Date() < deadline else {
-                DebugLog.log("activate: superseded/stale before press for \(item.snapshot.windowID)")
+            guard !Task.isCancelled else {
+                DebugLog.log("activate: superseded before press for \(item.snapshot.windowID)")
+                return
+            }
+            guard Date() < deadline else {
+                DebugLog.log("activate: expired before press for \(item.snapshot.windowID)")
+                rehideItems?()
                 return
             }
 
             // Re-find the item by window id to get its current (on-screen) frame.
-            let snapshots = (try? windowServer.menuBarItems()) ?? []
-            let current = snapshots.first { $0.windowID == item.snapshot.windowID } ?? item.snapshot
+            guard let snapshots = try? menuBarSnapshots(),
+                  let current = snapshots.first(where: { $0.windowID == item.snapshot.windowID }),
+                  (windowOwners[current.windowID]?.firstSeen ?? .max) <= observedAt else {
+                guard !Task.isCancelled else { return }
+                DebugLog.log("activate: no fresh snapshot for \(item.snapshot.windowID); not clicking")
+                rehideItems?()
+                return
+            }
             // On-screen is relative to the item's OWN display: a display left of/above the primary
             // has a negative global x-origin, so a revealed item there has minX < 0 yet is fully
             // on-screen. Resolve the display origin from the item's (now-revealed) midpoint.
@@ -722,12 +844,15 @@ final class FloatingBarController {
             // Optional compatibility fallback for a genuine statusItem.menu item that only
             // opens via AXShowMenu. Off by default. Guarded again because it can take a moment.
             if preferences.useAXActivation, !Task.isCancelled, Date() < deadline {
-                let pid = windowIDToPID[current.windowID] ?? current.ownerPID
-                if await AXActivator.activate(windowID: current.windowID, pid: pid, frame: current.frame) {
+                let pid = windowOwners[current.windowID]?.owner?.pid ?? current.ownerPID
+                let activated = await activateWithAX(current.windowID, pid, current.frame)
+                guard !Task.isCancelled else { return }
+                if activated {
                     scheduleAutoRehideAfterActivation?()
                     return
                 }
             }
+            guard !Task.isCancelled else { return }
             DebugLog.log("activate: could not activate \(current.windowID) — disabling + re-hiding")
             unactivatableWindowIDs.insert(current.windowID)
             rehideItems?()

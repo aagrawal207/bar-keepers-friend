@@ -17,6 +17,7 @@ final class AppCoordinator {
     private var hiddenItemController: HiddenItemController?
 
     private let hotkeys = HotkeyService()
+    private var activationObserver: NSObjectProtocol?
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
@@ -38,7 +39,7 @@ final class AppCoordinator {
     func start() {
         let bar = FloatingBarController(
             windowServer: windowServer,
-            capture: capture,
+            captureIcons: capture.captureIcons,
             preferences: preferences
         )
         floatingBar = bar
@@ -56,12 +57,24 @@ final class AppCoordinator {
         }
         engine.floatingBar = bar
         engine.hiddenItemController = mover
-        engine.install()
+        hideEngine = engine
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
         engine.onQuit = { NSApp.terminate(nil) }
         engine.onNeedsAccessibilityForMove = { AccessibilityPermission.requestAndOpenSettings() }
+        engine.onPlacementStatusChanged = { [weak self] in self?.syncPlacementStatus() }
+        engine.onPlacementCompleted = { [weak self] in
+            await self?.settingsWindowController?.model.reloadItems()
+        }
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
-        hideEngine = engine
+        bar.onDidHide = { [weak engine] in
+            Task { @MainActor in engine?.resumePendingPlacement() }
+        }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak engine] _ in
+            MainActor.assumeIsolated { engine?.resumePendingPlacement() }
+        }
+        engine.install()
 
         // Global hotkey: toggle the bar. Carbon-based, so no Accessibility prompt.
         hotkeys.onToggle = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
@@ -126,22 +139,37 @@ final class AppCoordinator {
     func stop() {
         hideEngine?.uninstall()
         hotkeys.teardown()
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
     }
 
     func showSettings() {
+        floatingBar?.hide()
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(
                 preferences: preferences,
                 loginItem: loginItem,
-                itemsProvider: { [weak self] in await self?.floatingBar?.allManageableItems() ?? [] }
+                itemsProvider: { [weak self] in try await self?.floatingBar?.allManageableItems() ?? [] },
+                onRetryPlacement: { [weak self] in self?.hideEngine?.reconcileHiddenItems(userInitiated: true) }
             ) { [weak self] updated in
                 self?.persist(updated)
                 self?.hideEngine?.apply(preferences: updated)
                 self?.floatingBar?.preferences = updated
                 self?.hotkeys.apply(preferences: updated)
             }
+            settingsWindowController?.model.onAccessibilityGranted = { [weak self] in
+                self?.hideEngine?.resumePendingPlacement()
+            }
         }
+        syncPlacementStatus()
         settingsWindowController?.show()
+    }
+
+    private func syncPlacementStatus() {
+        guard let engine = hideEngine, let model = settingsWindowController?.model else { return }
+        model.placementInProgress = engine.placementInProgress
+        model.placementMessage = engine.placementMessage
+        model.placementFailed = engine.placementFailed
     }
 
     private func persist(_ updated: Preferences) {

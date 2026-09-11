@@ -23,7 +23,7 @@ enum AXAttributionProvider {
     /// bar's clicks. The list of running apps is read on the main actor first (NSWorkspace's
     /// KVO-backed properties are main-affined), then only the C-level AX calls go off-main.
     static func attribute(_ snapshots: [MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] {
-        guard AXIsProcessTrusted() else { return snapshots }
+        guard !Task.isCancelled, AXIsProcessTrusted() else { return snapshots }
 
         let apps: [(pid: pid_t, name: String)] = await MainActor.run {
             NSWorkspace.shared.runningApplications.compactMap { app in
@@ -33,9 +33,14 @@ enum AXAttributionProvider {
             }
         }
 
-        return await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             attributeSync(snapshots, apps: apps)
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     /// The synchronous AX sweep + frame match. Safe to run off the main thread (AX C-APIs are
@@ -53,6 +58,7 @@ enum AXAttributionProvider {
         // extra from display B could win an item on display A and mislabel/mis-move it).
         var extras: [(leftEdge: CGFloat, topY: CGFloat, label: String, pid: pid_t)] = []
         for app in apps {
+            guard !Task.isCancelled else { return snapshots }
             let axApp = AXUIElementCreateApplication(app.pid)
             // Cap each app's Accessibility IPC. Without a timeout a single hung or slow app
             // would stretch the sweep to the system default (~6s+) per app.
@@ -60,6 +66,7 @@ enum AXAttributionProvider {
             guard let extrasMenu = copyElement(axApp, attribute: "AXExtrasMenuBar") else { continue }
             let isControlCenter = app.name == "Control Center"
             for child in copyChildren(extrasMenu) {
+                guard !Task.isCancelled else { return snapshots }
                 guard let position = copyPosition(child) else { continue }
                 var label = app.name
                 if isControlCenter, let title = moduleLabel(child) {

@@ -1,6 +1,6 @@
-# CLAUDE.md — Bar Keeper's Friend
+# AGENTS.md - Bar Keeper's Friend
 
-Context for Claude Code sessions working on this repo. This file is the running source of
+Instructions for coding agents working on this repo. This file is the running source of
 truth for **what's built, what's left, and what's broken**. Keep it current.
 
 ## What this is
@@ -13,10 +13,21 @@ Amazon address.
 User's bar: **flawless, very well tested**, effort no object. Default to removing confusing
 options over adding power-user knobs.
 
+## Current direction
+
+The user has authorized commits and pushes and requested continued work toward Bartender parity.
+Track actual capabilities and verification gaps in [PARITY.md](PARITY.md); do not equate a passing
+build with complete parity. Choose the best engineering approach without asking for routine
+recommendations. Native behavior still requires evidence, and the safety gates below still apply.
+
+The user explicitly requested hover reveal again on 2026-09-11: an opt-in setting below Auto
+Re-hide that opens the floating bar when hovering over the BKF icon and closes a hover-owned bar after leaving.
+Click/keyboard ownership, Pause, and disabling the setting must remain authoritative.
+
 ## Loop charter (read first if you are an automated loop fire)
 
 A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
-CLAUDE.md current"). The app is now in good shape; the easy, safe, high-value backlog is draining.
+AGENTS.md current"). The app is now in good shape; the easy, safe, high-value backlog is draining.
 That changes the risk: a prompt that says *do something every 30 minutes* eventually pressures you
 to invent work, chase phantoms, or touch fragile unverifiable paths just to have shipped something.
 **Don't.** The real goal is not "ship a change every fire" — it is **leave the app at least as good
@@ -40,9 +51,9 @@ this fire; top blocked items are X, Y — need hardware QA / user input") and **
 - **Do not change the attribution label or any persistence key.** The owner-label string is the key
   for Hidden/Shown intent (`ItemControlStore`) and aliases (`ItemAliasStore`); changing how a key is
   formed silently evaporates every user's saved config. This is the scariest landmine here.
-- **Do not re-add removed features** (search, section dividers, reveal-on-hover) — see **Removed**.
-  NOTE: the old plan file `~/.claude/plans/polished-nibbling-pizza.md` still *describes* search and
-  the read-only picker — it is stale; CLAUDE.md is the source of truth, not the plan.
+- **Do not re-add removed features** (search or visible section dividers) without an explicit
+  request. Hover reveal has fresh user approval; see Current direction. Historical plans are not
+  current requirements; AGENTS.md is the source of truth.
 - **Do not weaken, skip, or delete a test to get green.** A failing test is a finding, not an
   obstacle. Fix the root cause or report it.
 - **Do not invent NEW features or add knobs.** The user prefers *removing* options. But as of
@@ -56,10 +67,10 @@ this fire; top blocked items are X, Y — need hardware QA / user input") and **
 
 ### Definition of done for a fire
 Build + the full test suite green; security scan (`scan_diff`) clean on the diff; one focused commit
-with a surgical diff (every changed line traces to the task); CLAUDE.md updated **honestly** — mark
+with a surgical diff (every changed line traces to the task); AGENTS.md updated **honestly** — mark
 something RESOLVED only when it is actually verified (distinguish "pure + tested" from "compiles, but
-needs hardware verification"; never call a compile a verification). Git rules: never `git push` /
-force-push / rewrite pushed history; commits use the GitHub noreply email.
+needs hardware verification"; never call a compile a verification). Push only with user authorization;
+never force-push or rewrite pushed history. Commits use the GitHub noreply email.
 
 ### Circuit breakers — stop and report instead of pushing through
 - Backlog has no item that clears the pre-flight gate → report and idle.
@@ -70,8 +81,8 @@ force-push / rewrite pushed history; commits use the GitHub noreply email.
 
 ## Architecture (the seam is the point)
 
-Every OS-touching capability sits behind a protocol so the fragile parts are mockable and the
-pure logic (~70%) is unit-tested without launching the app.
+Core logic is tested separately from AppKit. Native move/click operations use `WindowServer`;
+the floating-bar controller accepts injectable capture, attribution, and AX activation closures.
 
 - **`BarKeepersFriendCore`** (static lib) — pure value types + logic. No AppKit. Swift Testing.
   Hide/show state machine, layout math, notch geometry, planners, persistence, attribution
@@ -80,13 +91,22 @@ pure logic (~70%) is unit-tested without launching the app.
   status items, the floating bar panel, capture, the synthesized move, settings.
 - **`WindowServer` protocol** is the single seam to the fragile/private window-server surface;
   `FakeWindowServer` backs the tests, `SystemWindowServer` is the real impl.
+- **`BarKeepersFriendAppTests`** compiles the real App adapters without the app entry points.
+  It tests capture/move orchestration with fakes and measures SwiftUI content off-screen through
+  `NSHostingController`. It never installs status items, captures the desktop, or posts mouse events.
 
 ## Build / test / run
 
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **234 tests, 25 suites**).
+- Test: same command with `test` (currently **341 tests, 32 suites**, 432 invocations including
+  parameterized cases). Last full build/test: 2026-09-11, macOS 26.6.2 / Xcode 26.6, zero failures
+  or skipped tests. The built app also passed `codesign --verify --deep --strict`.
+- Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
+  `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
+  is unchanged. AppKit hide-animation completion still produces pre-existing actor-isolation
+  compiler warnings on a full compile.
 - Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
   permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
@@ -111,13 +131,14 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 - **Cosmetic hide/show** — own anchor + (now invisible) divider `NSStatusItem`; expanding the
   divider's length pushes items left of the anchor off-screen. Zero permissions, zero private
-  APIs — the unbreakable baseline. Divider width bounded `[500, 4000]` (never literal 10000).
+  APIs — the unbreakable baseline. Divider width bounded `[500, 9000]` (never literal 10000).
 - **Floating bar** — mirrors hidden (left-of-anchor) items in a panel below the menu bar
   (horizontal strip / vertical list). Captures each icon's image while on-screen (off-screen
   items can't be captured), caches it, shows from cache. Monotonic cache + two-pass warm-up so
   first load is clean. Slide+fade animation, Reduce-Motion aware. Needs Screen Recording.
 - **Activate a mirrored item** — reveal section → synthesized CGEvent click → leave revealed so
-  the menu opens. Cursor hidden during the click. Needs Accessibility.
+  the menu opens. Needs Accessibility; cursor hiding can fail for the nonactivating panel, so the
+  visible pointer jump remains open below.
 - **Per-item Shown/Hidden (private API) — VERIFIED WORKING on-device 2026-06-28.** Settings → Items
   lists every manageable item with a Shown/Hidden segmented control; flipping it **physically
   moves** the real item across the anchor. The move uses Ice's two-tap "scromble" relay (a direct
@@ -131,6 +152,14 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `ItemControlStore` tracks `hiddenInMenuBar` + `shownInMenuBar`; an un-configured item has no
   intent and is left exactly where it sits (hiding one item never rearranges the rest). Pure
   `HiddenLayoutPlanner` decides moves; tested against `FakeWindowServer` (162 tests).
+- **Shown/Hidden consistency, re-verified 2026-09-11.** Native drops carry the destination
+  control's window ID, not the dragged window's ID. The mover resolves fresh control/item frames
+  for each attempt and verifies the entire item reached the requested side. Hidden is measured
+  against the actual divider, including its natural width. When Tahoe supplies no usable AppKit
+  window number, controls are resolved by their unique, exact native window names on the display.
+  Settings shows observed placement, progress, and failures; repeating an unmet request retries
+  without rewriting identical preferences. A single or bulk Shown request no longer depends on
+  changing the Hidden set, and opening Settings dismisses the mirror.
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
 - **Anchor right-click menu** — app name + version header, a live **status line** (Paused / Ready /
@@ -146,11 +175,12 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Settings…" button per permission. Polls while open so a freshly-granted permission updates
   without reopening. Both are optional (the cosmetic baseline needs neither), so it never blocks.
   Pure `PermissionState` machine in Core + `SystemPermissionProbe` in the app target.
-- **Floating bar grid wrapping** — a large hidden set no longer overflows the screen. `Floating-
-  BarLayout` computes a screen-fitted items-per-line and wraps into a grid (horizontal → extra
-  rows; vertical → extra columns); `FloatingBarView` renders the matching grid. Pure + tested
-  (panel never exceeds the display at 80 items either axis). *(grid rendering not yet
-  hardware-verified, but the geometry is.)*
+- **Floating bar grid wrapping** - `FloatingBarView` uses the same cell metrics and padding as
+  `FloatingBarLayout`; incomplete horizontal rows align left. The panel is sized from the hosted
+  content, including the empty/preparing states. Off-screen hosting tests verify both styles at
+  wrapping boundaries and 80 items on a 1512x982 display, with default/custom metrics and long
+  aliases. This verifies actual SwiftUI sizing, not just Core rectangles. Displayed appearance,
+  hit targets, and layouts exceeding the capacity of both axes still need hardware QA.
 - **Items list grouped Hidden / Shown** — Settings → Items splits into "Hidden (N)" and
   "Shown (N)" sections instead of one interleaved list, so the two states scan at a glance and a
   toggled row visibly moves between them (cheap re-partition, no menu-bar re-scan). Pure
@@ -172,11 +202,87 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 - **Search panel** + its ⌥⌘F hotkey — user found it confusing.
 - **"Show section dividers"** toggle — divider is now an invisible mechanism only.
-- **Reveal-on-hover** — user didn't want it (and the off-switch didn't fully stop it).
+- **Previous reveal-on-hover implementation** - removed because the user did not want it and its
+  off switch did not fully stop it. A replacement was explicitly requested on 2026-09-11; it must
+  be opt-in and tested for cancellation, manual ownership, and disabling while open.
 
 ## Remaining work
 
 ### Bugs (open)
+
+- **[OPEN 2026-09-11] Itsycal Shown failed on the external display.** Two live requests on the
+  1920-point display each exhausted five attempts: window 58 stayed at x=1525 while the anchor
+  was x=1625, despite both relay legs reporting submission. This was a real failed placement,
+  not merely a stale Settings label. After the display changed back to 1512 points, the saved
+  Shown intent succeeded on the first attempt (x=1114 to x=1238). External-display recovery has
+  not been verified. Do not call this fixed based on the built-in-display success or assume a
+  longer delay/width-specific offset is the answer without a demonstrated cause.
+- **[RESOLVED 2026-09-11, adapter-tested + live placement verified] Shown did not restore items.**
+  The user's running build did reach the native mover: ACME and Maccy initially logged move
+  failures. A subsequent instrumented run moved ACME but falsely called Maccy successful because
+  ACME's relocation shifted Maccy from x=1152 to x=1118 while it was still hidden. The old test
+  accepted any displacement from the original batch snapshot. Relative native destinations and
+  fresh full-edge postconditions replace that check. The AppKit control-ID lookup also returned
+  no usable IDs on this rig, despite the named control windows being present; the native lookup
+  closes that gap without changing autosave names or keys. The fixed build moved Maccy from
+  x=1122 to x=1330 on its first attempt. An independent WindowServer read after collapse showed
+  anchor=[1222,1254], Maccy=[1330,1362], ACME=[1362,1396], both items marked on-screen, with the
+  divider expanded to 1728pt. This verifies placement, not the absence of visible cursor motion.
+  A subsequent standalone relaunch needed zero moves and kept both items on the shown side.
+- **[RESOLVED 2026-09-11, adapter-tested] Settings reported intent as completed placement.**
+  Rows now use observed section membership; failed moves remain actionable and show an error.
+  Direct picker bindings replace the on-appearance state writeback, so loading a row does not
+  write intent or re-register shortcuts. Shown-only changes and identical retries reach the
+  serialized placement path. Deferred requests resume on permission recovery, unpause, or genuine
+  dismissal, not while an item menu is opening. Superseded activations join any draining move
+  before clicking; withdrawing intent restores the divider only after old work relinquishes it.
+- **[RESOLVED 2026-09-11, adapter-tested] Read races could erase or mislabel valid cached items.**
+  Failed enumeration is not treated as an empty menu bar. Cached owners survive unresolved AX
+  reads only for continuously observed window IDs; disappearance invalidates them. Candidate and
+  control geometry are checked before committing attribution or images. Settings loads use
+  generation ownership, retain previous rows on read errors, and clean up loading on cancellation.
+  Rejected first captures remain unfinished work and receive the bounded warm-up second pass.
+- **[OPEN, verification scope] Remaining Bartender-level gaps.** Cursor flicker and some native
+  menu-activation behavior still need a live user check. Full cold-from-boot capture, multi-display
+  representative selection, and recovery from a genuinely non-returning native call are not proved
+  by these tests. The frame matcher remains heuristic; this pass did not change its labels,
+  tolerance, or greedy assignment policy. No claim of full Bartender feature parity is made.
+
+- **[RESOLVED 2026-09-10, adapter-tested] Pause did not cancel queued/in-flight work.** The old
+  request-time guard let a pending reconcile move items after Pause and let its completion hide
+  them again. Three hostless regression tests failed against that behavior before the fix.
+  Cancellation now reaches the whole capture chain, with checks after suspension and before each
+  new move/capture. Late results cannot replace the icon cache or re-hide the section. Native
+  move retries stop between complete down/up pairs; the event-routing mechanism is unchanged.
+  Disable/uninstall also cancel pending work. Resume restarts unfinished icon collection even
+  without Accessibility. Tests cover queued cancellation, attribution/capture suspension, a
+  partially completed move batch, fresh work after resume, and late AX success/failure cleanup.
+  Real native cancellation timing and cursor restoration remain hardware-only verification.
+- **[RESOLVED 2026-09-10, hosting-tested] Floating-bar content exceeded its allocated frame.**
+  The view independently used 26pt cells plus 6pt gaps and 200pt vertical columns, while Core
+  allocated 30pt cells and 190pt columns. At 80 horizontal items the rendered row was 1578pt on
+  a 1512pt display. Shared metrics fix the mismatch; intrinsic sizing also stops the 240pt empty
+  message from being squeezed into a one-cell frame. No capture keying or click routing changed.
+- **[RESOLVED 2026-09-10, pure + persistence-tested] Imported delays could crash Settings.**
+  A finite `autoRehideDelay: 1e20` reached a trapping `Int` conversion and was saved before the
+  view rendered. Initialization, decoding, and mutation now clamp finite delays to the existing
+  2...120s UI range; nonfinite values use 15s. Valid fractions remain intact. Tests cover legacy
+  saved data and import/save/reload while preserving aliases, item intent, and Codable keys.
+- **[RESOLVED 2026-09-10, adapter-tested] Cancelled Items-tab loads could overwrite newer data.**
+  `SettingsModel.reloadItems` owns the loaded items/loading state and ignores cancelled results.
+  Tests finish an older cancelled load both before and after its replacement. Attribution label
+  construction and persistence identity are unchanged.
+- **[OPEN 2026-09-10] The capture queue's eight-second timeout is not a hard timeout.**
+  `awaitBounded` races a task-value waiter against a sleep inside a structured task group. Group
+  exit still waits for the waiter, so a non-returning native operation blocks later sequences.
+  Cancellation now prevents later side effects but cannot force that native call to return.
+  Do not claim timeout recovery is verified, or replace the wait with overlapping operations
+  without isolating native move/capture ownership. The older "overtaken capture" note is corrected
+  below. This is code-traced, not a reproduced live ScreenCaptureKit hang.
+- **[LOW, open 2026-09-10] Export errors and login approval need clearer feedback.** Export
+  returns `nil` for both cancellation and write failure, clearing the status line in either case.
+  Launch-at-login shows saved intent without exposing `.requiresApproval` or the existing System
+  Settings recovery action. Both are code-traced Settings gaps; neither is fixed in this pass.
 
 - **[OPEN 2026-06-30] Activation click visibly moves the cursor ("the whole mouse moves"), and some
   items' menus don't open.** User-reported. The activation click (`SystemWindowServer.click`) warps
@@ -195,13 +301,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     at opening a menu than a real positioned click — the server's by-windowID special-casing is for the
     ⌘-drag rearrange, not a menu-open. So the premise was wrong; reverted to the known-good warp click
     (opens menus reliably; cursor flickers but returns). Lesson recorded so no future fire retries it.
-  - **REAL next option (NOT yet attempted): disassociate the HID cursor during the warp.** Wrap the
-    existing warp click in `CGAssociateMouseAndMouseCursorPosition(false)` … `(true)` so the synthetic
-    event posts at the item position WITHOUT the visible hardware cursor following — the "batch cursor
-    guard" pattern already noted as verified-safe in `bkf-private-api-direction` NEXT #2. This keeps
-    the menu-opening reliability of the positioned click (unchanged) while hiding the motion. Small,
-    contained change to the known-good path — but still fragile + on-device-only verifiable, so it
-    needs a live user check too. Deferred to a deliberate attempt, not piled on after this revert.
+  **Cursor proposal corrected (2026-09-11).** Do not add HID disassociation as a purported fix for
+  the explicit warp. Apple's [cursor documentation](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/MouseCursor.html)
+  explicitly permits `CGWarpMouseCursorPosition` to reposition the cursor while disassociated.
+  Disassociation does not hide it, and the posted-event interaction still needs native evidence.
+  Preserve balanced restoration and distinguish event submission from observed menu opening.
   - *Related, still open: (#2) activation reveals the strip on-screen ("menu bar items pop up again")
     — inherent to needing the menu on-screen; revisit only with a confirmed click path. (#3) displaced
     Battery CC-module still in the bar — separate hardware-QA item below.*
@@ -255,6 +359,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 > blocked on hardware verification / pixel fixtures. Future loop fires: don't re-audit Core for bugs
 > — it's drained. The next real work is App-target/on-device (hardware QA) or a documented feature
 > from "Features not yet built", not a Core bug-hunt.
+>
+> **Scope correction (2026-09-10):** that was a historical Core-only audit, not proof of App wiring
+> correctness. The integration review above found reachable defects despite all 234 prior tests
+> passing. Continue from concrete reproductions; do not repeat an undirected Core audit.
 
 - **[RESOLVED 2026-06-29] The Settings Items picker could list BKF's own anchor as a hideable row.**
   Two "exclude our own control items" paths had diverged: the floating-bar resolver
@@ -485,19 +593,13 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   (`DisplayGeometry`: `primaryHeight` finds the zero-origin frame; `menuBarTopY` no-ops to 0 if none
   is present); the engine passes the live `NSScreen` frames in. 8 new tests cover the
   non-primary-first arrangement and stacked-above/below displays.
-- **[RESOLVED 2026-06-28] Overtaken capture sequence's tail fought its successor.** After an ~8s
-  wedged ScreenCaptureKit call, `awaitBounded` lets a successor start while the orphaned predecessor
-  is still live; when the predecessor finally returned, its tail still drove the shared
-  divider/state-machine, collapsing the section out from under the successor (flicker / wallpaper
-  crop). Fixed: each sequence is stamped with a synchronously-incremented `latestCaptureEpoch`, and
-  the tail no-ops unless it's still the latest (`epoch == latestCaptureEpoch`). (`Task` is a value
-  type, so identity comparison is impossible — the epoch is the substitute; it's bumped at the exact
-  point `captureChain` is reassigned, so it's an equivalent, compiling check.) This also closes the
-  `awaitBounded`-non-cancellation finding (the evicted predecessor now backs off harmlessly and
-  unblocks the successor faster). Adversarially reviewed; async path, so not unit-tested. NOTE (pre-
-  existing, not changed): `reconcileHiddenItems` guards only on `!(floatingBar.isVisible)`, not the
-  broader `sectionInUse`, so a user item-toggle can still collapse a section an activation revealed
-  for an open menu — by design (reconcile owns its reveal→move→collapse), but worth revisiting.
+- **[PARTIAL, corrected 2026-09-10] Capture-sequence ownership guard.** `latestCaptureEpoch`
+  prevents an older completion from restoring the divider after newer work is enqueued. The
+  earlier claim that `awaitBounded` overtakes a wedged predecessor after eight seconds was wrong:
+  structured task-group exit joins every child. The guard is useful, but does not fix a blocked
+  native call; see the open timeout entry above. Cancellation behavior has hostless regression
+  tests. Separately, reconcile still guards on panel visibility, not the broader `sectionInUse`,
+  so an explicit Settings change can interrupt a native item's open menu.
 - **[LOW, open] `colorAlpha` bbox test skips the first/last crop columns** (`IconCaptureService`
   ~L225): a thin colored badge touching the crop edge can lose its outer column. Impact bounded by
   the 2pt pad. Cleanup; hard to unit-test (needs pixel fixtures). Confirmed by the audit. NOTE

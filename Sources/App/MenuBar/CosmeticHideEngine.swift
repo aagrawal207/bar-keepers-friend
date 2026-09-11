@@ -30,11 +30,22 @@ final class CosmeticHideEngine {
     /// Invoked when a reconcile pass needs Accessibility permission that isn't granted, so the
     /// per-item Hidden control can take effect. Routed to the permission prompt by the coordinator.
     var onNeedsAccessibilityForMove: (() -> Void)?
+    var onPlacementStatusChanged: (() -> Void)?
+    var onPlacementCompleted: (() async -> Void)?
+    private(set) var placementInProgress = false
+    private(set) var placementMessage: String?
+    private(set) var placementFailed = false
+    private(set) var placementPending = false
+    private(set) var placementTask: Task<Void, Never>?
+    private var placementRequestID = 0
+    private let controlWindowIDsProvider: (() -> (anchor: CGWindowID, divider: CGWindowID)?)?
+    private let setDividerCollapsed: ((Bool) -> Void)?
+    private var activationOwnsSection = false
 
     private var anchorItem: NSStatusItem?
     private var hiddenDivider: NSStatusItem?
 
-    private var stateMachine: HideShowStateMachine
+    private(set) var stateMachine: HideShowStateMachine
     private var preferences: Preferences
     /// Callback to persist preference changes the engine itself makes. CURRENTLY UNUSED: the engine
     /// mutates no persisted preference on its own — it rewrites the control-item slots directly under
@@ -72,22 +83,13 @@ final class CosmeticHideEngine {
     /// makes them fight over its collapsed state across `await` points — the launch capture
     /// could hide the section out from under a refresh mid-capture, yielding 0 glyphs. Chaining
     /// each sequence onto the previous one guarantees they run one at a time.
-    private var captureChain: Task<Void, Never> = Task {}
+    private(set) var captureChain: Task<Void, Never> = Task {}
 
-    /// Monotonic id stamped onto each capture sequence. A sequence's tail (which drives the shared
-    /// divider/state-machine) only acts while it is still the LATEST sequence — i.e. its id equals
-    /// `latestCaptureEpoch`. This is the epoch check that stops an orphaned, late-returning
-    /// predecessor (one `awaitBounded` overtook after an >8s wedge) from collapsing the divider out
-    /// from under the successor that has since taken over. `Task` is a value type so it can't be
-    /// compared by identity; a synchronously-bumped counter is the reliable substitute.
+    /// Only the latest enqueued sequence may restore the divider. Cancellation also invalidates
+    /// this ownership, so late completion cannot override Pause or a successor.
     private var latestCaptureEpoch = 0
 
-    /// Number of capture sequences currently revealing/capturing. A COUNTER, not a bool: when a
-    /// wedged predecessor is overtaken via `awaitBounded`'s timeout, predecessor and successor run
-    /// concurrently for a moment. With a bool, the orphaned predecessor's `defer` would clear the
-    /// flag while the successor is still live, defeating the click-during-capture guard (a user
-    /// click would then yank the divider shut under an in-flight screenshot). Incrementing/
-    /// decrementing means the flag stays true until the LAST sequence finishes.
+    /// Tracks transient reveals so a user toggle does not collapse the divider during capture.
     private var captureInFlightCount = 0
 
     /// Whether any capture sequence is revealing/capturing. Lets the anchor click ignore the
@@ -123,8 +125,7 @@ final class CosmeticHideEngine {
     /// Whether the app is currently paused (for the menu's checkmark).
     var paused: Bool { isPaused }
 
-    /// Upper bound on a single capture sequence so a wedged ScreenCaptureKit call can't stall
-    /// the chain forever (the next sequence waits on this one). Generous vs. the ~1s happy path.
+    /// Deadline for the predecessor race, not a hard timeout: `awaitBounded` still joins its waiter.
     private static let captureSequenceTimeout: TimeInterval = 8
 
     /// Whether the hidden section is currently in active use and must not be disturbed by an
@@ -144,21 +145,25 @@ final class CosmeticHideEngine {
     /// refresh from slamming shut a section an activation revealed for an open menu.
     /// Returns a task the caller can await if it needs the capture done before showing the panel.
     @discardableResult
-    private func runCaptureSequence(
+    func runCaptureSequence(
         forceCollapseAfter: Bool,
         _ body: @escaping @MainActor () async -> Void
     ) -> Task<Void, Never> {
+        guard !isPaused else { return Task {} }
         let previous = captureChain
         // Stamp this sequence with the next epoch (synchronously, before the task suspends), so its
         // tail can tell whether it's still the latest sequence when its body returns.
         latestCaptureEpoch += 1
         let epoch = latestCaptureEpoch
         let task = Task { @MainActor in
-            // Wait for the predecessor, but don't let a wedged one (e.g. a hung ScreenCaptureKit
-            // call) block this sequence forever — proceed after a bound. The orphaned
-            // predecessor finishes on its own; the worst case is a brief divider overlap, not a
-            // permanent stall that prevents the bar from ever showing.
-            await awaitBounded(previous, seconds: Self.captureSequenceTimeout)
+            // Cancelling the tail must also reach an in-flight predecessor, including when
+            // this task was cancelled before it started running.
+            await withTaskCancellationHandler {
+                await awaitBounded(previous, seconds: Self.captureSequenceTimeout)
+            } onCancel: {
+                previous.cancel()
+            }
+            guard !Task.isCancelled, !isPaused else { return }
             captureInFlightCount += 1
             defer { captureInFlightCount -= 1 }
             // Tell the bar which display's menu-bar top to measure item plausibility against, so a
@@ -167,16 +172,13 @@ final class CosmeticHideEngine {
             floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
             setHidden(collapsed: false)
             try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, !isPaused else { return }
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
             // shifted capture timing and produced wallpaper-only crops).
             await body()
-            // Only the most-recent sequence owns the divider/state-machine. If `awaitBounded` timed
-            // out an >8s-wedged predecessor, a SUCCESSOR has already started and now owns the bar;
-            // when this (orphaned) sequence's body finally returns, its tail must NOT collapse the
-            // divider out from under that successor (the flicker / wallpaper-crop bug). The
-            // synchronously-bumped epoch makes this a sound "am I still the latest?" check.
-            guard epoch == latestCaptureEpoch else { return }
-            if forceCollapseAfter {
+            // A late completion must not override the state established by Pause or newer work.
+            guard !Task.isCancelled, !isPaused, epoch == latestCaptureEpoch else { return }
+            if forceCollapseAfter && !activationOwnsSection {
                 _ = stateMachine.apply(.hide(.hidden))
                 setHidden(collapsed: true)
             } else {
@@ -189,9 +191,19 @@ final class CosmeticHideEngine {
         return task
     }
 
-    /// Awaits `task`, giving up after `seconds` so a wedged predecessor can't stall the chain.
-    /// `task` is `Sendable`, so racing it against a sleep in a task group is fine here (unlike
-    /// passing our non-Sendable `@MainActor` capture closure, which trips region isolation).
+    private func cancelCaptureSequences() {
+        latestCaptureEpoch += 1
+        captureChain.cancel()
+        cancelWarmUpRetries()
+        if placementInProgress {
+            placementPending = true
+            updatePlacementStatus(applying: false)
+        }
+        DebugLog.log("capture: cancelled queued and in-flight sequences")
+    }
+
+    /// The group joins its task-value waiter even if the timer wins; this is not a hard timeout.
+    /// Allowing overlap requires isolating native move/capture side effects first (see AGENTS.md).
     private func awaitBounded(_ task: Task<Void, Never>, seconds: TimeInterval) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { _ = await task.value }
@@ -201,8 +213,15 @@ final class CosmeticHideEngine {
         }
     }
 
-    init(preferences: Preferences, onPreferencesChanged: @escaping (Preferences) -> Void) {
+    init(
+        preferences: Preferences,
+        controlWindowIDs: (() -> (anchor: CGWindowID, divider: CGWindowID)?)? = nil,
+        setDividerCollapsed: ((Bool) -> Void)? = nil,
+        onPreferencesChanged: @escaping (Preferences) -> Void
+    ) {
         self.preferences = preferences
+        self.controlWindowIDsProvider = controlWindowIDs
+        self.setDividerCollapsed = setDividerCollapsed
         self.onPreferencesChanged = onPreferencesChanged
         self.stateMachine = HideShowStateMachine(
             sections: MenuBarSection.phase1,
@@ -263,8 +282,9 @@ final class CosmeticHideEngine {
             // `sectionInUse` permanently true (so refreshes silently no-op and the mirror goes
             // stale) and the next anchor click hit the `.shown` branch and get eaten. Driving the
             // collapse through the state machine keeps model and divider in sync.
-            guard let self else { return }
+            guard let self, !self.isPaused, !Task.isCancelled else { return }
             self.enact(self.stateMachine.apply(.hide(.hidden)))
+            self.resumePendingPlacement()
         }
         floatingBar?.scheduleAutoRehideAfterActivation = { [weak self] in
             self?.scheduleAutoRehideAfterActivation()
@@ -332,6 +352,10 @@ final class CosmeticHideEngine {
                 ids.insert(id)
             }
         }
+        if let controls = placementControlIDs {
+            ids.formUnion([controls.anchor, controls.divider])
+            floatingBar?.hiddenDividerWindowID = controls.divider
+        }
         floatingBar?.controlItemWindowIDs = ids
         // Keep the bar's display-top current for the non-capture paths too (e.g. the pre-show
         // staleness check), so its item enumeration measures against the anchor's display.
@@ -344,21 +368,38 @@ final class CosmeticHideEngine {
         anchorItem?.button?.window?.frame
     }
 
+    private var placementControlIDs: (anchor: CGWindowID, divider: CGWindowID)? {
+        if let controlWindowIDsProvider { return controlWindowIDsProvider() }
+        guard let anchor = anchorItem?.button?.window?.windowNumber,
+              let divider = hiddenDivider?.button?.window?.windowNumber,
+              let anchorID = WindowIDConversion.cgWindowID(fromWindowNumber: anchor),
+              let dividerID = WindowIDConversion.cgWindowID(fromWindowNumber: divider) else {
+            // Tahoe's status-item proxy may expose frames but no usable AppKit window number.
+            return hiddenItemController?.controlWindowIDs(
+                displayXRange: anchorDisplayXRange, displayMenuBarTop: anchorDisplayMenuBarTop
+            )
+        }
+        return (anchorID, dividerID)
+    }
+
     func uninstall() {
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
-        cancelWarmUpRetries()
+        cancelCaptureSequences()
+        floatingBar?.hide()
         if let anchor = anchorItem { NSStatusBar.system.removeStatusItem(anchor) }
         if let divider = hiddenDivider { NSStatusBar.system.removeStatusItem(divider) }
         anchorItem = nil
         hiddenDivider = nil
+        placementPending = false
+        updatePlacementStatus(applying: false)
     }
 
     // MARK: - Preferences
 
     func apply(preferences: Preferences) {
         let wasFloatingBar = self.preferences.useFloatingBar
-        let previousHidden = self.preferences.itemControls.hiddenInMenuBar
+        let previousControls = self.preferences.itemControls
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
 
@@ -371,16 +412,19 @@ final class CosmeticHideEngine {
             if preferences.useFloatingBar {
                 warmUpFloatingBarCache()
             } else {
+                cancelCaptureSequences()
                 floatingBar?.hide()
                 applyDividerVisibility()
+                resumePendingPlacement()
             }
         }
 
         // If the per-item Hidden intent changed (the user toggled Shown/Hidden in Settings),
         // physically move the affected items to the correct side of the anchor and refresh the
         // mirror. Only when it actually changed, so an unrelated settings edit doesn't drag icons.
-        if preferences.itemControls.hiddenInMenuBar != previousHidden {
-            reconcileHiddenItems()
+        if preferences.itemControls.hiddenInMenuBar != previousControls.hiddenInMenuBar
+            || preferences.itemControls.shownInMenuBar != previousControls.shownInMenuBar {
+            reconcileHiddenItems(userInitiated: true)
         }
     }
 
@@ -388,12 +432,12 @@ final class CosmeticHideEngine {
     /// bar's cache is pre-populated (and `hasCapturedOnce` set) before the first open. Shared by
     /// launch and the Settings enable-at-runtime path.
     private func warmUpFloatingBarCache() {
-        guard preferences.useFloatingBar, floatingBar != nil else { return }
+        guard !isPaused, preferences.useFloatingBar, floatingBar != nil else { return }
         runCaptureSequence(forceCollapseAfter: true) { [weak self] in
             guard let self, let bar = self.floatingBar else { return }
             let anchorX = self.anchorFrame?.minX ?? 1115
             await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
-            if bar.hasIncompleteGlyphs {
+            if !Task.isCancelled, bar.needsCapture {
                 try? await Task.sleep(for: .milliseconds(220))
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
             }
@@ -418,7 +462,7 @@ final class CosmeticHideEngine {
     /// enable-at-runtime path calling `warmUpFloatingBarCache` again) can't stack two sets of timers.
     private func scheduleWarmUpRetries() {
         cancelWarmUpRetries()
-        guard preferences.useFloatingBar, floatingBar != nil else { return }
+        guard !isPaused, !Task.isCancelled, preferences.useFloatingBar, floatingBar != nil else { return }
         for offsetMs in WarmUpRetrySchedule.offsetsMs {
             let work = DispatchWorkItem { [weak self] in self?.fireWarmUpRetry() }
             warmUpRetryWorkItems.append(work)
@@ -435,7 +479,7 @@ final class CosmeticHideEngine {
             return
         }
         // Glyphs are complete — nothing left to bridge. Drop the remaining timers.
-        guard bar.hasIncompleteGlyphs else {
+        guard bar.needsCapture else {
             cancelWarmUpRetries()
             return
         }
@@ -450,7 +494,7 @@ final class CosmeticHideEngine {
             guard let self, let bar = self.floatingBar else { return }
             let anchorX = self.anchorFrame?.minX ?? 1115
             await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
-            if bar.hasIncompleteGlyphs {
+            if !Task.isCancelled, bar.needsCapture {
                 try? await Task.sleep(for: .milliseconds(220))
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
             }
@@ -465,91 +509,127 @@ final class CosmeticHideEngine {
         warmUpRetryWorkItems.removeAll()
     }
 
-    /// Brings the real menu bar in line with the user's per-item Shown/Hidden intent, then
-    /// refreshes the floating-bar mirror so it reflects the new layout. Items can only be moved
-    /// while ON-SCREEN, so this rides inside a reveal→(reconcile + capture)→collapse sequence,
-    /// serialized behind any in-flight capture exactly like a refresh. No-op while the section is
-    /// in active use (don't move items out from under an open menu or the visible panel) and when
-    /// there's no mover wired. If moving needs Accessibility and it's missing, route to the prompt
-    /// instead of silently failing.
-    func reconcileHiddenItems() {
-        // Paused: don't move any items. The user wants the bar left alone; a Settings toggle or a
-        // display change still records intent in preferences, and it's applied on the next reconcile
-        // after un-pausing (un-pause collapses to baseline, and the saved intent reconciles then).
+    /// Explicit Settings commands take ownership of the section; background requests wait for
+    /// dismissal or permission recovery. Superseded commands never publish stale completion.
+    func reconcileHiddenItems(userInitiated: Bool = false) {
+        placementRequestID += 1
+        let requestID = placementRequestID
+        let wasApplying = placementInProgress
+        placementTask?.cancel()
+        guard !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty else {
+            placementPending = false
+            updatePlacementStatus(applying: false)
+            guard wasApplying else { return }
+            // A cancelled reveal still needs an owner to restore it when no replacement is queued.
+            let previous = captureChain
+            latestCaptureEpoch += 1
+            let epoch = latestCaptureEpoch
+            let restore = Task { @MainActor in
+                await withTaskCancellationHandler {
+                    await previous.value
+                } onCancel: {
+                    previous.cancel()
+                }
+                guard !Task.isCancelled, !self.isPaused,
+                      requestID == self.placementRequestID, epoch == self.latestCaptureEpoch else { return }
+                self.setHidden(collapsed: self.stateMachine.visibility(of: .hidden) == .collapsed)
+            }
+            captureChain = restore
+            placementTask = restore
+            return
+        }
+        placementPending = true
         guard !isPaused else {
-            DebugLog.log("reconcileHiddenItems: skipped (paused)")
+            updatePlacementStatus(applying: false, message: "Changes will apply when Bar Keeper's Friend resumes.")
+            return
+        }
+        if userInitiated {
+            activationOwnsSection = false
+            floatingBar?.hide()
+        }
+        guard !activationOwnsSection else {
+            updatePlacementStatus(applying: false, message: "Changes will apply after the open menu is dismissed.")
             return
         }
         guard let controller = hiddenItemController else {
-            DebugLog.log("reconcileHiddenItems: skipped (no controller)")
+            updatePlacementStatus(applying: false, message: "Menu bar controls are not available yet.", failed: true)
             return
         }
-        // Only bail if the user has the bar OPEN — moving items out from under a visible panel is
-        // the thing to avoid. We deliberately do NOT use the broader `sectionInUse` here: that also
-        // trips on the state machine's `.shown`, which at launch is just the initial "nothing hidden
-        // yet" baseline (initialVisibility: .shown), not an active reveal. Guarding on it made the
-        // launch reconcile skip every time, so the saved per-item Hidden intent was never applied.
-        // Reconcile manages its own reveal→move→collapse via `runCaptureSequence(forceCollapseAfter:
-        // true)`, serialized behind the warm-up, so it's safe whenever the panel isn't shown.
         guard !(floatingBar?.isVisible ?? false) else {
-            DebugLog.log("reconcileHiddenItems: skipped (floating bar visible)")
+            updatePlacementStatus(applying: false, message: "Changes will apply when the floating bar closes.")
             return
         }
         guard controller.canMoveItems else {
-            DebugLog.log("reconcileHiddenItems: skipped (no Accessibility) hidden=\(preferences.itemControls.hiddenInMenuBar)")
-            onNeedsAccessibilityForMove?()
+            updatePlacementStatus(applying: false, message: "Allow Accessibility in System Settings to move menu bar items.", failed: true)
+            if userInitiated { onNeedsAccessibilityForMove?() }
             return
         }
-        DebugLog.log("reconcileHiddenItems: proceeding, hidden=\(preferences.itemControls.hiddenInMenuBar)")
-        // Drop the pending warm-up retries while THIS reconcile runs: its own reveal→move→capture
-        // sequence is about to fill the cache, and firing an escalating warm-up pass on top of it
-        // would just double the privacy-indicator flash. But do NOT assume reconcile finishes the
-        // glyphs — at launch this reconcile is called synchronously right after the warm-up (see
-        // install()), so its re-capture is just as COLD as the warm-up's and lands the same 0/N when
-        // the compositor hasn't warmed up yet. The reconcile body therefore RE-ARMS the schedule if
-        // its own capture still comes back incomplete (the cold-launch bridge that was the whole
-        // point). On the warm path the re-capture completes the glyphs and nothing is re-armed.
+        placementPending = false
+        autoRehideWorkItem?.cancel()
+        autoRehideWorkItem = nil
         cancelWarmUpRetries()
-        // Make sure our own control-item window ids are excluded from any move.
-        publishControlItemWindowIDs()
-        controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []
+        updatePlacementStatus(applying: true)
+        DebugLog.log("placement: queued request=\(requestID) hidden=\(preferences.itemControls.hiddenInMenuBar.count) shown=\(preferences.itemControls.shownInMenuBar.count)")
 
-        runCaptureSequence(forceCollapseAfter: true) { [weak self] in
-            guard let self else { return }
-            // Reconcile while items are revealed (on-screen) so they're movable. Use the anchor's
-            // live edges as the hide/show boundary.
-            if let anchor = self.anchorFrame {
+        placementTask = runCaptureSequence(forceCollapseAfter: false) { [weak self] in
+            guard let self, !Task.isCancelled, requestID == self.placementRequestID else { return }
+            self.publishControlItemWindowIDs()
+            controller.controlItemWindowIDs = self.floatingBar?.controlItemWindowIDs ?? []
+            let result: HiddenItemController.ReconcileResult
+            if let controls = self.placementControlIDs {
+                DebugLog.log("placement: starting request=\(requestID) anchorWindow=\(controls.anchor) dividerWindow=\(controls.divider)")
                 self.reconcileInFlightCount += 1
                 defer { self.reconcileInFlightCount -= 1 }
-                _ = await controller.reconcile(
-                    anchorMinX: anchor.minX,
-                    anchorMaxX: anchor.maxX,
+                result = await controller.reconcile(
+                    anchorWindowID: controls.anchor,
+                    dividerWindowID: controls.divider,
                     controls: self.preferences.itemControls,
                     displayXRange: self.anchorDisplayXRange,
                     displayMenuBarTop: self.anchorDisplayMenuBarTop
                 )
+            } else {
+                result = HiddenItemController.ReconcileResult(observationFailed: true)
             }
-            // Re-capture so the mirror reflects whatever moved. If the bar is open it re-lays-out.
-            if let bar = self.floatingBar {
+            guard !Task.isCancelled, requestID == self.placementRequestID else { return }
+            self.placementPending = result.observationFailed
+            // Invalid control geometry must not let an expanded divider hide the anchor itself.
+            _ = self.stateMachine.apply(result.observationFailed ? .show(.hidden) : .hide(.hidden))
+            if !result.observationFailed, self.preferences.useFloatingBar, let bar = self.floatingBar {
                 let anchorX = self.anchorFrame?.minX ?? 1115
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
-                if bar.hasIncompleteGlyphs {
+                if !Task.isCancelled, bar.needsCapture {
                     try? await Task.sleep(for: .milliseconds(220))
                     await bar.captureAndCache(anchorMinX: anchorX, allowFallback: true)
                 }
-                // Cold-launch bridge. At launch this reconcile runs right after the warm-up, before
-                // the menu-bar glyphs have composited into the capturable image, so the re-capture
-                // above lands the same app-icon fallbacks the warm-up did. Re-arm the escalating
-                // retries so a later pass (once the compositor is warm) upgrades them to real glyphs;
-                // the schedule self-cancels the instant `hasIncompleteGlyphs` flips false. On the warm
-                // path glyphs are already complete here, so nothing is armed. `scheduleWarmUpRetries`
-                // is a no-op when the bar is disabled and clears any prior set first, so re-arming
-                // can't stack timers or fire after the feature is turned off.
-                if bar.hasIncompleteGlyphs {
+                if !Task.isCancelled, bar.needsCapture {
                     self.scheduleWarmUpRetries()
                 }
             }
+            guard !Task.isCancelled, requestID == self.placementRequestID else { return }
+            await self.onPlacementCompleted?()
+            guard !Task.isCancelled, requestID == self.placementRequestID else { return }
+            if result.observationFailed {
+                self.updatePlacementStatus(applying: false, message: "Couldn't read a stable menu bar layout. Items have been left revealed; try again.", failed: true)
+            } else if !result.failed.isEmpty {
+                self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Shown or Hidden to retry.", failed: true)
+            } else {
+                self.updatePlacementStatus(applying: false)
+            }
         }
+    }
+
+    func resumePendingPlacement() {
+        guard placementPending, !isPaused, !activationOwnsSection, !(floatingBar?.isVisible ?? false),
+              hiddenItemController?.canMoveItems == true else { return }
+        reconcileHiddenItems()
+    }
+
+    private func updatePlacementStatus(applying: Bool, message: String? = nil, failed: Bool = false) {
+        placementInProgress = applying
+        placementMessage = message
+        placementFailed = failed
+        DebugLog.log("placement: applying=\(applying) pending=\(placementPending) failed=\(failed)")
+        onPlacementStatusChanged?()
     }
 
     // MARK: - Actions
@@ -647,26 +727,24 @@ final class CosmeticHideEngine {
     @objc private func menuOpenSettings() { onOpenSettings?() }
     @objc private func menuQuit() { onQuit?() }
 
-    /// Toggles pause. Pausing reveals the hidden section in place (un-tucks the divider) and stops
-    /// all automated hiding/revealing/moving until un-paused, so the menu bar acts like a vanilla
-    /// one while the user hunts for something. Un-pausing returns to the hidden baseline.
-    ///
-    /// Deliberately uses ONLY the permission-free baseline mechanism (`setHidden`/the state machine)
-    /// — it never triggers the synthesized item move. The gates elsewhere are additive `guard`s, so
-    /// the worst a bug here can do is "pause didn't fully take", never corrupt the layout.
-    @objc private func menuTogglePause() {
+    /// Pause reveals items and cancels automation; resume restores saved intent and unfinished
+    /// icon collection. An already-posted native gesture finishes before cancellation takes effect.
+    @objc func menuTogglePause() {
         isPaused.toggle()
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
+            activationOwnsSection = false
             // Pausing stops all automated activity; the cold-launch warm-up retries are exactly that,
             // so drop them rather than let one fire and no-op (or flash a reveal) while paused.
-            cancelWarmUpRetries()
+            cancelCaptureSequences()
+            screenChangeWorkItem?.cancel()
             // Reveal in place: hide the mirror panel if open, drive the state machine to shown so no
             // stray refresh re-collapses it, and un-tuck the divider so left-of-anchor items return.
             floatingBar?.hide()
             _ = stateMachine.apply(.show(.hidden))
             setHidden(collapsed: false)
+            updatePlacementStatus(applying: false, message: "Changes will apply when Bar Keeper's Friend resumes.")
         } else {
             // Back to baseline: collapse the section again, then re-apply the saved per-item Hidden
             // intent (a Settings toggle or display change made WHILE paused recorded intent but was
@@ -674,6 +752,9 @@ final class CosmeticHideEngine {
             // when there's nothing hidden or the mover isn't wired.
             _ = stateMachine.apply(.hide(.hidden))
             setHidden(collapsed: true)
+            if let bar = floatingBar, bar.needsCapture {
+                warmUpFloatingBarCache()
+            }
             reconcileHiddenItems()
         }
     }
@@ -693,7 +774,7 @@ final class CosmeticHideEngine {
     /// (⌥⌘B) sets it so an opened bar the user never mouses onto stays put until they toggle again;
     /// pointer-driven opens (anchor click, hover) leave it false so an abandoned bar tidies away.
     private func toggleFloatingBar(persistUntilToggled: Bool = false) {
-        guard let bar = floatingBar else { return }
+        guard !isPaused, let bar = floatingBar else { return }
         // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
         // timer armed by an earlier activation (default 15s) could fire later and yank shut a bar
         // the user just re-opened, or collapse a section they re-engaged — a spontaneous-vanish
@@ -717,7 +798,10 @@ final class CosmeticHideEngine {
                 bar.hide()
             } else {
                 let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
-                Task { @MainActor in await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled) }
+                Task { @MainActor in
+                    guard !self.isPaused else { return }
+                    await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled)
+                }
             }
             return
         }
@@ -729,6 +813,7 @@ final class CosmeticHideEngine {
             _ = stateMachine.apply(.hide(.hidden))
             bar.hide()
             setHidden(collapsed: true)
+            resumePendingPlacement()
             return
         }
         if bar.isVisible {
@@ -741,6 +826,7 @@ final class CosmeticHideEngine {
         // each screen-parameter change. So opening is just "lay out the cached icons + show".
         let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
         Task { @MainActor in
+            guard !self.isPaused else { return }
             await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled)
         }
         // If the live menu bar gained/lost items since the cache was built (an app added or
@@ -786,15 +872,28 @@ final class CosmeticHideEngine {
     }
 
     func toggleHidden() {
+        guard !isPaused else { return }
         let intents = stateMachine.apply(.toggle(.hidden))
         enact(intents)
         scheduleAutoRehideIfNeeded()
+        if stateMachine.visibility(of: .hidden) == .collapsed { resumePendingPlacement() }
     }
 
     /// Reveals the hidden section so a real item can be clicked on-screen. Updates the state
     /// machine to `.shown` and returns after a short settle delay.
     func revealForActivation() async {
+        guard !isPaused, !Task.isCancelled else { return }
+        activationOwnsSection = true
         _ = stateMachine.apply(.show(.hidden))
+        if placementInProgress {
+            placementRequestID += 1
+            placementPending = true
+            placementTask?.cancel()
+            updatePlacementStatus(applying: false, message: "Changes will apply after the open menu is dismissed.")
+        }
+        // A replacement activation must join the same draining gesture, even after status is idle.
+        await placementTask?.value
+        guard !Task.isCancelled, !isPaused, activationOwnsSection else { return }
         setHidden(collapsed: false)
         try? await Task.sleep(for: .milliseconds(120))
     }
@@ -809,6 +908,11 @@ final class CosmeticHideEngine {
     /// divider has no image, so its natural (variable) length is effectively zero width — it
     /// leaves no visible gap or marker in the menu bar when the section is revealed.
     private func setHidden(collapsed: Bool) {
+        if collapsed { activationOwnsSection = false }
+        if let setDividerCollapsed {
+            setDividerCollapsed(collapsed)
+            return
+        }
         guard let divider = hiddenDivider else { return }
         if collapsed {
             divider.length = ControlItemLength.expanded(forScreenWidth: menuBarScreenWidth)
@@ -868,10 +972,10 @@ final class CosmeticHideEngine {
 
     private func scheduleAutoRehideIfNeeded() {
         autoRehideWorkItem?.cancel()
-        guard preferences.autoRehide,
+        guard !isPaused, preferences.autoRehide,
               stateMachine.visibility(of: .hidden) == .shown else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isPaused else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
         }
         autoRehideWorkItem = work
@@ -886,9 +990,9 @@ final class CosmeticHideEngine {
     /// in the legacy reflow-into-menu-bar mode via `toggleHidden`).
     func scheduleAutoRehideAfterActivation() {
         autoRehideWorkItem?.cancel()
-        guard preferences.autoRehide else { return }
+        guard !isPaused, !Task.isCancelled, preferences.autoRehide else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isPaused else { return }
             // Defensive: only tear down if the section is still in its post-activation revealed
             // state. If the user already re-engaged (re-opened the bar, which sets state back to
             // a fresh show), this stale timer must NOT hide the panel out from under them.
@@ -897,6 +1001,7 @@ final class CosmeticHideEngine {
             guard self.stateMachine.visibility(of: .hidden) == .shown else { return }
             self.enact(self.stateMachine.apply(.autoRehide))
             self.floatingBar?.hide()
+            self.resumePendingPlacement()
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
@@ -927,7 +1032,11 @@ final class CosmeticHideEngine {
         // menu), don't disturb it — collapsing or revealing now would slam an open menu shut or
         // show the real items behind the panel as duplicates. Refresh opportunistically only
         // when idle.
-        guard !sectionInUse else { return }
+        guard !isPaused else { return }
+        if sectionInUse {
+            placementPending = !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty
+            return
+        }
         enact(stateMachine.apply(.screenParametersChanged))
         // The state-machine transition above is a no-op when already `.collapsed` (which it
         // almost always is here, since `.shown` implies sectionInUse), so it emits no intents and
@@ -945,7 +1054,7 @@ final class CosmeticHideEngine {
         // so the items on the now-current display land on the right side of the anchor. No-op when
         // nothing is marked hidden. The planner is display-scoped (see `anchorDisplayXRange`), so
         // this only touches the active display's items, never the other display's mirror copies.
-        if !preferences.itemControls.hiddenInMenuBar.isEmpty {
+        if !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty {
             reconcileHiddenItems()
         } else {
             refreshFloatingBarCache()
@@ -957,7 +1066,7 @@ final class CosmeticHideEngine {
     /// while the section is in active use, so it never disrupts an open menu or the visible
     /// panel; the next idle refresh (or panel open) picks up the change.
     func refreshFloatingBarCache() {
-        guard preferences.useFloatingBar, let bar = floatingBar, !sectionInUse else { return }
+        guard !isPaused, preferences.useFloatingBar, let bar = floatingBar, !sectionInUse else { return }
         // Reveal → capture → restore, serialized behind any in-flight capture (e.g. the launch
         // one) so they can't fight over the divider. captureAndCache retries internally until
         // the revealed glyphs have composited in. Not a force-collapse: restore to state so we

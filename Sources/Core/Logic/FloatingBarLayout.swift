@@ -85,19 +85,27 @@ public enum FloatingBarLayout {
         let grid = gridDimensions(style: style, itemCount: count, perLine: perLine)
 
         let panelSize = panelSize(style: style, columns: grid.columns, rows: grid.rows, metrics: metrics)
+        let frame = panelFrame(
+            contentSize: panelSize, anchorRightX: anchorRightX, menuBarHeight: menuBarHeight,
+            displayFrame: displayFrame, metrics: metrics
+        )
+        let itemRects = itemRects(style: style, itemCount: count, columns: grid.columns, rows: grid.rows, panelSize: panelSize, metrics: metrics)
+        return Result(panelFrame: frame, itemRects: itemRects)
+    }
 
-        // Right edge aligns under the anchor, but never past the screen's right inset.
+    /// Positions either a grid or an intrinsically sized empty/preparing view below the anchor.
+    public static func panelFrame(
+        contentSize: CGSize,
+        anchorRightX: CGFloat,
+        menuBarHeight: CGFloat,
+        displayFrame: CGRect,
+        metrics: Metrics = .default
+    ) -> CGRect {
         let maxRight = displayFrame.maxX - metrics.cornerInset
         let desiredRight = min(anchorRightX, maxRight)
-        var originX = desiredRight - panelSize.width
-        // Clamp to the left edge too.
-        originX = max(displayFrame.minX + metrics.cornerInset, originX)
-
+        let originX = max(displayFrame.minX + metrics.cornerInset, desiredRight - contentSize.width)
         let originY = displayFrame.minY + menuBarHeight + metrics.gapBelowMenuBar
-
-        let panelFrame = CGRect(x: originX, y: originY, width: panelSize.width, height: panelSize.height)
-        let itemRects = itemRects(style: style, itemCount: count, columns: grid.columns, rows: grid.rows, panelSize: panelSize, metrics: metrics)
-        return Result(panelFrame: panelFrame, itemRects: itemRects)
+        return CGRect(origin: CGPoint(x: originX, y: originY), size: contentSize)
     }
 
     /// How many items fit along the panel's primary axis (a horizontal row's width, or a vertical

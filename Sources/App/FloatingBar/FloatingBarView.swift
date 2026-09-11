@@ -15,11 +15,11 @@ struct FloatingBarView: View {
     /// a large hidden set from growing the panel off-screen. Defaults high so a small set is a
     /// single line; the controller passes the screen-derived value so it matches the panel frame.
     var itemsPerLine: Int = .max
+    // Cell bounds and padding must match the Core layout used to size the panel.
+    var metrics: FloatingBarLayout.Metrics = .default
     /// Invoked when the user clicks a mirrored icon. Wired to real-item activation in the
     /// click-routing step; harmless no-op until then.
     var onActivate: (FloatingBarItem) -> Void
-
-    private let iconSide: CGFloat = 18
 
     /// Items split into lines of at most `itemsPerLine` (a row for horizontal, a column for
     /// vertical), preserving order. The grid is filled line-by-line so wrapping matches
@@ -78,30 +78,30 @@ struct FloatingBarView: View {
             case .horizontal:
                 // Each `lines` entry is a ROW; stack the rows vertically so a long strip wraps
                 // instead of running off the screen edge.
-                VStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 6) {
+                        HStack(spacing: 0) {
                             ForEach(row) { item in
                                 iconButton(item)
                             }
                         }
                     }
                 }
-                .padding(8)
+                .padding(metrics.padding)
             case .vertical:
                 // Each `lines` entry is a COLUMN; stack the columns horizontally so a tall list
                 // wraps into additional columns instead of running off the bottom.
-                HStack(alignment: .top, spacing: 8) {
+                HStack(alignment: .top, spacing: 0) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, column in
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 0) {
                             ForEach(column) { item in
                                 verticalRow(item)
                             }
                         }
-                        .frame(width: 200)
+                        .frame(width: metrics.itemExtent + metrics.rowLabelWidth)
                     }
                 }
-                .padding(8)
+                .padding(metrics.padding)
             }
         }
     }
@@ -114,14 +114,14 @@ struct FloatingBarView: View {
                 Image(nsImage: item.image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(width: iconSide, height: iconSide)
+                    .frame(width: metrics.iconSize, height: metrics.iconSize)
                 Text(item.displayName)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
-            .frame(height: 28)
+            .frame(height: metrics.itemExtent)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -137,8 +137,8 @@ struct FloatingBarView: View {
             Image(nsImage: item.image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: iconSide, height: iconSide)
-                .frame(width: 26, height: 26)
+                .frame(width: metrics.iconSize, height: metrics.iconSize)
+                .frame(width: metrics.itemExtent, height: metrics.itemExtent)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

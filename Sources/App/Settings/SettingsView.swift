@@ -102,7 +102,7 @@ private struct GeneralSettingsTab: View {
                     LabeledContent("Re-hide after") {
                         Stepper(
                             value: $model.preferences.autoRehideDelay,
-                            in: 2...120,
+                            in: Preferences.autoRehideDelayRange,
                             step: 1
                         ) {
                             Text("\(Int(model.preferences.autoRehideDelay))s")
@@ -238,12 +238,8 @@ private struct PermissionRow: View {
 private struct ItemsSettingsTab: View {
     @Bindable var model: SettingsModel
     /// The listed items, loaded asynchronously (enumerating + attributing the live menu bar).
-    @State private var items: [FloatingBarItem] = []
-    @State private var loading = true
-    /// Bumped when a row's Shown/Hidden flips, to force a cheap re-partition (no menu-bar re-scan)
-    /// so the row visibly moves between sections. Re-enumerating on every toggle would flash the
-    /// loading spinner for a second; the item set hasn't changed, only the intent has.
-    @State private var repartitionToken = 0
+    private var items: [FloatingBarItem] { model.loadedItems }
+    private var loading: Bool { model.itemsLoading }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -258,41 +254,29 @@ private struct ItemsSettingsTab: View {
             }
         }
         .padding(.top, 8)
-        .task { await reload() }
+        .disabled(model.placementInProgress)
+        .task { await model.reloadItems() }
     }
 
-    /// The items split into "Hidden (N)" and "Shown (N)" sections, so the two states are easy to
-    /// scan rather than interleaved. Toggling a row re-partitions on the next reload, which is
-    /// triggered by the row itself after the move settles.
     private var groupedList: some View {
-        // `repartitionToken` is read so SwiftUI re-evaluates this when a toggle bumps it.
-        _ = repartitionToken
         let parts = model.partition(items)
         return List {
             if !parts.hidden.isEmpty {
                 Section("Hidden (\(parts.hidden.count))") {
                     ForEach(parts.hidden) { item in
-                        ItemRow(model: model, item: item, onToggle: { repartitionToken += 1 })
+                        ItemRow(model: model, item: item)
                     }
                 }
             }
             if !parts.shown.isEmpty {
                 Section("Shown (\(parts.shown.count))") {
                     ForEach(parts.shown) { item in
-                        ItemRow(model: model, item: item, onToggle: { repartitionToken += 1 })
+                        ItemRow(model: model, item: item)
                     }
                 }
             }
         }
         .listStyle(.inset)
-    }
-
-    /// Reloads the list. Run on appear; also re-run after a toggle so the new Shown/Hidden state
-    /// is reflected once the move settles.
-    private func reload() async {
-        loading = true
-        items = await model.items()
-        loading = false
     }
 
     private var header: some View {
@@ -308,25 +292,34 @@ private struct ItemsSettingsTab: View {
             Text("Hidden items move into Bar Keeper's Friend's bar — click the menu bar icon (or press the shortcut) to reveal them.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            if model.placementInProgress {
+                Text("Applying placement...")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else if let message = model.placementMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(model.placementFailed ? .red : .secondary)
+            }
+            if let error = model.itemsLoadError {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
 
-    /// "Hide all" / "Show all" bulk toggles. Each is disabled when it would be a no-op (everything
-    /// already in that state), so the buttons double as a hint of the current split. Both mutate
-    /// the intent once (single reconcile) and re-partition so rows resettle into their sections.
     private var bulkActions: some View {
         let parts = model.partition(items)
         return HStack(spacing: 8) {
             Button("Hide All") {
                 model.setHidden(true, forAll: items)
-                repartitionToken += 1
             }
             .disabled(parts.shown.isEmpty)
             Button("Show All") {
                 model.setHidden(false, forAll: items)
-                repartitionToken += 1
             }
             .disabled(parts.hidden.isEmpty)
         }
@@ -369,11 +362,7 @@ private struct ItemsSettingsTab: View {
 private struct ItemRow: View {
     @Bindable var model: SettingsModel
     let item: FloatingBarItem
-    /// Called after the user flips Shown/Hidden, so the parent can re-partition the list and the
-    /// row visibly moves between the "Hidden" and "Shown" sections.
-    var onToggle: () -> Void = {}
     @State private var alias: String = ""
-    @State private var hidden: Bool = false
     @FocusState private var aliasFocused: Bool
 
     var body: some View {
@@ -382,7 +371,7 @@ private struct ItemRow: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 18, height: 18)
-                .opacity(hidden ? 0.5 : 1)
+                .opacity(model.isHidden(item) ? 0.5 : 1)
 
             TextField(item.displayName, text: $alias)
                 .textFieldStyle(.plain)
@@ -398,7 +387,10 @@ private struct ItemRow: View {
 
             Spacer(minLength: 8)
 
-            Picker("", selection: $hidden) {
+            Picker("", selection: Binding(
+                get: { model.isHidden(item) },
+                set: { model.setHidden($0, for: item) }
+            )) {
                 Text("Shown").tag(false)
                 Text("Hidden").tag(true)
             }
@@ -409,11 +401,6 @@ private struct ItemRow: View {
         .padding(.vertical, 4)
         .onAppear {
             alias = model.alias(for: item)
-            hidden = model.isHidden(item)
-        }
-        .onChange(of: hidden) { _, newValue in
-            model.setHidden(newValue, for: item)
-            onToggle()
         }
     }
 }

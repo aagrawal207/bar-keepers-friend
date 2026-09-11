@@ -1,31 +1,14 @@
 import AppKit
 import BarKeepersFriendCore
 
-/// Reconciles the live menu bar with the user's per-item Shown/Hidden intent by physically
-/// moving items across the anchor.
-///
-/// This is the app-side glue for the Bartender-style per-item control. The DECISION of what to
-/// move is the pure `HiddenLayoutPlanner`; this type performs the resulting moves through the
-/// `WindowServer` seam (the only place the fragile synthesized-drag private API is touched) and
-/// reports the outcome. It is deliberately small: enumerate → plan → move each → report.
-///
-/// ## Why moves can fail, and what we do about it
-///
-/// Moving another app's status item relies on undocumented window-server behavior that Apple has
-/// broken before and may break again. So every move is best-effort and self-validating:
-/// `WindowServer.move` confirms the item's frame actually changed and retries, throwing if it
-/// can't. We collect failures rather than trapping, so one stubborn item never blocks the rest,
-/// and the caller can surface "couldn't move N items" and fall back to leaving them where they are.
+/// Applies explicit placement intent sequentially through `WindowServer`, using live control edges.
+/// Native return values are not proof of placement: each success requires a fresh side check.
 @MainActor
 final class HiddenItemController {
     private let windowServer: WindowServer
 
-    /// Resolves each raw snapshot's REAL owning app (pid + name). On macOS 26 the snapshots from
-    /// `WindowServer.menuBarItems()` carry the broken `kCGWindowOwnerPID` (Control Center / -1,
-    /// FB18327911); the synthesized move's "scromble" relay must target the item's TRUE owning pid
-    /// or it taps the wrong process and the move silently fails. The app injects an Accessibility-
-    /// based attributor here; the default is identity so `FakeWindowServer`-backed tests (whose
-    /// snapshots already carry correct pids) are unaffected.
+    /// Tahoe's raw owner PID/name are unreliable; the relay needs AX-attributed ownership.
+    /// Identity attribution is suitable only for fixtures that already carry trusted owners.
     private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
 
     /// Our own control-item window ids (anchor + divider), never moved. Refreshed by the engine.
@@ -45,7 +28,9 @@ final class HiddenItemController {
         var planned: Int = 0
         var succeeded: Int = 0
         var failed: [MenuBarItemSnapshot] = []
-        var allSucceeded: Bool { failed.isEmpty }
+        var cancelled = false
+        var observationFailed: Bool = false
+        var allSucceeded: Bool { !cancelled && !observationFailed && failed.isEmpty }
     }
 
     /// Whether the app can physically move items right now (Accessibility granted). When false,
@@ -53,60 +38,165 @@ final class HiddenItemController {
     /// rather than silently doing nothing.
     var canMoveItems: Bool { windowServer.canSynthesizeClicks }
 
-    /// Brings the live menu bar in line with `controls`: every item on the wrong side of the
-    /// anchor for its intent is moved to the correct side. Returns what happened.
-    ///
-    /// `anchorMinX`/`anchorMaxX` are the anchor's current global edges (the hide/show boundary).
-    /// `displayXRange`, when set, scopes moves to the display the anchor lives on — essential on a
-    /// multi-display rig, where the enumeration includes the other displays' (immovable) mirror
-    /// copies of each item. No-op (empty result) when nothing needs moving, so it's cheap to call on
-    /// every settings change or menu-bar refresh.
-    @discardableResult
-    func reconcile(anchorMinX: CGFloat, anchorMaxX: CGFloat, controls: ItemControlStore, displayXRange: ClosedRange<CGFloat>? = nil, displayMenuBarTop: CGFloat = 0) async -> ReconcileResult {
-        var result = ReconcileResult()
-
-        // Attribute first so each snapshot carries its REAL owning pid (not Tahoe's broken
-        // Control-Center pid). The move's relay targets that pid, so wrong attribution = the move
-        // taps the wrong process and fails. The planner's side-of-anchor decision is unaffected by
-        // attribution (it's pure geometry), but the moved snapshot must carry the true pid.
-        let snapshots = await attribute((try? windowServer.menuBarItems()) ?? [])
-        let plan = HiddenLayoutPlanner.moves(
-            for: snapshots,
-            anchorMinX: anchorMinX,
-            anchorMaxX: anchorMaxX,
-            controls: controls,
-            excludingWindowIDs: controlItemWindowIDs,
-            // Never plan a move for Control Center's modules (one shared pid) or our own status
-            // windows. Without this a "Hide All" that swept them in makes reconcile re-plan the same
-            // un-relocatable moves on every pass and never converge — the bug where the anchor walks
-            // across the bar and nothing settles. Snapshots are attributed just above, so each
-            // carries its real owning pid (the only state in which a pid set is valid).
-            immovablePIDs: ImmovableProcessIDs.current(),
-            displayXRange: displayXRange,
-            displayMenuBarTop: displayMenuBarTop
-        )
-        result.planned = plan.count
-        DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(anchorMinX) hidden=\(controls.hiddenInMenuBar)")
-        guard !plan.isEmpty else { return result }
-
-        // Moves run sequentially, NOT concurrently: each one synthesizes events the window server
-        // routes by windowID, and overlapping two moves races the shared menu-bar layout (the
-        // research notes the mechanism goes sluggish/flaky under load). A failure on one must not
-        // abort the others — collect failures and continue. We re-target the SAME planned
-        // destinations even though earlier moves shift neighbors, because the window server snaps
-        // the item to the nearest real slot on the correct side of the anchor; the exact x only
-        // has to land on the right side, which the planner's margins guarantee.
-        for move in plan {
-            do {
-                try await windowServer.move(item: move.item, toX: move.targetX)
-                result.succeeded += 1
-                DebugLog.log("HiddenItemController: move OK for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")) pid=\(move.item.ownerPID) -> x=\(move.targetX)")
-            } catch {
-                DebugLog.log("HiddenItemController: move failed for \(move.item.windowID) (\(move.item.ownerBundleID ?? "?")) pid=\(move.item.ownerPID): \(error)")
-                result.failed.append(move.item)
-            }
+    func controlWindowIDs(
+        displayXRange: ClosedRange<CGFloat>? = nil, displayMenuBarTop: CGFloat = 0
+    ) -> (anchor: CGWindowID, divider: CGWindowID)? {
+        guard let snapshots = try? windowServer.menuBarItems() else { return nil }
+        let controls = snapshots.filter {
+            $0.windowID != 0 && $0.frame.height >= 18 && $0.frame.height <= 40
+                && abs($0.frame.minY - displayMenuBarTop) <= 40
+                && (displayXRange?.contains($0.frame.midX) ?? true)
         }
-        DebugLog.log("HiddenItemController: reconcile planned=\(result.planned) ok=\(result.succeeded) failed=\(result.failed.count)")
+        let anchors = controls.filter { $0.title == ControlItem.Identifier.anchor.rawValue }
+        let dividers = controls.filter { $0.title == ControlItem.Identifier.hiddenDivider.rawValue }
+        guard anchors.count == 1, dividers.count == 1 else { return nil }
+        return (anchors[0].windowID, dividers[0].windowID)
+    }
+
+    /// Hidden items belong entirely left of the divider; Shown items entirely right of the anchor.
+    /// Control window IDs, rather than cached edges, keep destinations valid as neighbors move.
+    @discardableResult
+    func reconcile(
+        anchorWindowID: CGWindowID,
+        dividerWindowID: CGWindowID,
+        controls: ItemControlStore,
+        displayXRange: ClosedRange<CGFloat>? = nil,
+        displayMenuBarTop: CGFloat = 0
+    ) async -> ReconcileResult {
+        var result = ReconcileResult()
+        defer {
+            DebugLog.log("HiddenItemController: reconcile planned=\(result.planned) ok=\(result.succeeded) failed=\(result.failed.count) cancelled=\(result.cancelled) observationFailed=\(result.observationFailed)")
+        }
+        guard !Task.isCancelled else {
+            result.cancelled = true
+            return result
+        }
+
+        let excludedIDs = controlItemWindowIDs.union([anchorWindowID, dividerWindowID])
+        func observe() throws -> (items: [MenuBarItemSnapshot], anchor: CGRect, divider: CGRect) {
+            let raw = try windowServer.menuBarItems()
+            // A revealed divider may have zero width, but must still precede the anchor on its row.
+            guard anchorWindowID != dividerWindowID,
+                  let anchor = raw.first(where: { $0.windowID == anchorWindowID }),
+                  let divider = raw.first(where: { $0.windowID == dividerWindowID }),
+                  HiddenItemsResolver.isPlausibleMenuBarItem(anchor, displayMenuBarTop: displayMenuBarTop),
+                  [anchor.frame, divider.frame].allSatisfy({ frame in
+                      frame.minX.isFinite && frame.maxX.isFinite
+                          && frame.minY.isFinite && frame.maxY.isFinite
+                          && frame.width >= 0 && frame.height > 0
+                          && (displayXRange?.contains(frame.midX) ?? true)
+                  }),
+                  divider.frame.maxX <= anchor.frame.minX,
+                  divider.frame.minY < anchor.frame.maxY,
+                  anchor.frame.minY < divider.frame.maxY else {
+                throw WindowServerError.invalidServerResponse("missing or invalid placement controls")
+            }
+            let candidates = raw.filter {
+                !excludedIDs.contains($0.windowID)
+                    && !HiddenItemsResolver.isOwnControlItem($0)
+                    && HiddenItemsResolver.isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop)
+                    && (displayXRange?.contains($0.frame.midX) ?? true)
+                    && !ImmovableItems.isImmovableOnRawSnapshot($0)
+            }
+            return (candidates, anchor.frame, divider.frame)
+        }
+
+        do {
+            var observation = try observe()
+            var snapshots: [MenuBarItemSnapshot] = []
+            for attempt in 0..<2 {
+                try Task.checkCancellation()
+                let candidates = HiddenItemsResolver.deduplicateByMidXProximity(observation.items)
+                snapshots = await attribute(candidates)
+                guard !Task.isCancelled else {
+                    result.cancelled = true
+                    return result
+                }
+                let fresh = try observe()
+                // AX ownership is tied to the enumerated positions, not to a later layout.
+                let oldFrames = Dictionary(observation.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
+                let freshFrames = Dictionary(fresh.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
+                let freshRepresentatives = HiddenItemsResolver.deduplicateByMidXProximity(fresh.items)
+                let unchanged = observation.anchor == fresh.anchor && observation.divider == fresh.divider
+                    && oldFrames == freshFrames
+                    && Set(candidates.map(\.windowID)) == Set(freshRepresentatives.map(\.windowID))
+                observation = fresh
+                if unchanged { break }
+                guard attempt == 0 else {
+                    throw WindowServerError.invalidServerResponse("placement geometry changed during both attribution attempts")
+                }
+                DebugLog.log("HiddenItemController: discarding attribution after placement geometry changed")
+            }
+            let plan = HiddenLayoutPlanner.moves(
+                for: snapshots,
+                anchorMinX: observation.anchor.minX,
+                anchorMaxX: observation.anchor.maxX,
+                dividerMinX: observation.divider.minX,
+                controls: controls,
+                excludingWindowIDs: excludedIDs,
+                immovablePIDs: ImmovableProcessIDs.current(),
+                displayXRange: displayXRange,
+                displayMenuBarTop: displayMenuBarTop
+            )
+            result.planned = plan.count
+            DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(observation.anchor.minX) dividerMinX=\(observation.divider.minX) hidden=\(controls.hiddenInMenuBar)")
+
+            // Each candidate gets one sequential attempt; the native implementation owns retries.
+            for move in plan {
+                guard !Task.isCancelled else {
+                    result.cancelled = true
+                    break
+                }
+                let live = try observe()
+                guard let raw = live.items.first(where: { $0.windowID == move.item.windowID }) else {
+                    result.failed.append(move.item)
+                    DebugLog.log("HiddenItemController: candidate disappeared or became unsafe: \(move.item.windowID)")
+                    continue
+                }
+                let item = raw.attributed(bundleID: move.item.ownerBundleID, pid: move.item.ownerPID)
+                let hidden = controls.isHidden(item)
+                if HiddenLayoutPlanner.isPlacementSatisfied(
+                    item: item, hidden: hidden, anchorMaxX: live.anchor.maxX, dividerMinX: live.divider.minX
+                ) {
+                    DebugLog.log("HiddenItemController: placement already satisfied for \(item.windowID)")
+                    continue
+                }
+                let targetX = hidden
+                    ? live.divider.minX - HiddenLayoutPlanner.hiddenMargin
+                    : live.anchor.maxX + HiddenLayoutPlanner.shownMargin
+                do {
+                    try Task.checkCancellation()
+                    try await windowServer.move(
+                        item: item, toX: targetX, relativeTo: hidden ? dividerWindowID : anchorWindowID
+                    )
+                } catch is CancellationError {
+                    result.cancelled = true
+                    break
+                } catch {
+                    DebugLog.log("HiddenItemController: move failed for \(item.windowID) (\(item.ownerBundleID ?? "?")) pid=\(item.ownerPID): \(error)")
+                    result.failed.append(item)
+                    continue
+                }
+                let verified = try observe()
+                if let placed = verified.items.first(where: { $0.windowID == item.windowID }),
+                   HiddenLayoutPlanner.isPlacementSatisfied(
+                       item: placed, hidden: hidden,
+                       anchorMaxX: verified.anchor.maxX, dividerMinX: verified.divider.minX
+                   ) {
+                    result.succeeded += 1
+                    DebugLog.log("HiddenItemController: placement verified for \(item.windowID) (\(item.ownerBundleID ?? "?")) pid=\(item.ownerPID) -> x=\(targetX)")
+                } else {
+                    result.failed.append(item)
+                    DebugLog.log("HiddenItemController: move returned without satisfying placement for \(item.windowID)")
+                }
+            }
+        } catch is CancellationError {
+            result.cancelled = true
+        } catch {
+            result.observationFailed = true
+            DebugLog.log("HiddenItemController: observation failed: \(error)")
+        }
+        result.cancelled = result.cancelled || Task.isCancelled
         return result
     }
 }

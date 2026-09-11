@@ -7,18 +7,20 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
-    private let model: SettingsModel
+    let model: SettingsModel
 
     init(
         preferences: Preferences,
         loginItem: LoginItemService,
-        itemsProvider: @escaping () async -> [FloatingBarItem],
+        itemsProvider: @escaping () async throws -> [FloatingBarItem],
+        onRetryPlacement: @escaping () -> Void = {},
         onChange: @escaping (Preferences) -> Void
     ) {
         self.model = SettingsModel(
             preferences: preferences,
             loginItem: loginItem,
             itemsProvider: itemsProvider,
+            onRetryPlacement: onRetryPlacement,
             onChange: onChange
         )
     }
@@ -48,21 +50,24 @@ final class SettingsModel {
     }
 
     private let loginItem: LoginItemService
+    private let onRetryPlacement: () -> Void
     private let onChange: (Preferences) -> Void
     /// Supplies every manageable menu bar item (both shown and hidden) so the Items tab can list
     /// everything the user might want to toggle. Async because it enumerates + attributes the live
     /// menu bar (an Accessibility sweep off the main thread).
-    private let itemsProvider: () async -> [FloatingBarItem]
+    private let itemsProvider: () async throws -> [FloatingBarItem]
 
     init(
         preferences: Preferences,
         loginItem: LoginItemService,
-        itemsProvider: @escaping () async -> [FloatingBarItem],
+        itemsProvider: @escaping () async throws -> [FloatingBarItem],
+        onRetryPlacement: @escaping () -> Void = {},
         onChange: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
         self.loginItem = loginItem
         self.itemsProvider = itemsProvider
+        self.onRetryPlacement = onRetryPlacement
         self.onChange = onChange
     }
 
@@ -85,13 +90,18 @@ final class SettingsModel {
     /// user jump straight to the right System Settings pane.
     private(set) var permissions = PermissionState()
     private let permissionProbe: PermissionProbe = SystemPermissionProbe()
+    var onAccessibilityGranted: (() -> Void)?
 
     /// Re-reads permission status from the system. Called when the Settings window appears and
     /// can be polled while it's open so a grant the user just toggled in System Settings shows up
     /// without reopening. Cheap (two boolean syscalls); promotes a regranted-then-revoked
     /// permission to `.lapsed` via the pure state machine.
     func refreshPermissions() {
+        let wasGranted = permissions.status(of: .accessibility) == .granted
         permissions.refresh(using: permissionProbe)
+        if !wasGranted, permissions.status(of: .accessibility) == .granted {
+            onAccessibilityGranted?()
+        }
     }
 
     /// Status of a single permission for the UI to render.
@@ -112,42 +122,70 @@ final class SettingsModel {
 
     // MARK: - Items management
 
-    /// Loads every manageable menu bar item (shown and hidden) for the Items list. Async: it
-    /// enumerates and attributes the live menu bar.
-    func items() async -> [FloatingBarItem] { await itemsProvider() }
+    private(set) var loadedItems: [FloatingBarItem] = []
+    private(set) var itemsLoading = true
+    private(set) var itemsLoadError: String? = nil
+    @ObservationIgnored private var itemsLoadGeneration: UInt64 = 0
+    var placementInProgress = false
+    var placementMessage: String? = nil
+    var placementFailed = false
 
-    /// Splits the given items into Hidden vs Shown by the user's current intent, so the Items
-    /// list can render two grouped sections. Preserves each group's incoming order.
+    func reloadItems() async {
+        guard !Task.isCancelled else { return }
+        itemsLoadGeneration &+= 1
+        let generation = itemsLoadGeneration
+        itemsLoading = true
+        itemsLoadError = nil
+        // Tab loads and placement refreshes can overlap without cancelling each other.
+        defer {
+            if generation == itemsLoadGeneration { itemsLoading = false }
+        }
+        do {
+            let refreshed = try await itemsProvider()
+            guard generation == itemsLoadGeneration, !Task.isCancelled else { return }
+            loadedItems = refreshed
+        } catch {
+            guard generation == itemsLoadGeneration,
+                  !Task.isCancelled, !(error is CancellationError) else { return }
+            itemsLoadError = "Could not read menu bar items. Try again."
+        }
+    }
+
+    /// Grouping and row controls must agree so a failed move keeps its opposite action available.
     func partition(_ items: [FloatingBarItem]) -> (hidden: [FloatingBarItem], shown: [FloatingBarItem]) {
         var hidden: [FloatingBarItem] = []
         var shown: [FloatingBarItem] = []
         for item in items {
-            if preferences.itemControls.isHidden(item.snapshot) { hidden.append(item) } else { shown.append(item) }
+            if isHidden(item) { hidden.append(item) } else { shown.append(item) }
         }
         return (hidden, shown)
     }
 
-    /// Whether the item is currently marked Hidden in the menu bar. Assigning mutates
-    /// `preferences.itemControls`, which fires `onChange` so the engine moves the item and the
-    /// bar refreshes.
+    /// Pending placement can display intent, but an observed failure must remain actionable.
     func isHidden(_ item: FloatingBarItem) -> Bool {
-        preferences.itemControls.isHidden(item.snapshot)
+        let controls = preferences.itemControls
+        if placementInProgress && controls.hasPlacementIntent(item.snapshot) {
+            return controls.isHidden(item.snapshot)
+        }
+        return item.observedHidden ?? controls.isHidden(item.snapshot)
     }
 
     func setHidden(_ hidden: Bool, for item: FloatingBarItem) {
-        preferences.itemControls.setHidden(hidden, for: item.snapshot)
+        setHidden(hidden, forAll: [item])
     }
 
-    /// Sets the Hidden intent for MANY items at once, mutating `preferences` exactly ONCE so the
-    /// engine runs a single reconcile (and the prefs are persisted once) — not one per item. Used
-    /// by the "Hide all" / "Show all" bulk actions. Items already in the target state are left
-    /// untouched, and keyless items are skipped by the store.
+    /// A batch needs only one preference write. Identical intent still needs a retry because
+    /// a native move may have failed without changing the saved request.
     func setHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) {
         var controls = preferences.itemControls
         for item in items {
             controls.setHidden(hidden, for: item.snapshot)
         }
-        preferences.itemControls = controls
+        if controls == preferences.itemControls {
+            onRetryPlacement()
+        } else {
+            preferences.itemControls = controls
+        }
     }
 
     /// The user's display nickname for the item, edited via the name field. Empty clears it.

@@ -34,7 +34,7 @@ enum AXActivator {
     /// known. Returns whether a press succeeded. The item must already be on-screen (revealed)
     /// so the app opens its menu in the visible menu bar rather than off-screen.
     static func activate(windowID: CGWindowID, pid: pid_t, frame targetFrame: CGRect) async -> Bool {
-        guard AXIsProcessTrusted() else { return false }
+        guard !Task.isCancelled, AXIsProcessTrusted() else { return false }
 
         // Single-app fast path: query only the owning app.
         if pid > 0 {
@@ -134,6 +134,7 @@ enum AXActivator {
             return .matchedNoAction
         }
         for action in [kAXPressAction as String, "AXShowMenu"] {
+            guard !Task.isCancelled else { return .noMatch }
             let err = AXUIElementPerformAction(child, action as CFString)
             if err == .success {
                 DebugLog.log("AXActivator: \(action) succeeded for \(windowID)")
@@ -145,6 +146,7 @@ enum AXActivator {
         // a pressable child. Try the position-matched child so we don't press the wrong module.
         if let pressable = nearestPressableChild(of: child, targetMinX: targetFrame.minX) {
             for action in [kAXPressAction as String, "AXShowMenu"] {
+                guard !Task.isCancelled else { return .noMatch }
                 if AXUIElementPerformAction(pressable, action as CFString) == .success {
                     DebugLog.log("AXActivator: \(action) succeeded on child of \(windowID)")
                     return .pressed

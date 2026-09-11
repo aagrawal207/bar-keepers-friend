@@ -12,6 +12,8 @@ struct FloatingBarItem: Identifiable {
     /// The user's custom alias for this item, if any. Takes precedence over the attributed name
     /// so a user-chosen nickname is what they see and search by.
     var alias: String? = nil
+    /// Physical placement is transient; an unknown observation must not create saved intent.
+    var observedHidden: Bool? = nil
 
     var id: CGWindowID { snapshot.windowID }
 

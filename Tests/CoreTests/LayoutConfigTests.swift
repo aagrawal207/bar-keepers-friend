@@ -44,6 +44,51 @@ import Testing
         #expect(decoded.version == LayoutConfig.currentVersion)
     }
 
+    @Test(arguments: [("1e20", 120.0), ("-1e20", 2.0), ("15.75", 15.75)])
+    func importedDelayStaysSafeAfterSaveAndLoad(jsonDelay: String, expectedDelay: TimeInterval) throws {
+        let data = Data("""
+        {
+            "version": 1,
+            "preferences": {
+                "autoRehide": true,
+                "autoRehideDelay": \(jsonDelay),
+                "launchAtLogin": true,
+                "controlItemPositions": {"BKFAnchor": 0, "BKFHidden": 1.5},
+                "itemAliases": {"aliases": {"Maccy": "Clipboard", "Karabiner-Menu": "Keys"}},
+                "itemControls": {
+                    "hiddenInMenuBar": ["Maccy"],
+                    "shownInMenuBar": ["Karabiner-Menu"],
+                    "suppressedFromBar": ["Maccy"],
+                    "barOrder": {"Maccy": 3}
+                }
+            }
+        }
+        """.utf8)
+        let expected = Preferences(
+            autoRehideDelay: expectedDelay,
+            launchAtLogin: true,
+            controlItemPositions: ["BKFAnchor": 0, "BKFHidden": 1.5],
+            itemAliases: ItemAliasStore(aliases: ["Maccy": "Clipboard", "Karabiner-Menu": "Keys"]),
+            itemControls: ItemControlStore(
+                hiddenInMenuBar: ["Maccy"],
+                shownInMenuBar: ["Karabiner-Menu"],
+                suppressedFromBar: ["Maccy"],
+                barOrder: ["Maccy": 3]
+            )
+        )
+        let imported = try LayoutConfig.decode(from: data)
+        #expect(imported.preferences == expected)
+
+        let backing = InMemoryPreferences()
+        let store = PreferencesStore(backing: backing)
+        try #require(store.save(imported.preferences))
+        let reloaded = PreferencesStore(backing: backing).load()
+        #expect(reloaded == expected)
+        try #require(reloaded.autoRehideDelay.isFinite)
+        try #require((2.0...120.0).contains(reloaded.autoRehideDelay))
+        #expect(Int(reloaded.autoRehideDelay) == Int(expectedDelay))
+    }
+
     @Test func encodedJSONIsNonEmptyAndCarriesVersion() throws {
         let data = try LayoutConfig(preferences: makeNonDefaultPreferences()).encoded()
         #expect(!data.isEmpty)
