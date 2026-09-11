@@ -16,7 +16,7 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 | Per-item Shown/Hidden | Live verified for Maccy and ACME; observed placement and retry feedback implemented | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
 | Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | Prove cold-boot collection, saturated-notch activation, and capacity beyond both grid axes |
 | Item activation | Positioned click, optional AX path, cancellation/ownership guards | Observe actual menu opening/closing, handle ambiguous AX outcomes, and qualify cursor/focus behavior |
-| Hover reveal | Explicitly requested; replacement not yet implemented | Opt-in below Auto Re-hide; preserve anchor-to-panel travel and manual/keyboard ownership |
+| Hover reveal | Implemented opt-in below Auto Re-hide; ownership, cancellation, geometry, and non-key ordering calls tested | Native first-click delivery, focus, animation transit, and display qualification |
 | Keyboard access | Configured global toggle and persistent keyboard-opened bar | Shortcut recorder/conflict feedback and accessible navigation/dismissal |
 | Display correctness | Placement re-reads controls; several coordinate fixes are tested | Explicit 2D display identity, negative-origin capture, stacked-display panel selection, and live external-display qualification |
 | Native-work resilience | Pause and superseding work cancel safely; activations join draining moves | Lock/Space/fullscreen/mouse-idle policies and genuine recovery from non-returning native calls |
@@ -38,7 +38,7 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 
 - macOS 26 only; no older-macOS compatibility layer.
 - Search and visible section dividers remain removed at the user's request.
-- Hover was previously removed, but the user explicitly requested a new opt-in implementation.
+- Hover was previously removed; its new opt-in implementation follows the user's explicit request.
 - Bartender Pro's additional shelf/media/calendar/file utilities are outside the menu-bar-manager
   scope unless requested separately.
 
@@ -52,3 +52,28 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 - Never race a new native operation past an unfinished one merely to make a timeout appear fixed.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
+
+## Hover Verification
+
+Full build/test on 2026-09-11: 396 tests across 35 suites, 533 invocations, zero failures or skips.
+The built app passed strict code-signature verification. Independent source review found no
+remaining issues after fixes for context-menu ownership, synthetic pointer excursions, focus-taking
+presentation calls, and held-click races.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Dwell, exit grace, anchor/panel/gap transit, invalid and negative-origin geometry | `HoverRevealStateMachineTests` | Unit |
+| Manual ownership, queued/suspended cancellation, stale callbacks, mouse-button gating, teardown | `HoverRevealControllerTests` with fake clocks and gates | Unit |
+| Pause, preference/mode disable, uninstall, shortcut/context-menu cleanup, activation handoff | `HoverRevealIntegrationTests` using the real engine and bar state | Hostless integration |
+| Manual-close suppression during placement-owned pointer excursions | Real engine and mover with `FakeWindowServer` and gated attribution | Hostless integration |
+| Hover stays non-key through re-layout; fresh click/keyboard opens may become key | Actual `present()` path with intercepted NSPanel ordering calls | Hostless integration |
+| Default off, legacy decoding, save/reload, layout round-trip, unrelated settings unchanged | `PreferencesTests`, `LayoutConfigTests`, `PlacementIntegrationTests` | Unit + hostless integration |
+
+Native focus/first-click delivery, animation feel, and multi-display behavior are deliberately not
+claimed as verified. Test panels never order onto the desktop, and tests do not post mouse events
+or capture the screen. The actual `show()`/capture re-layout call sites were source-reviewed.
+
+Diagnostics reuse local `DebugLog` messages for monitoring enabled/disabled, manual relinquishment,
+presentation visibility, and hover-owned closure. There is no telemetry or per-poll logging;
+tests assert behavior, not log strings. No automated security scan was available (`scan_diff`,
+`gitleaks`, and `semgrep` were absent); the diff received manual security review.

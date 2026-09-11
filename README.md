@@ -21,6 +21,9 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   item across the anchor (the Bartender-style direct picker), plus a global toggle shortcut
   (⌥⌘B). Uses private window-server behavior, so it's fenced behind a protocol seam with a
   self-validating retry loop. ✅ *(Moves were verified on-device; activation limitations remain below.)*
+- **Hover reveal** is opt-in under Settings > General, below Auto Re-hide. Hovering over BKF
+  opens the floating bar; leaving closes only a hover-opened bar. Click and keyboard controls
+  remain authoritative, and the setting defaults off.
 
 ### Known limitations
 
@@ -30,6 +33,8 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   block later refreshes. The current queue timeout does not guarantee recovery.
 - Multi-display behavior and native mouse-event changes require live hardware checks. Passing
   unit tests alone is not evidence that these paths work on every menu-bar layout.
+- Hover ownership and cancellation are hostless-tested; native focus, first-click delivery,
+  and the feel of anchor-to-panel travel still need hardware QA.
 
 Current work and verification details are tracked in [AGENTS.md](AGENTS.md), with the remaining
 capability gaps in [PARITY.md](PARITY.md).
@@ -85,7 +90,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 341 tests (432 invocations including parameterized cases).
+It currently contains 396 tests in 35 suites (533 invocations including parameterized cases).
 
 ## Credit
 

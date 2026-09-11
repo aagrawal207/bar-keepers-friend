@@ -100,7 +100,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **341 tests, 32 suites**, 432 invocations including
+- Test: same command with `test` (currently **396 tests, 35 suites**, 533 invocations including
   parameterized cases). Last full build/test: 2026-09-11, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
@@ -162,6 +162,18 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   changing the Hidden set, and opening Settings dismisses the mirror.
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
+- **Opt-in hover reveal (2026-09-11, pure + adapter-tested).** Settings > General > Behavior has
+  "Reveal on hover" below Auto Re-hide. It defaults off, is independent of auto-rehide, and is
+  unavailable outside floating-bar mode. A 200ms dwell opens the cached bar; leaving the anchor,
+  panel, and connecting gap closes only a hover-owned panel after 400ms. Pointer polling runs at
+  20Hz only while enabled, and stops on Pause, disable, or uninstall; it is not a capture timer.
+  Manual interaction cancels pending hover work, and native placement cannot clear manual-close
+  suppression with a temporary cursor excursion. Held mouse buttons block new hover opens without
+  closing an item being clicked. Right-click closes a hover-owned panel before opening its menu.
+  Hover presentations use non-key window ordering, retained through re-layout; click/keyboard
+  opens keep their existing policies. Pure geometry/state tests, fake-clock cancellation tests,
+  real engine/placement wiring, and intercepted NSPanel ordering calls verify these decisions.
+  Native first-click delivery, focus, animation transit, and display behavior still need hardware QA.
 - **Anchor right-click menu** — app name + version header, a live **status line** (Paused / Ready /
   Working… / Collecting icons…, from the pure `AppStatus` enum in Core), a checkable **Pause** (reveals
   items in place and stops all automated hide/reveal/move; session-only), **About** (standard panel),
@@ -203,8 +215,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **Search panel** + its ⌥⌘F hotkey — user found it confusing.
 - **"Show section dividers"** toggle — divider is now an invisible mechanism only.
 - **Previous reveal-on-hover implementation** - removed because the user did not want it and its
-  off switch did not fully stop it. A replacement was explicitly requested on 2026-09-11; it must
-  be opt-in and tested for cancellation, manual ownership, and disabling while open.
+  off switch did not fully stop it. The replacement explicitly requested on 2026-09-11 is opt-in
+  and cancellation/ownership-tested; see Built for its verification scope.
 
 ## Remaining work
 
@@ -675,6 +687,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
+- **Hover reveal interaction.** Verify anchor-to-panel travel, first-click item activation, typing
+  focus in Settings/another app, Reduce Motion, and external/stacked displays. Hostless tests cover
+  ownership, cancellation, non-key ordering calls, and global-coordinate geometry, not native
+  focus/first-click delivery or the feel of the 200ms dwell and 400ms exit grace. The setting stays
+  off until explicitly enabled by the user.
 - **Immovable denylist completeness** — the display-name guard protects "Control Center", AND (as of
   2026-06-30) the `immovablePIDs` set now catches **all Control Center modules at once by pid** —
   so the localized module labels (Wi-Fi, Battery, Sound, …) no longer need to be enumerated by string

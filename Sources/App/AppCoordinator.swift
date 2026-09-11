@@ -57,6 +57,15 @@ final class AppCoordinator {
         }
         engine.floatingBar = bar
         engine.hiddenItemController = mover
+        let hover = HoverRevealController(
+            anchorFrame: { [weak engine] in engine?.anchorWindowFrame },
+            panelFrame: { [weak bar] in bar?.windowFrame },
+            isPanelVisible: { [weak bar] in bar?.isVisible == true },
+            canReveal: { [weak engine] in engine?.canRevealOnHover == true },
+            showPanel: { [weak engine] in await engine?.revealFloatingBarOnHover() },
+            hidePanel: { [weak bar] in bar?.hide() }
+        )
+        engine.hoverRevealController = hover
         hideEngine = engine
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
         engine.onQuit = { NSApp.terminate(nil) }
@@ -66,7 +75,8 @@ final class AppCoordinator {
             await self?.settingsWindowController?.model.reloadItems()
         }
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
-        bar.onDidHide = { [weak engine] in
+        bar.onDidHide = { [weak engine, weak hover] in
+            hover?.relinquishForManualInteraction()
             Task { @MainActor in engine?.resumePendingPlacement() }
         }
         activationObserver = NotificationCenter.default.addObserver(

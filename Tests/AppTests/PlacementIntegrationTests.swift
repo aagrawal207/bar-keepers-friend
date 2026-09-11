@@ -238,6 +238,7 @@ struct PlacementIntegrationTests {
         model.preferences.itemAliases.setAlias("Nickname", forKey: "Test App")
         model.preferences.itemControls.setSuppressed(true, forKey: "Test App")
         model.preferences.itemControls.setOrderIndex(1, forKey: "Test App")
+        model.preferences.revealOnHover = true
         #expect(engine.placementTask == nil)
         #expect(!engine.placementPending)
     }

@@ -18,12 +18,22 @@ import Testing
         prefs.controlItemPositions = ["BKFAnchor": 0, "BKFHidden": 1.5]
         prefs.enableGlobalHotkey = false
         prefs.toggleHotkey = HotkeyCombo(keyCode: 12, modifiers: HotkeyCombo.command | HotkeyCombo.shift)
+        prefs.itemAliases = ItemAliasStore(aliases: ["Maccy": "Clipboard"])
+        prefs.itemControls = ItemControlStore(
+            hiddenInMenuBar: ["Maccy"],
+            shownInMenuBar: ["Karabiner-Menu"],
+            suppressedFromBar: ["Maccy"],
+            barOrder: ["Maccy": 3]
+        )
         prefs.dismissBarOnMouseExit = false
+        prefs.revealOnHover = true
         return prefs
     }
 
-    @Test func roundTripsNonDefaultPreferences() throws {
-        let prefs = makeNonDefaultPreferences()
+    @Test(arguments: [false, true])
+    func roundTripsNonDefaultPreferences(revealOnHover: Bool) throws {
+        var prefs = makeNonDefaultPreferences()
+        prefs.revealOnHover = revealOnHover
         let config = LayoutConfig(preferences: prefs)
 
         let data = try config.encoded()
@@ -41,6 +51,23 @@ import Testing
         let decoded = try LayoutConfig.decode(from: data)
 
         #expect(decoded.preferences == .default)
+        #expect(!decoded.preferences.revealOnHover)
+        #expect(decoded.version == LayoutConfig.currentVersion)
+    }
+
+    @Test func olderLayoutDefaultsHoverOffWithoutChangingOtherPreferences() throws {
+        var expected = makeNonDefaultPreferences()
+        let data = try LayoutConfig(preferences: expected).encoded()
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var preferences = try #require(object["preferences"] as? [String: Any])
+        #expect(preferences.removeValue(forKey: "revealOnHover") as? Bool == true)
+        object["preferences"] = preferences
+
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try LayoutConfig.decode(from: legacyData)
+        expected.revealOnHover = false
+        #expect(!decoded.preferences.revealOnHover)
+        #expect(decoded.preferences == expected)
         #expect(decoded.version == LayoutConfig.currentVersion)
     }
 

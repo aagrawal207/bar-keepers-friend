@@ -67,6 +67,9 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// On by default — a quick-glance bar shouldn't linger once the user moves away.
     public var dismissBarOnMouseExit: Bool
 
+    /// Hover reveal is opt-in and applies only to the floating bar, independently of auto-rehide.
+    public var revealOnHover: Bool
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -79,7 +82,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         toggleHotkey: HotkeyCombo = .defaultToggle,
         itemAliases: ItemAliasStore = ItemAliasStore(),
         itemControls: ItemControlStore = ItemControlStore(),
-        dismissBarOnMouseExit: Bool = true
+        dismissBarOnMouseExit: Bool = true,
+        revealOnHover: Bool = false
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay)
@@ -93,6 +97,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.itemAliases = itemAliases
         self.itemControls = itemControls
         self.dismissBarOnMouseExit = dismissBarOnMouseExit
+        self.revealOnHover = revealOnHover
     }
 
     public static let `default` = Preferences()
@@ -117,6 +122,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case itemAliases
         case itemControls
         case dismissBarOnMouseExit
+        case revealOnHover
     }
 
     /// Decodes leniently: any missing key falls back to its default, so adding a new
@@ -138,6 +144,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         itemAliases = try container.decodeIfPresent(ItemAliasStore.self, forKey: .itemAliases) ?? d.itemAliases
         itemControls = try container.decodeIfPresent(ItemControlStore.self, forKey: .itemControls) ?? d.itemControls
         dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
+        revealOnHover = try container.decodeIfPresent(Bool.self, forKey: .revealOnHover) ?? false
     }
 }
 

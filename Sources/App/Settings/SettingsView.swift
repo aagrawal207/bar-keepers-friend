@@ -96,7 +96,7 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
-            Section("Auto re-hide") {
+            Section("Behavior") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
                 if model.preferences.autoRehide {
                     LabeledContent("Re-hide after") {
@@ -109,6 +109,12 @@ private struct GeneralSettingsTab: View {
                         }
                     }
                 }
+                Toggle("Reveal on hover", isOn: $model.preferences.revealOnHover)
+                    .disabled(!model.preferences.useFloatingBar)
+                Text("Hover over the BKF icon to open the floating bar. Moving away closes only a hover-opened bar.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Backup") {

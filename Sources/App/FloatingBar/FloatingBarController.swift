@@ -2,14 +2,14 @@ import AppKit
 import BarKeepersFriendCore
 import SwiftUI
 
-/// Owns the floating panel that mirrors hidden menu bar items below the menu bar.
-///
-/// On show it: enumerates status items (via the injected `WindowServer`), resolves which are
-/// hidden, captures their images (`IconCaptureService`), computes the panel frame with the
-/// pure `FloatingBarLayout`, and presents an `NSPanel` hosting `FloatingBarView`. The panel
-/// is non-activating so showing it doesn't steal focus, and floats above normal windows.
+/// Owns the nonactivating panel that presents cached menu bar icons.
+/// Capture and placement stay behind injected WindowServer and attribution seams.
 @MainActor
 final class FloatingBarController {
+    enum Presentation: Equatable, Sendable {
+        case click, keyboard, hover
+    }
+
     private var panel: NSPanel?
     private let windowServer: WindowServer
     private let captureIcons: ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage]
@@ -36,6 +36,7 @@ final class FloatingBarController {
     var scheduleAutoRehideAfterActivation: (() -> Void)?
 
     private(set) var isVisible = false
+    var windowFrame: CGRect? { panel?.frame }
     var onDidHide: (() -> Void)?
 
     /// True when at least one hidden item still lacks a real captured glyph (it was omitted or is
@@ -137,13 +138,8 @@ final class FloatingBarController {
     private static let preEntryGracePeriod: TimeInterval = 3
     /// When the current bar became visible, for the pre-entry backstop above. Set in show().
     private var shownAt: Date?
-    /// Whether THIS open should auto-dismiss if the pointer never lands on it (the pre-entry
-    /// backstop). True for pointer-driven opens (anchor click, hover) where an abandoned bar
-    /// should tidy away; FALSE for a deliberate keyboard toggle (⌥⌘B), which should stay put until
-    /// the user toggles it again or moves onto it and leaves — a keypress isn't a "glance", so a
-    /// bar that silently vanished a few seconds after the shortcut would read as "the shortcut
-    /// doesn't work". Set only on a fresh open; a re-layout show() leaves it untouched.
-    private var autoDismissWhenAbandoned = true
+    /// Re-layout retains the opening policy, including non-key hover presentation.
+    private(set) var presentation: Presentation = .click
 
     init(
         windowServer: WindowServer,
@@ -301,13 +297,12 @@ final class FloatingBarController {
     private static let captureRetryDelayMs = 180
     private static let maxStalledAttempts = 2
 
-    /// Builds and presents the panel from the cached icons (items are off-screen when the
-    /// bar is shown, so they can't be re-captured here — the cache is populated before hide).
-    ///
-    /// `autoDismissWhenAbandoned` controls only the pre-entry backstop for THIS open (ignored on a
-    /// re-layout show() while already visible): pointer-driven opens pass `true` so a bar the user
-    /// never moves onto tidies away; a keyboard toggle passes `false` so it stays until re-toggled.
-    func show(anchorMinX: CGFloat, anchorRightX: CGFloat, autoDismissWhenAbandoned: Bool = true) async {
+    /// Presents cached icons without waiting for capture. A fresh open establishes its interaction
+    /// policy; re-layout must preserve it so hover cannot acquire keyboard focus or manual ownership.
+    func show(
+        anchorMinX: CGFloat, anchorRightX: CGFloat,
+        presentation: Presentation = .click
+    ) async {
         guard !Task.isCancelled else { return }
         lastAnchorMinX = anchorMinX.isFinite ? anchorMinX : nil
         lastAnchorRightX = anchorRightX
@@ -366,20 +361,7 @@ final class FloatingBarController {
         let panel = panel ?? makePanel()
         panel.contentViewController = hosting
         self.panel = panel
-        // A FRESH open (not a re-layout show() while already visible) resets the mouse-exit
-        // entry latch: the pointer hasn't been on this newly-shown bar yet, so the exit watchdog
-        // stays disarmed until it arrives. A re-layout show() (captureAndCache landing a glyph
-        // while the bar is open) must NOT reset it, or moving the pointer onto the bar and waiting
-        // for a glyph to fill in would re-disarm and the bar would never auto-dismiss.
-        if !isVisible {
-            pointerHasEnteredPanel = false
-            shownAt = Date()
-            self.autoDismissWhenAbandoned = autoDismissWhenAbandoned
-        }
-        // Set visible up front so the engine's toggle logic and the `if isVisible { await show }`
-        // re-layout path in captureAndCache both see the bar as open the instant we commit to it,
-        // not after the animation lands.
-        isVisible = true
+        beginPresentation(presentation)
         present(panel: panel, finalFrame: panelFrame)
         // (Re)arm the mouse-exit watch. A re-layout show() (captureAndCache while visible) tears
         // down then re-installs so monitors never stack; honoring the preference live here means a
@@ -387,40 +369,32 @@ final class FloatingBarController {
         installMouseExitMonitorIfNeeded()
     }
 
-    /// Presents `panel` at `finalFrame`, sliding it down from just under the menu bar with a fade
-    /// (Bartender-style). The panel starts `slideOffset` points HIGHER (toward the menu bar) at
-    /// alpha 0, orders front, then animates to the final frame + alpha 1. Because this is an
-    /// `NSPanel`, the frame and alpha are driven through `animator()` inside an
-    /// `NSAnimationContext` group.
-    ///
-    /// Re-entrancy: a show() can land while a hide() slide-out is still running. Clearing
-    /// `isAnimatingHide` here neuters that hide's completion handler (it checks the flag before
-    /// `orderOut`), so the panel we just reclaimed can't be ordered out from under us and left
-    /// stuck invisible. We always reassert the final frame + alpha, so an interrupted part-way
-    /// state is corrected regardless of where the prior animation was.
-    ///
-    /// Reduce Motion: if the system asks for reduced motion we skip the slide/fade entirely and
-    /// just place the panel at its final frame, full alpha, and order it front.
-    private func present(panel: NSPanel, finalFrame: CGRect) {
+    /// Re-layout keeps the opening policy; only a fresh presentation may change ownership behavior.
+    func beginPresentation(_ presentation: Presentation = .click) {
+        if !isVisible {
+            pointerHasEnteredPanel = false
+            shownAt = Date()
+            self.presentation = presentation
+        }
+        isVisible = true
+    }
+
+    /// Hover must not take keyboard focus; clicking its keyable panel can still focus its controls.
+    /// Reasserting frame and alpha also recovers a presentation interrupted during a hide animation.
+    func present(panel: NSPanel, finalFrame: CGRect) {
         // A show interrupting a hide: reclaim the panel and disarm the stale hide completion.
         isAnimatingHide = false
 
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            panel.alphaValue = 1
-            panel.setFrame(finalFrame, display: true)
-            // Become key so the hosted SwiftUI buttons receive clicks. The panel is a
-            // .nonactivatingPanel, so this does NOT activate the app or steal focus from the
-            // user's frontmost window — it just lets our own controls handle mouse events.
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.alphaValue = reduceMotion ? 1 : 0
+        let startFrame = reduceMotion ? finalFrame : finalFrame.offsetBy(dx: 0, dy: Self.slideOffset)
+        panel.setFrame(startFrame, display: reduceMotion)
+        if presentation == .hover {
+            panel.orderFront(nil)
+        } else {
             panel.makeKeyAndOrderFront(nil)
-            return
         }
-
-        // Start above the final spot (toward the menu bar) and transparent, then slide down + fade
-        // in. Order front BEFORE animating so the panel exists on screen to animate.
-        let startFrame = finalFrame.offsetBy(dx: 0, dy: Self.slideOffset)
-        panel.alphaValue = 0
-        panel.setFrame(startFrame, display: false)
-        panel.makeKeyAndOrderFront(nil)
+        guard !reduceMotion else { return }
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.slideDuration
@@ -897,7 +871,7 @@ final class FloatingBarController {
     private func installMouseExitMonitorIfNeeded() {
         // Always start clean so a re-layout show() can't end up with two sets of monitors.
         removeMouseExitMonitor()
-        guard preferences.dismissBarOnMouseExit else { return }
+        guard preferences.dismissBarOnMouseExit, presentation != .hover else { return }
 
         exitGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleMouseExitMove() }
@@ -947,7 +921,7 @@ final class FloatingBarController {
         // deliberate move-away closes it). The pre-entry backstop — closing a bar the user never
         // touched — fires only for pointer-driven opens; a keyboard toggle stays put until the user
         // toggles it again, since a vanishing bar would make the shortcut feel broken.
-        let preEntryExpired = autoDismissWhenAbandoned
+        let preEntryExpired = presentation == .click
             && Date().timeIntervalSince(shownAt ?? Date()) >= Self.preEntryGracePeriod
         guard pointerHasEnteredPanel || preEntryExpired else { return }
 
@@ -983,11 +957,8 @@ final class FloatingBarController {
     }
 }
 
-/// A borderless panel that can still become key. Borderless `NSWindow`s return
-/// `canBecomeKey == false` by default, which prevents the hosted SwiftUI buttons from
-/// receiving clicks. As a `.nonactivatingPanel` it can take key status without activating the
-/// app, so our controls work while the user's frontmost app keeps its focus. It declines to
-/// become *main* so it never looks like the app's primary window.
+/// A nonactivating, borderless panel that can become key when the user clicks its controls.
+/// It never becomes the app's main window.
 private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }

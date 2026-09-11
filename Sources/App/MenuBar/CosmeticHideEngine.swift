@@ -22,6 +22,8 @@ final class CosmeticHideEngine {
     /// in preferences, the anchor click toggles this panel instead of reflowing items back
     /// into the (possibly too-narrow) menu bar.
     var floatingBar: FloatingBarController?
+    var hoverRevealController: HoverRevealController?
+    private var anchorMenuIsOpen = false
 
     /// Performs the per-item Shown/Hidden control by physically moving items across the anchor
     /// (the private synthesized-move path). When set, the engine reconciles the live menu bar
@@ -313,6 +315,7 @@ final class CosmeticHideEngine {
             applyDividerVisibility()
         }
         observeScreenChanges()
+        updateHoverMonitoring()
     }
 
     /// The defaults key AppKit uses to persist a status item's horizontal slot, by autosave name.
@@ -383,6 +386,7 @@ final class CosmeticHideEngine {
     }
 
     func uninstall() {
+        hoverRevealController?.stop()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
         cancelCaptureSequences()
@@ -402,6 +406,7 @@ final class CosmeticHideEngine {
         let previousControls = self.preferences.itemControls
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
+        updateHoverMonitoring()
 
         // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
         // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
@@ -544,6 +549,7 @@ final class CosmeticHideEngine {
             return
         }
         if userInitiated {
+            hoverRevealController?.relinquishForManualInteraction()
             activationOwnsSection = false
             floatingBar?.hide()
         }
@@ -656,8 +662,12 @@ final class CosmeticHideEngine {
     ///
     /// Layout: an app-identity header (name + version) and a live status line (both disabled, so
     /// they read as information, not actions), then the actions — Settings, About — and Quit.
-    private func showAnchorMenu() {
+    func showAnchorMenu() {
+        if hoverRevealController?.ownsPanel == true { floatingBar?.hide() }
+        hoverRevealController?.relinquishForManualInteraction()
         guard let anchor = anchorItem else { return }
+        anchorMenuIsOpen = true
+        defer { anchorMenuIsOpen = false }
         let menu = NSMenu()
         // We manage each item's enabled state by hand. With AppKit's default auto-validation on,
         // every action item would be silently DISABLED: this engine isn't an NSObject subclass, so
@@ -731,6 +741,7 @@ final class CosmeticHideEngine {
     /// icon collection. An already-posted native gesture finishes before cancellation takes effect.
     @objc func menuTogglePause() {
         isPaused.toggle()
+        updateHoverMonitoring()
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
@@ -767,13 +778,10 @@ final class CosmeticHideEngine {
         NSApp.orderFrontStandardAboutPanel(nil)
     }
 
-    /// Shows or hides the floating bar from the cached mirror — instantly, with no capture on
-    /// the open path. The cache is kept current out-of-band (launch capture + on screen change).
-    ///
-    /// `persistUntilToggled` is passed through to the bar's auto-dismiss policy: a keyboard toggle
-    /// (⌥⌘B) sets it so an opened bar the user never mouses onto stays put until they toggle again;
-    /// pointer-driven opens (anchor click, hover) leave it false so an abandoned bar tidies away.
+    /// Manual toggles present cached icons; keyboard opens disable the pre-entry dismissal backstop.
+    /// Hover uses a separate ownership policy and exit timer.
     private func toggleFloatingBar(persistUntilToggled: Bool = false) {
+        hoverRevealController?.relinquishForManualInteraction()
         guard !isPaused, let bar = floatingBar else { return }
         // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
         // timer armed by an earlier activation (default 15s) could fire later and yank shut a bar
@@ -800,7 +808,7 @@ final class CosmeticHideEngine {
                 let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
                 Task { @MainActor in
                     guard !self.isPaused else { return }
-                    await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled)
+                    await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: persistUntilToggled ? .keyboard : .click)
                 }
             }
             return
@@ -827,7 +835,7 @@ final class CosmeticHideEngine {
         let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
         Task { @MainActor in
             guard !self.isPaused else { return }
-            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, autoDismissWhenAbandoned: !persistUntilToggled)
+            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: persistUntilToggled ? .keyboard : .click)
         }
         // If the live menu bar gained/lost items since the cache was built (an app added or
         // removed its status item while we were idle), refresh in the BACKGROUND. The bar is
@@ -867,12 +875,39 @@ final class CosmeticHideEngine {
     /// the anchor. Nil until the status item's window is realized.
     var anchorWindowFrame: CGRect? { anchorFrame }
 
+    var canRevealOnHover: Bool {
+        preferences.revealOnHover && preferences.useFloatingBar && floatingBar != nil
+            && !isPaused && !anchorMenuIsOpen && !activationOwnsSection && !placementInProgress
+            && (stateMachine.visibility(of: .hidden) == .collapsed || captureInFlight)
+    }
+
+    private func updateHoverMonitoring() {
+        hoverRevealController?.setEnabled(preferences.revealOnHover && preferences.useFloatingBar && !isPaused)
+    }
+
+    func revealFloatingBarOnHover() async {
+        guard !Task.isCancelled, canRevealOnHover, let bar = floatingBar,
+              !bar.isVisible, let frame = anchorFrame else { return }
+        autoRehideWorkItem?.cancel()
+        autoRehideWorkItem = nil
+        cancelWarmUpRetries()
+        publishControlItemWindowIDs()
+        if !captureInFlight, bar.cachedMirrorIsStale(anchorMinX: frame.minX) {
+            refreshFloatingBarCache()
+        }
+        await bar.show(
+            anchorMinX: frame.minX, anchorRightX: frame.maxX,
+            presentation: .hover
+        )
+    }
+
     @objc private func dividerClicked(_ sender: NSStatusBarButton) {
         anchorClicked(sender)
     }
 
     func toggleHidden() {
         guard !isPaused else { return }
+        hoverRevealController?.relinquishForManualInteraction()
         let intents = stateMachine.apply(.toggle(.hidden))
         enact(intents)
         scheduleAutoRehideIfNeeded()
@@ -883,6 +918,7 @@ final class CosmeticHideEngine {
     /// machine to `.shown` and returns after a short settle delay.
     func revealForActivation() async {
         guard !isPaused, !Task.isCancelled else { return }
+        hoverRevealController?.relinquishForManualInteraction()
         activationOwnsSection = true
         _ = stateMachine.apply(.show(.hidden))
         if placementInProgress {
