@@ -24,6 +24,8 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
 - **Hover reveal** is opt-in under Settings > General, below Auto Re-hide. Hovering over BKF
   opens the floating bar; leaving closes only a hover-opened bar. Click and keyboard controls
   remain authoritative, and the setting defaults off.
+- **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
+  Disabled items remain dimmed and non-interactive.
 
 ### Known limitations
 
@@ -90,7 +92,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 396 tests in 35 suites (533 invocations including parameterized cases).
+It currently contains 399 tests in 35 suites (543 invocations including parameterized cases).
 
 ## Credit
 

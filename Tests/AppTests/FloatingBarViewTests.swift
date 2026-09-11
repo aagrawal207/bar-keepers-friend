@@ -70,4 +70,70 @@ struct FloatingBarViewTests {
             )
         }
     }
+
+    @Test(arguments: FloatingBarStyle.allCases, [ColorScheme.light, .dark])
+    func hoverHighlightFillsTheCellWithoutChangingItsSize(style: FloatingBarStyle, scheme: ColorScheme) throws {
+        let normal = try highlightImage(style: style, scheme: scheme)
+        let hovered = try highlightImage(style: style, scheme: scheme, isHovered: true)
+        #expect(hovered.pixelsWide == normal.pixelsWide)
+        #expect(hovered.pixelsHigh == normal.pixelsHigh)
+        for x in [5, hovered.pixelsWide / 2, hovered.pixelsWide - 6] {
+            let normalColor = try #require(normal.colorAt(x: x, y: normal.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+            let hoverColor = try #require(hovered.colorAt(x: x, y: hovered.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+            #expect(normalColor.alphaComponent == 0)
+            #expect(hoverColor.alphaComponent > 0.1)
+            if scheme == .dark {
+                #expect(hoverColor.redComponent > 0.9)
+            } else {
+                #expect(hoverColor.redComponent < 0.1)
+            }
+        }
+        #expect(hovered.colorAt(x: 0, y: 0)?.alphaComponent == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func pressingProvidesFeedbackEvenWithoutHover(isHovered: Bool) throws {
+        let hovered = try highlightImage(isHovered: true)
+        let pressed = try highlightImage(isHovered: isHovered, isPressed: true)
+        let hoverAlpha = try #require(hovered.colorAt(x: 5, y: 15)?.alphaComponent)
+        let pressedAlpha = try #require(pressed.colorAt(x: 5, y: 15)?.alphaComponent)
+        #expect(pressedAlpha > hoverAlpha)
+        #expect(pressed.pixelsWide == hovered.pixelsWide)
+        #expect(pressed.pixelsHigh == hovered.pixelsHigh)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func disabledItemsNeverShowInteractiveHighlight(isHovered: Bool, isPressed: Bool) throws {
+        let image = try highlightImage(isHovered: isHovered, isPressed: isPressed, isEnabled: false)
+        #expect(image.colorAt(x: 5, y: 15)?.alphaComponent == 0)
+    }
+
+    private func highlightImage(
+        style: FloatingBarStyle = .vertical, scheme: ColorScheme = .light,
+        isHovered: Bool = false, isPressed: Bool = false, isEnabled: Bool = true
+    ) throws -> NSBitmapImageRep {
+        let metrics = FloatingBarLayout.Metrics.default
+        let width = metrics.itemExtent + (style == .vertical ? metrics.rowLabelWidth : 0)
+        let content = FloatingBarItemButtonStyle.Content(
+            label: Color.clear.frame(width: width, height: metrics.itemExtent),
+            isPressed: isPressed, isHovered: isHovered
+        )
+        .environment(\.colorScheme, scheme)
+        .environment(\.isEnabled, isEnabled)
+        // ImageRenderer paints a disabled-state artifact here; use the panel's AppKit hosting path.
+        let hosting = NSHostingController(rootView: content)
+        hosting.view.frame = CGRect(x: 0, y: 0, width: width, height: metrics.itemExtent)
+        hosting.view.layoutSubtreeIfNeeded()
+        let image = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(width), pixelsHigh: Int(metrics.itemExtent),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let context = try #require(NSGraphicsContext(bitmapImageRep: image))
+        context.cgContext.clear(hosting.view.bounds)
+        hosting.view.cacheDisplay(in: hosting.view.bounds, to: image)
+        #expect(hosting.view.window == nil)
+        #expect(hosting.view.fittingSize == CGSize(width: width, height: metrics.itemExtent))
+        return image
+    }
 }

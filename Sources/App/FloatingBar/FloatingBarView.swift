@@ -124,7 +124,7 @@ struct FloatingBarView: View {
             .frame(height: metrics.itemExtent)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FloatingBarItemButtonStyle())
         .disabled(item.isDisabled)
         .opacity(item.isDisabled ? 0.4 : 1)
         .help(item.isDisabled ? "This item can't be activated" : item.displayName)
@@ -141,9 +141,34 @@ struct FloatingBarView: View {
                 .frame(width: metrics.itemExtent, height: metrics.itemExtent)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FloatingBarItemButtonStyle())
         .disabled(item.isDisabled)
         .opacity(item.isDisabled ? 0.4 : 1)
         .help(item.isDisabled ? "This item can't be activated" : item.displayName)
+    }
+}
+
+struct FloatingBarItemButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Content(label: configuration.label, isPressed: configuration.isPressed)
+    }
+
+    struct Content<Label: View>: View {
+        let label: Label
+        var isPressed: Bool
+        @State var isHovered = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            label
+                .background {
+                    if isEnabled && (isHovered || isPressed) {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.primary.opacity(isPressed ? 0.22 : 0.12))
+                            .padding(2)
+                    }
+                }
+                .onHover { isHovered = $0 }
+        }
     }
 }

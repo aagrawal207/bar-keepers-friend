@@ -100,7 +100,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **396 tests, 35 suites**, 533 invocations including
+- Test: same command with `test` (currently **399 tests, 35 suites**, 543 invocations including
   parameterized cases). Last full build/test: 2026-09-11, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
@@ -193,6 +193,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   wrapping boundaries and 80 items on a 1512x982 display, with default/custom metrics and long
   aliases. This verifies actual SwiftUI sizing, not just Core rectangles. Displayed appearance,
   hit targets, and layouts exceeding the capacity of both axes still need hardware QA.
+- **Floating-bar item feedback (2026-09-11, rendering-tested).** List rows and icon cells share a
+  rounded hover highlight with stronger pressed feedback. Idle/disabled items draw no highlight;
+  button actions, hit rectangles, and cell metrics are unchanged. Off-screen AppKit bitmap tests
+  verify light/dark pixels, full-cell coverage, disabled-state transparency, and unchanged sizing.
+  Native pointer enter/exit in click-opened and hover-opened panels still needs hardware QA.
 - **Items list grouped Hidden / Shown** — Settings → Items splits into "Hidden (N)" and
   "Shown (N)" sections instead of one interleaved list, so the two states scan at a glance and a
   toggled row visibly moves between them (cheap re-partition, no menu-bar re-scan). Pure
@@ -222,6 +227,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[IMPLEMENTED 2026-09-11, rendering-tested; native hover QA pending] Items had no pointer feedback.**
+  Both `FloatingBarView` item renderers used plain buttons with no hover state or background.
+  A shared button style now owns hover state per item and draws only for enabled hovered/pressed
+  items. Tests use `NSHostingController` drawing: `ImageRenderer` produced a disabled-state artifact
+  even with the background absent, so it was not a trustworthy transparency oracle for this view.
 - **[OPEN 2026-09-11] Itsycal Shown failed on the external display.** Two live requests on the
   1920-point display each exhausted five attempts: window 58 stayed at x=1525 while the anchor
   was x=1625, despite both relay legs reporting submission. This was a real failed placement,
@@ -692,6 +702,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   ownership, cancellation, non-key ordering calls, and global-coordinate geometry, not native
   focus/first-click delivery or the feel of the 200ms dwell and 400ms exit grace. The setting stays
   off until explicitly enabled by the user.
+- **Item hover highlighting.** Verify enter/exit across each row's text and empty space and each
+  icon cell, in both click-opened and non-key hover-opened panels. Check first-click activation and
+  highlight reacquisition after a cache refresh. Bitmap tests seed hover/press state; they do not
+  claim to exercise native pointer delivery or appearance over the live material background.
 - **Immovable denylist completeness** — the display-name guard protects "Control Center", AND (as of
   2026-06-30) the `immovablePIDs` set now catches **all Control Center modules at once by pid** —
   so the localized module labels (Wi-Fi, Battery, Sound, …) no longer need to be enumerated by string
