@@ -232,6 +232,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   A shared button style now owns hover state per item and draws only for enabled hovered/pressed
   items. Tests use `NSHostingController` drawing: `ImageRenderer` produced a disabled-state artifact
   even with the background absent, so it was not a trustworthy transparency oracle for this view.
+- **[OPEN 2026-09-11] External-display startup collected no real glyphs.** After the standalone
+  restart at 19:53 UTC on the 1920-point display, 3840x2160 captures repeatedly yielded 0/9
+  on-screen glyphs; the cache held nine app-icon fallbacks. Placement completed with zero moves.
+  This is a capture/recovery verification gap, not a demonstrated timing diagnosis. The highlight
+  change touched no capture code; the cause and recovery on this display remain unverified.
 - **[OPEN 2026-09-11] Itsycal Shown failed on the external display.** Two live requests on the
   1920-point display each exhausted five attempts: window 58 stayed at x=1525 while the anchor
   was x=1625, despite both relay legs reporting submission. This was a real failed placement,

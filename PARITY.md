@@ -14,7 +14,7 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
 | Per-item Shown/Hidden | Live verified for Maccy and ACME; observed placement and retry feedback implemented | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
-| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | Prove cold-boot collection, saturated-notch activation, and capacity beyond both grid axes |
+| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | External-display restart yielded 0/9 glyphs with app-icon fallbacks; recovery, cold-boot collection, saturated-notch activation, and capacity beyond both grid axes remain unverified |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click, optional AX path, cancellation/ownership guards | Observe actual menu opening/closing, handle ambiguous AX outcomes, and qualify cursor/focus behavior |
 | Hover reveal | Implemented opt-in below Auto Re-hide; ownership, cancellation, geometry, and non-key ordering calls tested | Native first-click delivery, focus, animation transit, and display qualification |
