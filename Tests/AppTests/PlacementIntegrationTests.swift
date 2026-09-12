@@ -1,5 +1,6 @@
 import AppKit
 import BarKeepersFriendCore
+import Synchronization
 import Testing
 
 @Suite(.timeLimit(.minutes(1)))
@@ -114,6 +115,85 @@ struct PlacementIntegrationTests {
         #expect(secondFinished)
         #expect(engine.stateMachine.visibility(of: .hidden) == .shown)
         #expect(server.base.moveRequests.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func nativeInterruptionRetainsIntentWithoutCaptureOrCompletionAndAFreshRetryFinishes(initiallyCollapsed: Bool) async throws {
+        let items = [
+            MenuBarItemSnapshot(windowID: 1, ownerPID: 1, ownerBundleID: "First App", frame: CGRect(x: 1100, y: 0, width: 24, height: 22)),
+            MenuBarItemSnapshot(windowID: 2, ownerPID: 1, ownerBundleID: "Second App", frame: CGRect(x: 1150, y: 0, width: 24, height: 22))
+        ]
+        let started = AsyncGate()
+        let release = AsyncGate()
+        let interrupted = Mutex(true)
+        let server = DrainingMoveServer(
+            base: FakeWindowServer(items: items + controls), started: started, release: release,
+            interruptAfterMove: { interrupted.withLock { $0 } }
+        )
+        let preferences = Preferences(
+            autoRehide: false, itemControls: ItemControlStore(hiddenInMenuBar: ["First App", "Second App"])
+        )
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let image = try #require(context.makeImage())
+        var captureCalls = 0
+        var completions = 0
+        var dividerWrites: [Bool] = []
+        let bar = FloatingBarController(
+            windowServer: server,
+            captureIcons: { items in
+                captureCalls += 1
+                return Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) })
+            },
+            preferences: preferences, attribute: { $0 }
+        )
+        let engine = CosmeticHideEngine(
+            preferences: preferences, controlWindowIDs: { (90, 91) },
+            setDividerCollapsed: { dividerWrites.append($0) }, onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        engine.floatingBar = bar
+        engine.hiddenItemController = HiddenItemController(windowServer: server)
+        engine.onPlacementCompleted = { completions += 1 }
+        if initiallyCollapsed { engine.toggleHidden() }
+        dividerWrites.removeAll()
+        engine.reconcileHiddenItems()
+        let first = try #require(engine.placementTask)
+        await started.wait()
+        await release.open()
+        await first.value
+
+        #expect(!first.isCancelled)
+        #expect(engine.placementPending)
+        #expect(!engine.placementInProgress)
+        #expect(!engine.placementFailed)
+        #expect(engine.placementMessage?.contains("interrupted") == true)
+        #expect(engine.stateMachine.visibility(of: .hidden) == (initiallyCollapsed ? .collapsed : .shown))
+        #expect(dividerWrites == [false, initiallyCollapsed])
+        #expect(!engine.captureInFlight)
+        #expect(captureCalls == 0)
+        #expect(!bar.hasCapturedOnce)
+        #expect(completions == 0)
+        #expect(server.base.moveRequests.map(\.windowID) == [1])
+
+        interrupted.withLock { $0 = false }
+        engine.resumePendingPlacement()
+        await (try #require(engine.placementTask)).value
+
+        #expect(server.base.moveRequests.map(\.windowID) == [1, 2])
+        #expect(!engine.placementPending)
+        #expect(!engine.placementInProgress)
+        #expect(!engine.placementFailed)
+        #expect(engine.placementMessage == nil)
+        #expect(captureCalls == 1)
+        #expect(bar.hasCapturedOnce)
+        #expect(completions == 1)
+        #expect(engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(dividerWrites.last == true)
     }
 
     @Test func failedShownRemainsActionableAndIdenticalRetryCanSucceed() async throws {
@@ -402,6 +482,7 @@ private struct DrainingMoveServer: WindowServer {
     let base: FakeWindowServer
     let started: AsyncGate
     let release: AsyncGate
+    var interruptAfterMove: @Sendable () -> Bool = { false }
     var canSynthesizeClicks: Bool { base.canSynthesizeClicks }
     func menuBarItems() throws -> [MenuBarItemSnapshot] { try base.menuBarItems() }
     func menuBarFrame(forDisplayContaining point: CGPoint) throws -> CGRect {
@@ -412,6 +493,7 @@ private struct DrainingMoveServer: WindowServer {
         try await base.move(item: item, toX: targetX, relativeTo: targetWindowID)
         await started.open()
         await release.wait()
+        if interruptAfterMove() { throw CancellationError() }
         try Task.checkCancellation()
     }
 }

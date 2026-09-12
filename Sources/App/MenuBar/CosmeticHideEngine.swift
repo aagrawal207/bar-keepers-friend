@@ -42,7 +42,10 @@ final class CosmeticHideEngine {
     private var placementRequestID = 0
     private let controlWindowIDsProvider: (() -> (anchor: CGWindowID, divider: CGWindowID)?)?
     private let setDividerCollapsed: ((Bool) -> Void)?
+    private let anchorFrameProvider: (() -> CGRect?)?
     private var activationOwnsSection = false
+    // Last requested divider state: a predecessor may finish before its successor restores it.
+    private var dividerIsCollapsed = false
 
     private var anchorItem: NSStatusItem?
     private var hiddenDivider: NSStatusItem?
@@ -59,16 +62,11 @@ final class CosmeticHideEngine {
 
     private var autoRehideWorkItem: DispatchWorkItem?
 
-    /// Pending escalating warm-up retries scheduled by `warmUpFloatingBarCache`, one per
-    /// `WarmUpRetrySchedule` offset. They bridge the COLD-LAUNCH glyph gap: on a cold launch the
-    /// menu-bar glyphs don't composite into the capturable image for ~tens of seconds, long after
-    /// the launch warm-up (and its in-loop retries) have all finished at ~1.5s capturing 0 glyphs.
-    /// Each fires one more `runCaptureSequence` pass, but only WHILE glyphs are still incomplete —
-    /// each re-checks `hasIncompleteGlyphs` when it fires and self-cancels the rest once the set is
-    /// complete. Cancelled wholesale (`cancelWarmUpRetries`) when the user opens the bar, a reconcile
-    /// runs, the app is paused, the bar is disabled, or on uninstall — so they never fight a
-    /// user-driven open or multiply the privacy-indicator flashes beyond the bounded schedule.
+    /// Bounded retries bridge cold-launch compositing; invalidation also covers already-queued
+    /// optional captures without cancelling their native predecessor.
     private var warmUpRetryWorkItems: [DispatchWorkItem] = []
+    private var warmUpRetryGeneration = 0
+    private var cacheRefreshGeneration = 0
 
     /// Coalesces bursts of `didChangeScreenParametersNotification`. macOS posts that notification
     /// multiple times for a single user-visible change (display sleep/wake, mode negotiation, Stage
@@ -80,11 +78,8 @@ final class CosmeticHideEngine {
     /// How long to wait for a burst of screen-parameter notifications to settle before refreshing.
     private static let screenChangeDebounce: TimeInterval = 0.5
 
-    /// Serializes reveal → capture → hide sequences. Both the launch capture and any refresh
-    /// (menu-bar change, anchor open) drive the shared divider, so running two concurrently
-    /// makes them fight over its collapsed state across `await` points — the launch capture
-    /// could hide the section out from under a refresh mid-capture, yielding 0 glyphs. Chaining
-    /// each sequence onto the previous one guarantees they run one at a time.
+    /// Serializes native reveal/capture ownership across suspension. Cached panel opens do not
+    /// enqueue capture; event-driven refreshes must yield to presentation or activation.
     private(set) var captureChain: Task<Void, Never> = Task {}
 
     /// Only the latest enqueued sequence may restore the divider. Cancellation also invalidates
@@ -139,16 +134,12 @@ final class CosmeticHideEngine {
         (floatingBar?.isVisible ?? false) || stateMachine.visibility(of: .hidden) == .shown
     }
 
-    /// Reveals the section, runs `body` (which captures), then restores the divider — never
-    /// overlapping another such sequence. The physical reveal is transient and does NOT change
-    /// the state machine; on completion the divider is set to match the state machine, unless
-    /// `forceCollapseAfter` is set (launch / open-panel), which both collapses the state machine
-    /// and the divider. Restoring-to-state (rather than always collapsing) is what keeps a
-    /// refresh from slamming shut a section an activation revealed for an open menu.
-    /// Returns a task the caller can await if it needs the capture done before showing the panel.
+    /// Revalidates optional work after joining its predecessor, before any physical reveal.
+    /// Launch may establish a collapsed baseline; skipped work only restores the current state.
     @discardableResult
     func runCaptureSequence(
         forceCollapseAfter: Bool,
+        canStart: @escaping @MainActor () -> Bool = { true },
         _ body: @escaping @MainActor () async -> Void
     ) -> Task<Void, Never> {
         guard !isPaused else { return Task {} }
@@ -166,6 +157,14 @@ final class CosmeticHideEngine {
                 previous.cancel()
             }
             guard !Task.isCancelled, !isPaused else { return }
+            guard canStart() else {
+                // The predecessor may have left restoration to this epoch, even if it does no work.
+                if epoch == latestCaptureEpoch {
+                    setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+                }
+                DebugLog.log("capture: skipped optional refresh")
+                return
+            }
             captureInFlightCount += 1
             defer { captureInFlightCount -= 1 }
             // Tell the bar which display's menu-bar top to measure item plausibility against, so a
@@ -196,7 +195,7 @@ final class CosmeticHideEngine {
     private func cancelCaptureSequences() {
         latestCaptureEpoch += 1
         captureChain.cancel()
-        cancelWarmUpRetries()
+        cancelPendingCacheRefreshes()
         if placementInProgress {
             placementPending = true
             updatePlacementStatus(applying: false)
@@ -219,11 +218,13 @@ final class CosmeticHideEngine {
         preferences: Preferences,
         controlWindowIDs: (() -> (anchor: CGWindowID, divider: CGWindowID)?)? = nil,
         setDividerCollapsed: ((Bool) -> Void)? = nil,
+        anchorFrame: (() -> CGRect?)? = nil,
         onPreferencesChanged: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
         self.controlWindowIDsProvider = controlWindowIDs
         self.setDividerCollapsed = setDividerCollapsed
+        self.anchorFrameProvider = anchorFrame
         self.onPreferencesChanged = onPreferencesChanged
         self.stateMachine = HideShowStateMachine(
             sections: MenuBarSection.phase1,
@@ -277,16 +278,7 @@ final class CosmeticHideEngine {
             await self?.revealForActivation()
         }
         floatingBar?.rehideItems = { [weak self] in
-            // Reconcile the STATE MACHINE, not just the physical divider. `revealForActivation`
-            // advanced the state to `.shown` before every activation; on a failed/off-screen
-            // activation the bar calls this to tidy up. If we only collapsed the divider here
-            // (the old bug), the state machine would stay stuck at `.shown` forever — making
-            // `sectionInUse` permanently true (so refreshes silently no-op and the mirror goes
-            // stale) and the next anchor click hit the `.shown` branch and get eaten. Driving the
-            // collapse through the state machine keeps model and divider in sync.
-            guard let self, !self.isPaused, !Task.isCancelled else { return }
-            self.enact(self.stateMachine.apply(.hide(.hidden)))
-            self.resumePendingPlacement()
+            self?.rehideAfterActivation()
         }
         floatingBar?.scheduleAutoRehideAfterActivation = { [weak self] in
             self?.scheduleAutoRehideAfterActivation()
@@ -360,15 +352,15 @@ final class CosmeticHideEngine {
             floatingBar?.hiddenDividerWindowID = controls.divider
         }
         floatingBar?.controlItemWindowIDs = ids
-        // Keep the bar's display-top current for the non-capture paths too (e.g. the pre-show
-        // staleness check), so its item enumeration measures against the anchor's display.
+        // Non-capture readers, including Settings, also measure against the anchor's display.
         floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
     }
 
     /// The anchor window's global frame, used to align the floating bar and to determine
     /// which items count as "hidden" (those left of the anchor).
     private var anchorFrame: CGRect? {
-        anchorItem?.button?.window?.frame
+        if let anchorFrameProvider { return anchorFrameProvider() }
+        return anchorItem?.button?.window?.frame
     }
 
     private var placementControlIDs: (anchor: CGWindowID, divider: CGWindowID)? {
@@ -455,17 +447,9 @@ final class CosmeticHideEngine {
         scheduleWarmUpRetries()
     }
 
-    /// Arms the escalating warm-up retries (`WarmUpRetrySchedule`). Each is a one-shot timer that,
-    /// when it fires, runs ONE more `runCaptureSequence` warm-up pass — but only if the bar still
-    /// has incomplete glyphs and isn't in active use. The moment a pass completes the set
-    /// (`hasIncompleteGlyphs == false`) the remaining timers cancel themselves, so a fast machine
-    /// pays for at most one or two extra captures and a slow one stops as soon as glyphs land. The
-    /// whole set is bounded by the schedule (at most `WarmUpRetrySchedule.count` extra captures, so
-    /// at most that many extra privacy-indicator flashes).
-    ///
-    /// Always starts from a clean slate (`cancelWarmUpRetries`) so a re-arm (e.g. the Settings
-    /// enable-at-runtime path calling `warmUpFloatingBarCache` again) can't stack two sets of timers.
-    private func scheduleWarmUpRetries() {
+    /// Re-arming replaces only retry work, so the bounded warm-up schedule cannot stack.
+    /// Each retry rechecks cache completeness and section ownership before revealing.
+    func scheduleWarmUpRetries() {
         cancelWarmUpRetries()
         guard !isPaused, !Task.isCancelled, preferences.useFloatingBar, floatingBar != nil else { return }
         for offsetMs in WarmUpRetrySchedule.offsetsMs {
@@ -475,10 +459,8 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// One escalating warm-up retry firing. No-op (and cancels the rest) once glyphs are complete,
-    /// the bar is disabled, the app is paused, or the section is in active use — so it never fights
-    /// a user-driven open / an open menu, and self-cancels the instant the work is done.
-    private func fireWarmUpRetry() {
+    /// Complete or disabled caches cancel remaining retries; active use leaves later timers armed.
+    func fireWarmUpRetry() {
         guard preferences.useFloatingBar, let bar = floatingBar, !isPaused else {
             cancelWarmUpRetries()
             return
@@ -492,10 +474,13 @@ final class CosmeticHideEngine {
         // don't disturb it. Leave the LATER timers armed — by the time one of them fires the user
         // may be done, glyphs may still need filling, and a calmer moment can pick it up.
         guard !sectionInUse else { return }
-        // Re-use the very same serialized warm-up pass as launch (clean pass, then a
-        // fallback-allowing reconcile only if still incomplete), so it rides the captureChain/epoch
-        // machinery exactly like every other capture and can't race a refresh or a launch pass.
-        runCaptureSequence(forceCollapseAfter: true) { [weak self] in
+        let generation = warmUpRetryGeneration
+        // Retries preserve the current state; only the essential launch pass establishes a baseline.
+        runCaptureSequence(forceCollapseAfter: false, canStart: { [weak self] in
+            guard let self else { return false }
+            return generation == self.warmUpRetryGeneration && self.preferences.useFloatingBar
+                && self.floatingBar === bar && !self.sectionInUse && bar.needsCapture
+        }) { [weak self] in
             guard let self, let bar = self.floatingBar else { return }
             let anchorX = self.anchorFrame?.minX ?? 1115
             await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
@@ -506,10 +491,16 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Cancels every pending warm-up retry. Called when the set completes, when the user opens the
-    /// bar / a reconcile takes over the divider, when the app is paused or the bar disabled, and on
-    /// uninstall — so a stale timer never drives a capture after warm-up is moot.
+    /// Invalidates queued optional work without cancelling the capture chain's native owner.
+    /// Timer cancellation alone cannot stop a retry that already enqueued its capture task.
+    private func cancelPendingCacheRefreshes() {
+        cacheRefreshGeneration += 1
+        cancelWarmUpRetries()
+    }
+
+    /// Cache completeness and retry re-arming do not invalidate event-driven refresh requests.
     private func cancelWarmUpRetries() {
+        warmUpRetryGeneration += 1
         warmUpRetryWorkItems.forEach { $0.cancel() }
         warmUpRetryWorkItems.removeAll()
     }
@@ -573,7 +564,7 @@ final class CosmeticHideEngine {
         placementPending = false
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
-        cancelWarmUpRetries()
+        cancelPendingCacheRefreshes()
         updatePlacementStatus(applying: true)
         DebugLog.log("placement: queued request=\(requestID) hidden=\(preferences.itemControls.hiddenInMenuBar.count) shown=\(preferences.itemControls.shownInMenuBar.count)")
 
@@ -597,6 +588,13 @@ final class CosmeticHideEngine {
                 result = HiddenItemController.ReconcileResult(observationFailed: true)
             }
             guard !Task.isCancelled, requestID == self.placementRequestID else { return }
+            if result.cancelled {
+                // Native session loss need not cancel this task; keep intent for a fresh request.
+                self.placementPending = true
+                self.updatePlacementStatus(applying: false, message: "Placement was interrupted. Changes are pending; try again when the desktop is available.")
+                DebugLog.log("placement: interrupted request=\(requestID); retaining pending intent")
+                return
+            }
             self.placementPending = result.observationFailed
             // Invalid control geometry must not let an expanded divider hide the anchor itself.
             _ = self.stateMachine.apply(result.observationFailed ? .show(.hidden) : .hide(.hidden))
@@ -790,12 +788,8 @@ final class CosmeticHideEngine {
         // cancel here covers every re-open path.
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
-        // A deliberate user open takes over the bar: drop any pending cold-launch warm-up retries.
-        // The user is about to look at (or just toggled) the bar, so a later background warm-up pass
-        // must not reveal/re-hide the section or re-lay-it-out under them. If glyphs are still
-        // incomplete the on-screen-while-open re-capture and the existing event-driven refreshes
-        // remain the backstop, exactly as before this change.
-        cancelWarmUpRetries()
+        // Presentation uses only cached icons, even when stale; freshness waits for idle refreshes.
+        cancelPendingCacheRefreshes()
         // A click during the one-time launch capture: don't eat it (that felt broken), and don't
         // touch the divider/state machine (the capture is mid-reveal and owns it — collapsing now
         // would yank the section out from under the screenshot). Just show the panel; it renders a
@@ -837,14 +831,6 @@ final class CosmeticHideEngine {
             guard !self.isPaused else { return }
             await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: persistUntilToggled ? .keyboard : .click)
         }
-        // If the live menu bar gained/lost items since the cache was built (an app added or
-        // removed its status item while we were idle), refresh in the BACKGROUND. The bar is
-        // already showing from cache; the refresh updates it for next time without lagging this
-        // open. The staleness check is a cheap CGWindowList enumeration (no screenshot), done
-        // inside the controller where the window server lives. No-op while the section is in use.
-        if bar.cachedMirrorIsStale(anchorMinX: frame.minX) {
-            refreshFloatingBarCache()
-        }
     }
 
     /// Toggles the floating bar exactly as a left anchor click would. Used by the SIGUSR2
@@ -878,7 +864,7 @@ final class CosmeticHideEngine {
     var canRevealOnHover: Bool {
         preferences.revealOnHover && preferences.useFloatingBar && floatingBar != nil
             && !isPaused && !anchorMenuIsOpen && !activationOwnsSection && !placementInProgress
-            && (stateMachine.visibility(of: .hidden) == .collapsed || captureInFlight)
+            && !captureInFlight && dividerIsCollapsed && stateMachine.visibility(of: .hidden) == .collapsed
     }
 
     private func updateHoverMonitoring() {
@@ -890,11 +876,8 @@ final class CosmeticHideEngine {
               !bar.isVisible, let frame = anchorFrame else { return }
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
-        cancelWarmUpRetries()
+        cancelPendingCacheRefreshes()
         publishControlItemWindowIDs()
-        if !captureInFlight, bar.cachedMirrorIsStale(anchorMinX: frame.minX) {
-            refreshFloatingBarCache()
-        }
         await bar.show(
             anchorMinX: frame.minX, anchorRightX: frame.maxX,
             presentation: .hover
@@ -934,6 +917,14 @@ final class CosmeticHideEngine {
         try? await Task.sleep(for: .milliseconds(120))
     }
 
+    /// Failed or interrupted current activations must release both logical and physical ownership.
+    /// A superseded task or Pause must not collapse the state established by its successor.
+    func rehideAfterActivation() {
+        guard !isPaused, !Task.isCancelled else { return }
+        enact(stateMachine.apply(.hide(.hidden)))
+        resumePendingPlacement()
+    }
+
     private func enact(_ intents: [HideShowStateMachine.Intent]) {
         for intent in intents where intent.section == .hidden {
             setHidden(collapsed: intent.visibility == .collapsed)
@@ -944,6 +935,7 @@ final class CosmeticHideEngine {
     /// divider has no image, so its natural (variable) length is effectively zero width — it
     /// leaves no visible gap or marker in the menu bar when the section is revealed.
     private func setHidden(collapsed: Bool) {
+        dividerIsCollapsed = collapsed
         if collapsed { activationOwnsSection = false }
         if let setDividerCollapsed {
             setDividerCollapsed(collapsed)
@@ -1097,17 +1089,20 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Reveals the section, re-captures the now-on-screen items into the floating bar cache,
-    /// then hides them again. Used after menu bar changes so the mirror stays current. A no-op
-    /// while the section is in active use, so it never disrupts an open menu or the visible
-    /// panel; the next idle refresh (or panel open) picks up the change.
+    /// Optional event-driven refreshes yield to user interaction, including while queued.
+    /// Cached panel opens never request one; stale icons wait for the next idle refresh.
     func refreshFloatingBarCache() {
         guard !isPaused, preferences.useFloatingBar, let bar = floatingBar, !sectionInUse else { return }
         // Reveal → capture → restore, serialized behind any in-flight capture (e.g. the launch
         // one) so they can't fight over the divider. captureAndCache retries internally until
         // the revealed glyphs have composited in. Not a force-collapse: restore to state so we
         // don't fight an activation that begins while we capture.
-        runCaptureSequence(forceCollapseAfter: false) { [weak self] in
+        let generation = cacheRefreshGeneration
+        runCaptureSequence(forceCollapseAfter: false, canStart: { [weak self] in
+            guard let self else { return false }
+            return generation == self.cacheRefreshGeneration && self.preferences.useFloatingBar
+                && self.floatingBar === bar && !self.sectionInUse
+        }) { [weak self] in
             await bar.captureAndCache(anchorMinX: self?.anchorFrame?.minX ?? 1115)
         }
     }

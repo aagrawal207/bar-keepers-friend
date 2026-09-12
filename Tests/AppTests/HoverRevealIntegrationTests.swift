@@ -1,5 +1,6 @@
 import AppKit
 import BarKeepersFriendCore
+import SwiftUI
 import Testing
 
 @Suite(.timeLimit(.minutes(1)))
@@ -7,6 +8,352 @@ import Testing
 struct HoverRevealIntegrationTests {
     enum StopReason: CaseIterable, Sendable {
         case preference, floatingBar, pause, uninstall
+    }
+
+    enum CacheState: CaseIterable, Sendable {
+        case fresh, stale, empty, uncollected, enumerationFailure
+    }
+
+    @Test(arguments: CacheState.allCases, [FloatingBarController.Presentation.hover, .click, .keyboard])
+    func cachedListOpenNeverRevealsOrRefreshesRealItems(
+        cache: CacheState, presentation: FloatingBarController.Presentation
+    ) async throws {
+        let item = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: -1, ownerBundleID: "Test App",
+            frame: CGRect(x: 50, y: 0, width: 22, height: 22)
+        )
+        let other = MenuBarItemSnapshot(
+            windowID: 2, ownerPID: -1, ownerBundleID: "Other App",
+            frame: CGRect(x: 200, y: 0, width: 22, height: 22)
+        )
+        let server = FakeWindowServer(items: cache == .empty ? [] : [item, other])
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let image = try #require(context.makeImage())
+        var captureCalls = 0
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(
+            server: server,
+            captureIcons: { items in
+                captureCalls += 1
+                return Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) })
+            },
+            setDividerCollapsed: { dividerWrites.append($0) }
+        )
+        defer { fixture.engine.uninstall() }
+        fixture.preferences.floatingBarStyle = .vertical
+        fixture.bar.preferences = fixture.preferences
+        if cache != .uncollected { await fixture.bar.captureAndCache(anchorMinX: 100) }
+        if cache == .stale { try await server.move(item: other, toX: 10, relativeTo: 90) }
+        if cache == .enumerationFailure { server.enumerationError = .invalidServerResponse("unavailable") }
+        let capturesBeforeOpen = captureCalls
+        let movesBeforeOpen = server.moveRequests.count
+        dividerWrites.removeAll()
+
+        if presentation == .hover {
+            fixture.advance(to: 0.2)
+            await (try #require(fixture.hover.pendingShowTask)).value
+        } else {
+            let presented = AsyncGate()
+            fixture.panel.onPresent = { Task { await presented.open() } }
+            if presentation == .keyboard {
+                fixture.engine.toggleFromShortcut()
+            } else {
+                fixture.engine.toggleFloatingBarForDiagnostics()
+            }
+            await presented.wait()
+        }
+        await fixture.engine.captureChain.value
+
+        #expect(dividerWrites.isEmpty)
+        #expect(captureCalls == capturesBeforeOpen)
+        #expect(fixture.bar.hasCapturedOnce == (cache != .uncollected))
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.bar.presentation == presentation)
+        #expect(fixture.engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(server.clickedWindowIDs.isEmpty)
+        #expect(server.moveRequests.count == movesBeforeOpen)
+        let view = try #require(fixture.panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == (cache == .empty || cache == .uncollected ? [] : [1]))
+        #expect(view.isPreparing == (cache == .uncollected))
+        #expect(fixture.panel.nonkeyPresentations == (presentation == .hover ? 1 : 0))
+        #expect(fixture.panel.keyPresentations == (presentation == .hover ? 0 : 1))
+    }
+
+    @Test func hoverWaitsForCaptureToRestoreTheDividerWithoutCancellingIt() async throws {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        var captureWasCancelled = false
+        let capture = fixture.engine.runCaptureSequence(forceCollapseAfter: true) {
+            await started.open()
+            await finish.wait()
+            captureWasCancelled = Task.isCancelled
+        }
+        await started.wait()
+        #expect(!fixture.engine.canRevealOnHover)
+        fixture.advance(to: 0.2)
+        await fixture.hover.pendingShowTask?.value
+        #expect(!fixture.bar.isVisible)
+        #expect(!fixture.hover.ownsPanel)
+        #expect(dividerWrites == [false])
+
+        await finish.open()
+        await capture.value
+        #expect(!captureWasCancelled)
+        #expect(dividerWrites == [false, true])
+        #expect(fixture.engine.canRevealOnHover)
+        fixture.advance(to: 1)
+        fixture.advance(to: 1.3)
+        await (try #require(fixture.hover.pendingShowTask)).value
+        await fixture.engine.captureChain.value
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.hover.ownsPanel)
+        #expect(dividerWrites == [false, true])
+    }
+
+    @Test(arguments: [FloatingBarController.Presentation.hover, .click, .keyboard], [false, true])
+    func cachedOpenInvalidatesQueuedOptionalCaptureUntilAFreshIdleRequest(
+        presentation: FloatingBarController.Presentation, warmUpRetry: Bool
+    ) async {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        if warmUpRetry { fixture.engine.fireWarmUpRetry() } else { fixture.engine.refreshFloatingBarCache() }
+        if presentation == .hover {
+            await fixture.engine.revealFloatingBarOnHover()
+        } else {
+            let presented = AsyncGate()
+            fixture.panel.onPresent = { Task { await presented.open() } }
+            if presentation == .keyboard {
+                fixture.engine.toggleFromShortcut()
+            } else {
+                fixture.engine.toggleFloatingBarForDiagnostics()
+            }
+            await presented.wait()
+        }
+        #expect(fixture.bar.isVisible)
+        fixture.bar.hide()
+        await fixture.engine.captureChain.value
+
+        #expect(!fixture.bar.hasCapturedOnce)
+        #expect(!dividerWrites.contains(false))
+        #expect(fixture.engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(fixture.engine.canRevealOnHover)
+
+        dividerWrites.removeAll()
+        if warmUpRetry { fixture.engine.fireWarmUpRetry() } else { fixture.engine.refreshFloatingBarCache() }
+        await fixture.engine.captureChain.value
+        #expect(dividerWrites == [false, true])
+        #expect(fixture.bar.hasCapturedOnce)
+        #expect(fixture.engine.canRevealOnHover)
+    }
+
+    @Test(arguments: [FloatingBarController.Presentation.click, .keyboard], [false, true])
+    func manualOpenInvalidatesQueuedCaptureWithoutCancellingItsPredecessor(
+        presentation: FloatingBarController.Presentation, warmUpRetry: Bool
+    ) async {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        var predecessorWasCancelled = false
+        fixture.engine.runCaptureSequence(forceCollapseAfter: false) {
+            await started.open()
+            await finish.wait()
+            predecessorWasCancelled = Task.isCancelled
+        }
+        await started.wait()
+        if warmUpRetry { fixture.engine.fireWarmUpRetry() } else { fixture.engine.refreshFloatingBarCache() }
+        let presented = AsyncGate()
+        fixture.panel.onPresent = { Task { await presented.open() } }
+        if presentation == .keyboard {
+            fixture.engine.toggleFromShortcut()
+        } else {
+            fixture.engine.toggleFloatingBarForDiagnostics()
+        }
+        await presented.wait()
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.bar.presentation == presentation)
+        #expect(dividerWrites == [false])
+        fixture.bar.hide()
+        await finish.open()
+        await fixture.engine.captureChain.value
+
+        #expect(!predecessorWasCancelled)
+        #expect(dividerWrites == [false, true])
+        #expect(!fixture.bar.hasCapturedOnce)
+        #expect(fixture.engine.canRevealOnHover)
+    }
+
+    @Test func queuedRetryRechecksWhetherItsPredecessorCompletedTheCache() async {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        fixture.engine.runCaptureSequence(forceCollapseAfter: false) {
+            await started.open()
+            await finish.wait()
+            await fixture.bar.captureAndCache(anchorMinX: 100)
+        }
+        await started.wait()
+        #expect(fixture.bar.needsCapture)
+        fixture.engine.fireWarmUpRetry()
+        await finish.open()
+        await fixture.engine.captureChain.value
+
+        #expect(dividerWrites == [false, true])
+        #expect(fixture.bar.hasCapturedOnce)
+        #expect(!fixture.bar.needsCapture)
+        #expect(fixture.engine.canRevealOnHover)
+    }
+
+    @Test(arguments: [false, true])
+    func completedWarmUpDoesNotDiscardQueuedEventRefresh(suspendedPredecessor: Bool) async throws {
+        let item = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: -1, ownerBundleID: "Test App",
+            frame: CGRect(x: 50, y: 0, width: 22, height: 22)
+        )
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let image = try #require(context.makeImage())
+        var captureCalls = 0
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(
+            server: FakeWindowServer(items: [item]),
+            captureIcons: { _ in captureCalls += 1; return [1: image] },
+            setDividerCollapsed: { dividerWrites.append($0) }
+        )
+        defer { fixture.engine.uninstall() }
+        await fixture.bar.captureAndCache(anchorMinX: 100)
+        #expect(!fixture.bar.needsCapture)
+        #expect(captureCalls == 1)
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        if suspendedPredecessor {
+            fixture.engine.runCaptureSequence(forceCollapseAfter: false) {
+                await started.open()
+                await finish.wait()
+                #expect(!Task.isCancelled)
+            }
+            await started.wait()
+        }
+
+        fixture.engine.refreshFloatingBarCache()
+        fixture.engine.fireWarmUpRetry()
+        await finish.open()
+        await fixture.engine.captureChain.value
+
+        #expect(captureCalls == 2)
+        #expect(dividerWrites == (suspendedPredecessor ? [false, false, true] : [false, true]))
+        #expect(!fixture.bar.needsCapture)
+        #expect(fixture.engine.canRevealOnHover)
+    }
+
+    @Test(arguments: [false, true])
+    func rearmingWarmUpInvalidatesOnlyQueuedRetries(eventRefreshQueued: Bool) async {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        fixture.engine.runCaptureSequence(forceCollapseAfter: false) {
+            await started.open()
+            await finish.wait()
+            #expect(!Task.isCancelled)
+        }
+        await started.wait()
+        #expect(fixture.bar.needsCapture)
+        fixture.engine.fireWarmUpRetry()
+        if eventRefreshQueued { fixture.engine.refreshFloatingBarCache() }
+        fixture.engine.scheduleWarmUpRetries()
+        await finish.open()
+        await fixture.engine.captureChain.value
+
+        #expect(dividerWrites == (eventRefreshQueued ? [false, false, true] : [false, true]))
+        #expect(fixture.bar.hasCapturedOnce == eventRefreshQueued)
+        #expect(fixture.engine.canRevealOnHover)
+        if !eventRefreshQueued {
+            dividerWrites.removeAll()
+            fixture.engine.fireWarmUpRetry()
+            await fixture.engine.captureChain.value
+            #expect(dividerWrites == [false, true])
+            #expect(fixture.bar.hasCapturedOnce)
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func queuedOptionalCaptureCannotOverrideActivationOrPause(warmUpRetry: Bool, pause: Bool) async {
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        var predecessorWasCancelled = false
+        fixture.engine.runCaptureSequence(forceCollapseAfter: true) {
+            await started.open()
+            await finish.wait()
+            predecessorWasCancelled = Task.isCancelled
+        }
+        await started.wait()
+        if warmUpRetry { fixture.engine.fireWarmUpRetry() } else { fixture.engine.refreshFloatingBarCache() }
+        if pause {
+            fixture.engine.menuTogglePause()
+        } else {
+            await fixture.engine.revealForActivation()
+        }
+        await finish.open()
+        await fixture.engine.captureChain.value
+
+        #expect(!dividerWrites.contains(true))
+        #expect(predecessorWasCancelled == pause)
+        #expect(!fixture.bar.hasCapturedOnce)
+        #expect(fixture.engine.stateMachine.visibility(of: .hidden) == .shown)
+        #expect(!fixture.engine.canRevealOnHover)
+        #expect(!fixture.engine.captureInFlight)
+    }
+
+    @Test(arguments: [false, true])
+    func queuedOptionalCaptureCannotCollapseInvalidPlacementControls(warmUpRetry: Bool) async throws {
+        var dividerWrites: [Bool] = []
+        let server = FakeWindowServer()
+        let fixture = Fixture(server: server, setDividerCollapsed: { dividerWrites.append($0) })
+        defer { fixture.engine.uninstall() }
+        fixture.engine.hiddenItemController = HiddenItemController(windowServer: server)
+        fixture.preferences.itemControls.setHidden(false, forKey: "Test App")
+        dividerWrites.removeAll()
+        fixture.engine.apply(preferences: fixture.preferences)
+        let placement = try #require(fixture.engine.placementTask)
+        if warmUpRetry { fixture.engine.fireWarmUpRetry() } else { fixture.engine.refreshFloatingBarCache() }
+        await fixture.engine.captureChain.value
+        await placement.value
+
+        #expect(dividerWrites == [false, false])
+        #expect(!fixture.bar.hasCapturedOnce)
+        #expect(fixture.engine.stateMachine.visibility(of: .hidden) == .shown)
+        #expect(fixture.engine.placementPending)
+        #expect(fixture.engine.placementFailed)
+        #expect(server.moveRequests.isEmpty)
+        #expect(!fixture.engine.canRevealOnHover)
     }
 
     @Test(arguments: StopReason.allCases, [false, true])
@@ -159,17 +506,27 @@ private final class Fixture {
     var point = CGPoint(x: 116, y: 112)
     var tick: (@MainActor @Sendable () -> Void)?
     var cancelledTimers = 0
-    var preferences = Preferences(autoRehide: false, revealOnHover: true)
+    var preferences = Preferences(autoRehide: false, dismissBarOnMouseExit: false, revealOnHover: true)
     let engine: CosmeticHideEngine
     let bar: FloatingBarController
+    let panel: PresentationPanel
     var hover: HoverRevealController { engine.hoverRevealController! }
 
-    init(server: FakeWindowServer = FakeWindowServer()) {
+    init(
+        server: FakeWindowServer = FakeWindowServer(),
+        captureIcons: @escaping ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] = { _ in [:] },
+        setDividerCollapsed: @escaping (Bool) -> Void = { _ in }
+    ) {
+        _ = NSApplication.shared
+        let panel = PresentationPanel(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        self.panel = panel
         engine = CosmeticHideEngine(
-            preferences: preferences, controlWindowIDs: { (90, 91) }, onPreferencesChanged: { _ in }
+            preferences: preferences, controlWindowIDs: { (90, 91) }, setDividerCollapsed: setDividerCollapsed,
+            anchorFrame: { CGRect(x: 100, y: 100, width: 32, height: 24) }, onPreferencesChanged: { _ in }
         )
         bar = FloatingBarController(
-            windowServer: server, captureIcons: { _ in [:] }, preferences: preferences, attribute: { $0 }
+            windowServer: server, captureIcons: captureIcons, preferences: preferences, attribute: { $0 },
+            panelFactory: { panel }
         )
         engine.floatingBar = bar
         engine.toggleHidden()
@@ -178,10 +535,7 @@ private final class Fixture {
             panelFrame: { CGRect(x: 40, y: 40, width: 92, height: 56) },
             isPanelVisible: { [weak bar] in bar?.isVisible == true },
             canReveal: { [weak engine] in engine?.canRevealOnHover == true },
-            showPanel: { [weak bar] in
-                guard !Task.isCancelled else { return }
-                bar?.beginPresentation(.hover)
-            },
+            showPanel: { [weak engine] in await engine?.revealFloatingBarOnHover() },
             hidePanel: { [weak bar] in bar?.hide() },
             pointerLocation: { [weak self] in self?.point ?? .zero },
             isMouseButtonPressed: { false },
@@ -209,7 +563,15 @@ private final class Fixture {
 private final class PresentationPanel: NSPanel {
     var keyPresentations = 0
     var nonkeyPresentations = 0
+    var onPresent: (() -> Void)?
 
-    override func makeKeyAndOrderFront(_ sender: Any?) { keyPresentations += 1 }
-    override func orderFront(_ sender: Any?) { nonkeyPresentations += 1 }
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        keyPresentations += 1
+        onPresent?()
+    }
+    override func orderFront(_ sender: Any?) {
+        nonkeyPresentations += 1
+        onPresent?()
+    }
+    override func orderOut(_ sender: Any?) {}
 }

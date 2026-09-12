@@ -96,20 +96,19 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         )
         source.localEventsSuppressionInterval = 0
 
-        // Hide the cursor during the synthetic gesture and restore it after. We never warp it to
-        // perform the move (the windowID fields do the routing), so this only prevents any stray
-        // flicker; balanced via defer so a throw can't strand a hidden cursor.
-        let savedCursor = CGEvent(source: nil)?.location
-        CGDisplayHideCursor(kCGNullDirectDisplay)
-        defer {
-            if let savedCursor { CGWarpMouseCursorPosition(savedCursor) }
-            CGDisplayShowCursor(kCGNullDirectDisplay)
+        // Positioned events can move the real pointer despite window-ID routing.
+        // A restore point is required even when background concealment is unavailable.
+        guard let cursor = try CursorConcealment() else {
+            throw WindowServerError.moveFailed(windowID: item.windowID)
         }
+        defer { cursor.restore() }
 
         for attempt in 1...Self.maxMoveAttempts {
-            // Finish each down/up pair atomically; cancellation only stops subsequent gestures.
+            // A submitted down still needs its up; cancellation prevents a subsequent gesture.
             try Task.checkCancellation()
+            try cursor.checkInterruption()
             let current = try menuBarItems()
+            try cursor.checkInterruption()
             guard let liveItem = current.first(where: { $0.windowID == item.windowID }),
                   let liveReference = current.first(where: { $0.windowID == targetWindowID }) else {
                 throw WindowServerError.moveFailed(windowID: item.windowID)
@@ -122,13 +121,17 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
                 ? liveReference.frame.minX - HiddenLayoutPlanner.hiddenMargin
                 : liveReference.frame.maxX + HiddenLayoutPlanner.shownMargin
             let destination = CGPoint(x: dropX, y: liveItem.frame.midY)
-            postMoveGesture(
-                source: source, windowID: item.windowID, pid: item.ownerPID,
-                targetWindowID: targetWindowID, destination: destination
-            )
+            guard try cursor.performGesture({
+                try postMoveGesture(
+                    source: source, windowID: item.windowID, pid: item.ownerPID,
+                    targetWindowID: targetWindowID, destination: destination, cursor: cursor
+                )
+            }) else { throw WindowServerError.moveFailed(windowID: item.windowID) }
 
             try await Task.sleep(for: .milliseconds(Self.moveSettleMs))
+            try cursor.checkInterruption()
             let after = try menuBarItems()
+            try cursor.checkInterruption()
             guard let placed = after.first(where: { $0.windowID == item.windowID }),
                   let target = after.first(where: { $0.windowID == targetWindowID }) else {
                 throw WindowServerError.moveFailed(windowID: item.windowID)
@@ -144,7 +147,9 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             if attempt < Self.maxMoveAttempts {
                 // Nudge an unresponsive item with a plain (no-modifier) click at its current
                 // centre, the way Ice "wakes up" a stuck item, then retry.
-                wakeUp(source: source, item: placed.attributed(bundleID: item.ownerBundleID, pid: item.ownerPID))
+                guard try cursor.performGesture({
+                    try wakeUp(source: source, item: placed.attributed(bundleID: item.ownerBundleID, pid: item.ownerPID), cursor: cursor)
+                }) else { throw WindowServerError.moveFailed(windowID: item.windowID) }
                 try await Task.sleep(for: .milliseconds(Self.moveRetryDelayMs))
             }
         }
@@ -159,22 +164,28 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     /// a legitimate item drag when each event is delivered to the item's OWNING PROCESS through a
     /// two-tap round-trip (the "scromble" relay). So we route each event via `scrombleEvent` instead
     /// of posting it directly.
-    private func postMoveGesture(source: CGEventSource, windowID: CGWindowID, pid: pid_t, targetWindowID: CGWindowID, destination: CGPoint) {
+    func postMoveGesture(
+        source: CGEventSource, windowID: CGWindowID, pid: pid_t,
+        targetWindowID: CGWindowID, destination: CGPoint, cursor: CursorConcealment,
+        relay: (CGEvent, pid_t, TimeInterval, CursorConcealment, Bool) -> ScrombleRelay.Result = scrombleEvent
+    ) throws {
+        try cursor.checkInterruption()
         guard let (down, up) = moveEvents(
             source: source, windowID: windowID, pid: pid,
             targetWindowID: targetWindowID, destination: destination
         ) else { return }
-        let downRelayed = scrombleEvent(down, toPid: pid, timeout: Self.scrombleTimeout)
-        if !downRelayed { down.post(tap: .cgSessionEventTap) }
-        let upRelayed = scrombleEvent(up, toPid: pid, timeout: Self.scrombleTimeout)
-        if !upRelayed { up.post(tap: .cgSessionEventTap) }
-        DebugLog.log("move relay: window=\(windowID) targetWindow=\(targetWindowID) pid=\(pid) down=\(downRelayed) up=\(upRelayed)")
+        let downResult = relay(down, pid, Self.scrombleTimeout, cursor, false)
+        // A submitted down can already be in flight even when its owner echo was interrupted.
+        let upResult = downResult.submitted ? relay(up, pid, Self.scrombleTimeout, cursor, true) : nil
+        DebugLog.log("move relay: window=\(windowID) targetWindow=\(targetWindowID) pid=\(pid) down=\(downResult.delivered) up=\(upResult?.delivered ?? false) submitted=\(downResult.submitted) interrupted=\(downResult.interrupted || upResult?.interrupted == true)")
+        guard !downResult.interrupted, upResult?.interrupted != true else { throw CancellationError() }
+        try cursor.checkInterruption()
     }
 
     /// Builds events without posting them, so routing fields can be verified without moving the mouse.
     func moveEvents(source: CGEventSource, windowID: CGWindowID, pid: pid_t, targetWindowID: CGWindowID, destination: CGPoint) -> (down: CGEvent, up: CGEvent)? {
-        // Start far off-screen, like Ice: the down event's location is irrelevant (routing is by
-        // windowID), and an off-screen point avoids perturbing anything under the real cursor.
+        // Window IDs route the off-screen grab, but positioned events can still move the cursor.
+        // The caller owns concealment and restoration for the whole down/up pair.
         let offscreen = CGPoint(x: 20_000, y: 20_000)
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: offscreen, mouseButton: .left),
@@ -190,7 +201,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
 
     /// A plain left click at the item's current centre (no modifier), used between failed move
     /// attempts to nudge an item whose owning process has gone unresponsive to the synthetic move.
-    private func wakeUp(source: CGEventSource, item: MenuBarItemSnapshot) {
+    private func wakeUp(source: CGEventSource, item: MenuBarItemSnapshot, cursor: CursorConcealment) throws {
         let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
@@ -198,6 +209,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         else { return }
         stampWindowID(item.windowID, pid: item.ownerPID, into: down)
         stampWindowID(item.windowID, pid: item.ownerPID, into: up)
+        try cursor.checkInterruption()
         down.post(tap: .cgSessionEventTap)
         up.post(tap: .cgSessionEventTap)
     }
@@ -253,22 +265,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             throw WindowServerError.clickFailed(windowID: item.windowID)
         }
         let centre = CGPoint(x: item.frame.midX, y: item.frame.midY)
-        // Save the cursor's current position BEFORE warping, in CG global (top-left) space —
-        // the same space as `centre` and the warp, so no coordinate flip and multi-display
-        // safe. (NSEvent.mouseLocation is AppKit bottom-left and would need per-screen flipping.)
-        // If this read fails we have NO point to warp back to, so we must not warp the cursor onto
-        // the item at all — doing so would strand the pointer in the menu bar (the warp below was
-        // previously unconditional while the restore was guarded, which is exactly that bug). Bail
-        // cleanly instead: a nil read here is a degraded state where activation can't complete
-        // tidily anyway, and a failed click is recoverable where a parked cursor is a visible glitch.
-        guard let savedCursor = CGEvent(source: nil)?.location else {
-            throw WindowServerError.clickFailed(windowID: item.windowID)
-        }
-
-        // Build the click events BEFORE touching the cursor, so the pointer spends the absolute
-        // minimum time displaced (warp → post → restore with no allocation in between). This
-        // shrinks the visible jump to a sub-frame blip on its own — and on the throw path we
-        // never moved the cursor at all.
+        // Allocate events before concealing or moving the cursor to keep the displaced interval short.
         guard
             let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: centre, mouseButton: .left),
             let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: centre, mouseButton: .left)
@@ -278,29 +275,21 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         down.setIntegerValueField(.mouseEventClickState, value: 1)
         up.setIntegerValueField(.mouseEventClickState, value: 1)
 
-        // Hide the cursor across the warp→click→restore so the user never SEES it dart into the
-        // menu bar and back — the jarring part of activation. We still physically move the pointer
-        // (status-item hit-testing tracks the REAL cursor, so the warp is unavoidable), but it's
-        // hidden. `CGDisplayHideCursor`/`ShowCursor` are reference-counted; `defer` balances the
-        // show on every exit so we can never strand a hidden cursor. NOTE: `CGDisplayHideCursor`
-        // is honored only while the calling app is foreground, and our panel is a
-        // .nonactivatingPanel (we don't steal focus), so the hide may no-op — which is exactly why
-        // the events are pre-built and the cursor is restored immediately, bounding any still-
-        // visible motion to a single-frame flicker rather than a travel-and-return.
-        CGDisplayHideCursor(kCGNullDirectDisplay)
-        defer { CGDisplayShowCursor(kCGNullDirectDisplay) }
+        // Background capability is best-effort; retain a restore point even if concealment fails.
+        guard let cursor = try CursorConcealment() else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+        defer { cursor.restore() }
 
-        // Warp onto the item, post via the session tap (the .cghidEventTap HID layer bypasses the
-        // dispatcher the menu bar's tracking loop listens on, which is why the old path silently
-        // failed), then immediately warp back to where the user left it so the pointer doesn't
-        // stay parked in the menu bar. The warp emits no move event and the just-opened menu's
-        // modal loop doesn't dismiss on cursor motion, so the restore is safe with no delay.
-        // `savedCursor` is guaranteed valid (we bailed above if the read failed), so the warp is
-        // always paired with a restore — the pointer never stays parked on the item.
-        CGWarpMouseCursorPosition(centre)
-        down.post(tap: .cgSessionEventTap)
-        up.post(tap: .cgSessionEventTap)
-        CGWarpMouseCursorPosition(savedCursor)
+        // Session-tap delivery and the real-pointer warp preserve status-item hit-testing.
+        // Event submission alone does not confirm menu opening or invisible cursor movement.
+        guard try cursor.warp(to: centre) else {
+            throw WindowServerError.clickFailed(windowID: item.windowID)
+        }
+        guard try cursor.performGesture({
+            down.post(tap: .cgSessionEventTap)
+            up.post(tap: .cgSessionEventTap)
+        }) else { throw WindowServerError.clickFailed(windowID: item.windowID) }
     }
 }
 
@@ -309,14 +298,72 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
 /// strict-concurrency region analysis doesn't trip on the Unmanaged round-trip of a local class.
 /// It is only ever mutated synchronously on the run loop that drives the relay, so the
 /// `@unchecked Sendable` is sound: there is no cross-thread access.
-private final class ScrombleRelay: @unchecked Sendable {
+final class ScrombleRelay: @unchecked Sendable {
+    struct Result: Equatable, Sendable {
+        var submitted = false
+        // Owner forwarding is an API submission, not observed menu or window behavior.
+        var delivered = false
+        var interrupted = false
+    }
+
     var realEvent: CGEvent?
     var realTag: Int64 = 0
     var nullTag: Int64 = 0
     var pid: pid_t = 0
     var tap1: CFMachPort?
     var tap2: CFMachPort?
-    var delivered = false
+    private(set) var result = Result()
+    private let canSubmit: () -> Bool
+    private let balancingUp: Bool
+    private var finished = false
+
+    init(canSubmit: @escaping () -> Bool, balancingUp: Bool) {
+        self.canSubmit = canSubmit
+        self.balancingUp = balancingUp
+    }
+
+    var canPost: Bool {
+        if !result.interrupted, !canSubmit() { result.interrupted = true }
+        // Only a release for an already-submitted down can bypass an interruption.
+        return balancingUp || !result.interrupted
+    }
+
+    var shouldContinue: Bool {
+        !finished && !result.delivered && (!result.interrupted || balancingUp)
+    }
+
+    func handleTrigger(tag: Int64, disable: () -> Void, send: () -> Void) -> Bool {
+        guard tag == nullTag else { return false }
+        guard !finished else { return true }
+        disable()
+        guard !result.submitted, canPost else { return true }
+        result.submitted = true
+        send()
+        return true
+    }
+
+    func handleEcho(tag: Int64, disable: () -> Void, send: () -> Void) {
+        guard !finished, tag == realTag, result.submitted, !result.delivered else { return }
+        disable()
+        guard canPost else { return }
+        result.delivered = true
+        send()
+    }
+
+    func perform(run: () -> Void, fallback: () -> Void) -> Result {
+        guard !finished else { return result }
+        if canPost { run() }
+        // Seal delayed callbacks before fallback; submission is distinct from an owner echo.
+        finished = true
+        let permitted = canPost
+        if !result.submitted, permitted {
+            result.submitted = true
+            fallback()
+        }
+        // A fallback can submit before interruption becomes observable; its up is still required.
+        _ = canPost
+        return result
+    }
 }
 
 /// The two-tap event shuttle ("scromble") that makes a synthesized menu-bar move actually land,
@@ -331,24 +378,35 @@ private final class ScrombleRelay: @unchecked Sendable {
 /// Routing identity travels in the stamped windowID fields (91/92/0x33) + a unique
 /// `eventSourceUserData` tag the taps match on.
 ///
-/// Returns true if the real event was delivered through the round-trip, false if the relay couldn't
-/// be set up (the caller then does a plain direct post as a last resort). Synchronous and bounded:
-/// it pumps the current run loop until the relay completes or `timeout` elapses.
+/// Reports submission separately from owner forwarding, with a guarded fallback only if unsubmitted.
+/// It pumps the current run loop until completion, interruption, or `timeout`.
 ///
 /// A free (non-isolated) function, NOT a method: the equivalent method on `SystemWindowServer`
 /// crashed the Swift 6.3.2 `SendNonSendable` SIL pass (region analysis over the `Unmanaged` +
 /// CGEvent + C-callback shape inside an actor-isolated context). Lifting it to file scope sidesteps
 /// that compiler bug; it touches no instance state, so nothing is lost.
-private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: TimeInterval) -> Bool {
+private func scrombleEvent(
+    _ realEvent: CGEvent, toPid pid: pid_t, timeout: TimeInterval,
+    cursor: CursorConcealment, balancingUp: Bool
+) -> ScrombleRelay.Result {
+    let relay = ScrombleRelay(canSubmit: { cursor.canSubmitInput }, balancingUp: balancingUp)
+    return relay.perform(
+        run: { runScrombleRelay(realEvent, toPid: pid, timeout: timeout, relay: relay) },
+        fallback: { realEvent.post(tap: .cgSessionEventTap) }
+    )
+}
+
+private func runScrombleRelay(
+    _ realEvent: CGEvent, toPid pid: pid_t, timeout: TimeInterval, relay: ScrombleRelay
+) {
     // Tag the real event so the taps recognize exactly our event. A null trigger event carries a
     // distinct tag so the pid-tap can tell "kick" from "payload".
     let realTag = Int64(truncatingIfNeeded: ObjectIdentifier(realEvent).hashValue)
     realEvent.setIntegerValueField(.eventSourceUserData, value: realTag)
-    guard let nullEvent = CGEvent(source: nil) else { return false }
+    guard let nullEvent = CGEvent(source: nil) else { return }
     let nullTag = realTag &+ 1
     nullEvent.setIntegerValueField(.eventSourceUserData, value: nullTag)
 
-    let relay = ScrombleRelay()
     relay.realEvent = realEvent
     relay.realTag = realTag
     relay.nullTag = nullTag
@@ -361,11 +419,12 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
     let tap1Callback: CGEventTapCallBack = { _, _, event, userInfo in
         guard let userInfo else { return Unmanaged.passUnretained(event) }
         let relay = Unmanaged<ScrombleRelay>.fromOpaque(userInfo).takeUnretainedValue()
-        if event.getIntegerValueField(.eventSourceUserData) == relay.nullTag {
-            if let tap1 = relay.tap1 { CGEvent.tapEnable(tap: tap1, enable: false) }
-            relay.realEvent?.post(tap: .cgSessionEventTap)
-            return nil // swallow the kick
-        }
+        let consumed = relay.handleTrigger(
+            tag: event.getIntegerValueField(.eventSourceUserData),
+            disable: { if let tap1 = relay.tap1 { CGEvent.tapEnable(tap: tap1, enable: false) } },
+            send: { relay.realEvent?.post(tap: .cgSessionEventTap) }
+        )
+        if consumed { return nil }
         return Unmanaged.passUnretained(event)
     }
     let nullMask: CGEventMask = 1 << CGEventType.null.rawValue
@@ -378,7 +437,7 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
         userInfo: refcon
     ) else {
         DebugLog.log("move relay: pid tap unavailable pid=\(pid) postAccess=\(CGPreflightPostEventAccess()) listenAccess=\(CGPreflightListenEventAccess())")
-        return false
+        return
     }
     relay.tap1 = tap1
 
@@ -388,13 +447,11 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
     let tap2Callback: CGEventTapCallBack = { _, _, event, userInfo in
         guard let userInfo else { return Unmanaged.passUnretained(event) }
         let relay = Unmanaged<ScrombleRelay>.fromOpaque(userInfo).takeUnretainedValue()
-        if event.getIntegerValueField(.eventSourceUserData) == relay.realTag {
-            if let tap2 = relay.tap2 { CGEvent.tapEnable(tap: tap2, enable: false) }
-            if let real = relay.realEvent {
-                real.postToPid(relay.pid)
-                relay.delivered = true
-            }
-        }
+        relay.handleEcho(
+            tag: event.getIntegerValueField(.eventSourceUserData),
+            disable: { if let tap2 = relay.tap2 { CGEvent.tapEnable(tap: tap2, enable: false) } },
+            send: { relay.realEvent?.postToPid(relay.pid) }
+        )
         return Unmanaged.passUnretained(event)
     }
     let realMask: CGEventMask = 1 << realEvent.type.rawValue
@@ -408,7 +465,7 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
     ) else {
         DebugLog.log("move relay: session tap unavailable pid=\(pid) postAccess=\(CGPreflightPostEventAccess()) listenAccess=\(CGPreflightListenEventAccess())")
         CFMachPortInvalidate(tap1)
-        return false
+        return
     }
     relay.tap2 = tap2
 
@@ -430,10 +487,10 @@ private func scrombleEvent(_ realEvent: CGEvent, toPid pid: pid_t, timeout: Time
     // pid) catches it and re-emits the real event to the session tap. Then pump this run loop until
     // tap2 has re-delivered the real event or the deadline elapses. Bounded so a missed tap can
     // never wedge the move loop.
+    guard relay.canPost else { return }
     nullEvent.postToPid(pid)
     let deadline = Date().addingTimeInterval(timeout)
-    while !relay.delivered, Date() < deadline {
+    while relay.shouldContinue, Date() < deadline {
         CFRunLoopRunInMode(.defaultMode, 0.005, true)
     }
-    return relay.delivered
 }

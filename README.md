@@ -23,20 +23,24 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   self-validating retry loop. ✅ *(Moves were verified on-device; activation limitations remain below.)*
 - **Hover reveal** is opt-in under Settings > General, below Auto Re-hide. Hovering over BKF
   opens the floating bar; leaving closes only a hover-opened bar. Click and keyboard controls
-  remain authoritative, and the setting defaults off.
+  remain authoritative, and the setting defaults off. List opens use cached images without starting
+  a capture/reveal pass; hover waits for an already-active capture to finish.
 - **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
   Disabled items remain dimmed and non-interactive.
 
 ### Known limitations
 
-- Activating a mirrored icon reveals the real menu-bar section and can visibly move the cursor.
-  Some apps' menus still need compatibility testing.
+- Activating a mirrored icon still reveals the real menu-bar section and uses positioned input.
+  Background cursor concealment is implemented, but complete absence of flicker and compatibility
+  with every app's menu are not verified.
 - Cold-start glyph capture is not fully verified from boot, and a stuck native capture call can
   block later refreshes. The current queue timeout does not guarantee recovery.
 - Multi-display behavior and native mouse-event changes require live hardware checks. Passing
   unit tests alone is not evidence that these paths work on every menu-bar layout.
 - Hover ownership and cancellation are hostless-tested; native focus, first-click delivery,
   and the feel of anchor-to-panel travel still need hardware QA.
+- Cached opening prioritizes non-interruption over freshness. Stale or unfinished icons wait for
+  existing display, placement, or lifecycle refreshes rather than forcing a capture when opened.
 
 Current work and verification details are tracked in [AGENTS.md](AGENTS.md), with the remaining
 capability gaps in [PARITY.md](PARITY.md).
@@ -92,7 +96,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 399 tests in 35 suites (543 invocations including parameterized cases).
+It currently contains 456 tests in 38 suites (706 invocations including parameterized cases).
 
 ## Credit
 

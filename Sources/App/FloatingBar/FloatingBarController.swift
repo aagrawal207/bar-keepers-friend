@@ -14,7 +14,8 @@ final class FloatingBarController {
     private let windowServer: WindowServer
     private let captureIcons: ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage]
     private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
-    private let activateWithAX: (CGWindowID, pid_t, CGRect) async -> Bool
+    private let activateWithAX: (CGWindowID, pid_t, CGRect) async throws -> Bool
+    private let panelFactory: (() -> NSPanel)?
 
     /// Window ids of the app's own control items, excluded from the mirrored list.
     var controlItemWindowIDs: Set<CGWindowID> = []
@@ -146,13 +147,15 @@ final class FloatingBarController {
         captureIcons: @escaping ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage],
         preferences: Preferences,
         attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] = { await AXAttributionProvider.attribute($0) },
-        activateWithAX: @escaping (CGWindowID, pid_t, CGRect) async -> Bool = AXActivator.activate
+        activateWithAX: @escaping (CGWindowID, pid_t, CGRect) async throws -> Bool = AXActivator.activate,
+        panelFactory: (() -> NSPanel)? = nil
     ) {
         self.windowServer = windowServer
         self.captureIcons = captureIcons
         self.preferences = preferences
         self.attribute = attribute
         self.activateWithAX = activateWithAX
+        self.panelFactory = panelFactory
     }
 
     /// Toggles the floating bar. Returns the new visibility.
@@ -358,7 +361,7 @@ final class FloatingBarController {
             x: frame.minX, y: screenFrame.maxY - frame.maxY,
             width: frame.width, height: frame.height
         )
-        let panel = panel ?? makePanel()
+        let panel = panel ?? panelFactory?() ?? makePanel()
         panel.contentViewController = hosting
         self.panel = panel
         beginPresentation(presentation)
@@ -812,6 +815,10 @@ final class FloatingBarController {
                 DebugLog.log("activate: CGEvent clicked \(current.windowID) at \(current.frame) (\(ms(from: clickStart)))")
                 scheduleAutoRehideAfterActivation?()
                 return
+            } catch is CancellationError {
+                DebugLog.log("activate: CGEvent click interrupted for \(current.windowID)")
+                if !Task.isCancelled { rehideItems?() }
+                return
             } catch {
                 DebugLog.log("activate: CGEvent click failed for \(current.windowID): \(error)")
             }
@@ -819,11 +826,19 @@ final class FloatingBarController {
             // opens via AXShowMenu. Off by default. Guarded again because it can take a moment.
             if preferences.useAXActivation, !Task.isCancelled, Date() < deadline {
                 let pid = windowOwners[current.windowID]?.owner?.pid ?? current.ownerPID
-                let activated = await activateWithAX(current.windowID, pid, current.frame)
-                guard !Task.isCancelled else { return }
-                if activated {
-                    scheduleAutoRehideAfterActivation?()
+                do {
+                    let activated = try await activateWithAX(current.windowID, pid, current.frame)
+                    guard !Task.isCancelled else { return }
+                    if activated {
+                        scheduleAutoRehideAfterActivation?()
+                        return
+                    }
+                } catch is CancellationError {
+                    DebugLog.log("activate: AX interrupted for \(current.windowID)")
+                    if !Task.isCancelled { rehideItems?() }
                     return
+                } catch {
+                    DebugLog.log("activate: AX failed for \(current.windowID): \(error)")
                 }
             }
             guard !Task.isCancelled else { return }

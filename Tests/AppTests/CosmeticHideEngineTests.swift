@@ -6,6 +6,77 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct CosmeticHideEngineTests {
+    @Test(arguments: [FloatingBarController.Presentation.hover, .click, .keyboard], [false, true])
+    func queuedOptionalCaptureDoesNotRevealBehindACachedPanel(
+        presentation: FloatingBarController.Presentation, warmUpRetry: Bool
+    ) async {
+        let server = FakeWindowServer()
+        let preferences = Preferences(autoRehide: false)
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [:] }, preferences: preferences, attribute: { $0 }
+        )
+        var dividerWrites: [Bool] = []
+        let engine = CosmeticHideEngine(
+            preferences: preferences, controlWindowIDs: { (90, 91) },
+            setDividerCollapsed: { dividerWrites.append($0) }, onPreferencesChanged: { _ in }
+        )
+        engine.floatingBar = bar
+        engine.toggleHidden()
+        dividerWrites.removeAll()
+
+        if warmUpRetry { engine.fireWarmUpRetry() } else { engine.refreshFloatingBarCache() }
+        bar.beginPresentation(presentation)
+        await engine.captureChain.value
+
+        #expect(!dividerWrites.contains(false))
+        #expect(!bar.hasCapturedOnce)
+        #expect(bar.isVisible)
+        #expect(engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(!engine.captureInFlight)
+        engine.uninstall()
+    }
+
+    @Test(arguments: [1, 2], [false, true])
+    func skippedOptionalSuccessorsRestoreThePredecessorsReveal(queuedRefreshes: Int, warmUpRetry: Bool) async {
+        let server = FakeWindowServer()
+        let preferences = Preferences(autoRehide: false)
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [:] }, preferences: preferences, attribute: { $0 }
+        )
+        var dividerWrites: [Bool] = []
+        let engine = CosmeticHideEngine(
+            preferences: preferences, controlWindowIDs: { (90, 91) },
+            setDividerCollapsed: { dividerWrites.append($0) }, onPreferencesChanged: { _ in }
+        )
+        engine.floatingBar = bar
+        engine.toggleHidden()
+        dividerWrites.removeAll()
+        let started = AsyncGate()
+        let finish = AsyncGate()
+        let predecessor = engine.runCaptureSequence(forceCollapseAfter: false) {
+            await started.open()
+            await finish.wait()
+        }
+        await started.wait()
+        #expect(dividerWrites == [false])
+        for _ in 0..<queuedRefreshes {
+            if warmUpRetry { engine.fireWarmUpRetry() } else { engine.refreshFloatingBarCache() }
+        }
+        bar.beginPresentation(.hover)
+        #expect(dividerWrites == [false])
+
+        await finish.open()
+        await engine.captureChain.value
+        await predecessor.value
+
+        #expect(dividerWrites == [false, true])
+        #expect(!bar.hasCapturedOnce)
+        #expect(bar.isVisible)
+        #expect(engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(!engine.captureInFlight)
+        engine.uninstall()
+    }
+
     @Test(arguments: [false, true])
     func unpausingResumesIconCollectionWithoutAccessibility(incompleteCache: Bool) async throws {
         let item = MenuBarItemSnapshot(

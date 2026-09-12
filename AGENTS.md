@@ -100,7 +100,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **399 tests, 35 suites**, 543 invocations including
+- Test: same command with `test` (currently **456 tests, 38 suites**, 706 invocations including
   parameterized cases). Last full build/test: 2026-09-11, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
@@ -137,8 +137,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   items can't be captured), caches it, shows from cache. Monotonic cache + two-pass warm-up so
   first load is clean. Slide+fade animation, Reduce-Motion aware. Needs Screen Recording.
 - **Activate a mirrored item** — reveal section → synthesized CGEvent click → leave revealed so
-  the menu opens. Needs Accessibility; cursor hiding can fail for the nonactivating panel, so the
-  visible pointer jump remains open below.
+  the menu opens. Needs Accessibility. Background cursor concealment is implemented and its native
+  hide/show capability is verified; universal absence of event-time flicker remains unverified.
 - **Per-item Shown/Hidden (private API) — VERIFIED WORKING on-device 2026-06-28.** Settings → Items
   lists every manageable item with a Shown/Hidden segmented control; flipping it **physically
   moves** the real item across the anchor. The move uses Ice's two-tap "scromble" relay (a direct
@@ -174,6 +174,25 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   opens keep their existing policies. Pure geometry/state tests, fake-clock cancellation tests,
   real engine/placement wiring, and intercepted NSPanel ordering calls verify these decisions.
   Native first-click delivery, focus, animation transit, and display behavior still need hardware QA.
+- **Cache-only list opening (2026-09-11, adapter + limited native verification).** Hover, click,
+  and keyboard opens no longer request a reveal/capture pass. Optional refreshes and warm-up retries
+  recheck eligibility after joining predecessors; skipped successors still restore the divider.
+  Warm-up re-arming cannot invalidate an unrelated display refresh. Hover waits for capture and
+  divider restoration; a manual open during an already-active capture retains its previous behavior.
+  Native diagnostic opening showed the panel with the divider at 1728pt in all 40 samples. Stale or
+  unfinished icons wait for existing lifecycle/display/placement refreshes; there is no general idle
+  refresh scheduler or freshness guarantee on reopen.
+- **Background cursor concealment (2026-09-11, adapter + native capability-tested).** Dynamic
+  `CGSSetConnectionProperty` enables `SetsCursorInBackground` only on BKF's own connection. The
+  unlocked, inactive-process probe changed cursor visibility from 1 to 0 to 1; without it, hiding
+  was ineffective. Position restoration and one balancing show are scoped across errors/cancellation.
+  Missing restore points prevent gestures. Locked/non-console sessions stop new pointer and AX work;
+  delayed relay callbacks and fallback cannot revive an interrupted down, while a submitted down
+  still receives a balancing up. Interrupted current activations release their reveal without
+  disabling the item; superseded activations leave successors alone. Interrupted placement remains
+  pending. A native click using the production bridge opened Itsycal on the built-in display and
+  returned the cursor within one point, stable after 350ms. This conceals existing movement, not a
+  universal pointer-free transport; visual flicker across apps/displays still needs hardware QA.
 - **Anchor right-click menu** — app name + version header, a live **status line** (Paused / Ready /
   Working… / Collecting icons…, from the pure `AppStatus` enum in Core), a checkable **Pause** (reveals
   items in place and stops all automated hide/reveal/move; session-only), **About** (standard panel),
@@ -227,6 +246,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[FIXED 2026-09-11, adapter + limited native verification] Opening the list revealed real items.**
+  Stale-cache checks queued capture before the panel became visible; already-queued optional work
+  also lacked execution-time visibility checks. Opens are cache-only, and optional work yields to
+  current presentation. Tests invoke the actual engine/show paths and record physical divider writes.
+  Existing active capture and explicit item activation are separate from this fixed opening path.
 - **[IMPLEMENTED 2026-09-11, rendering-tested; native hover QA pending] Items had no pointer feedback.**
   Both `FloatingBarView` item renderers used plain buttons with no hover state or background.
   A shared button style now owns hover state per item and draws only for enabled hovered/pressed
@@ -244,6 +268,12 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Shown intent succeeded on the first attempt (x=1114 to x=1238). External-display recovery has
   not been verified. Do not call this fixed based on the built-in-display success or assume a
   longer delay/width-specific offset is the answer without a demonstrated cause.
+  **Investigation:** an unlocked two-display snapshot showed original window 58 at y=-30 and its AX
+  extra at y=-27, while a distinct bundle-named compositor window represented Itsycal at y=0. BKF's
+  named controls and visible compositor controls also differed. This supports a representation/context
+  mismatch hypothesis, not a proved relocation fix. External displays were disconnected before a new
+  move could be verified. Built-in Shown placement was already satisfied and is not counted as a fix.
+  Both direct AXPress and the production click bridge opened Itsycal's menu on the built-in display.
 - **[RESOLVED 2026-09-11, adapter-tested + live placement verified] Shown did not restore items.**
   The user's running build did reach the native mover: ACME and Maccy initially logged move
   failures. A subsequent instrumented run moved ACME but falsely called Maccy successful because
@@ -333,6 +363,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   explicitly permits `CGWarpMouseCursorPosition` to reposition the cursor while disassociated.
   Disassociation does not hide it, and the posted-event interaction still needs native evidence.
   Preserve balanced restoration and distinguish event submission from observed menu opening.
+  **Implemented concealment:** see Built for the own-connection background-cursor property and
+  native probe results. Original pointer movement remains in the click/move path; there is no claim
+  that every visible flicker or menu-activation compatibility issue has been eliminated.
   - *Related, still open: (#2) activation reveals the strip on-screen ("menu bar items pop up again")
     — inherent to needing the menu on-screen; revisit only with a confirmed click path. (#3) displaced
     Battery CC-module still in the bar — separate hardware-QA item below.*
@@ -702,6 +735,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
+- **Cursor concealment and Itsycal on external displays.** Repeat moves/activation on the failing
+  external layout while unlocked, observe actual cursor visibility throughout the gesture, and verify
+  both native representations and menu position. Capability flags, sampled endpoints, and fake relay
+  tests do not prove absence of a brief visible movement. Never run native input probes while locked.
 - **Hover reveal interaction.** Verify anchor-to-panel travel, first-click item activation, typing
   focus in Settings/another app, Reduce Motion, and external/stacked displays. Hostless tests cover
   ownership, cancellation, non-key ordering calls, and global-coordinate geometry, not native

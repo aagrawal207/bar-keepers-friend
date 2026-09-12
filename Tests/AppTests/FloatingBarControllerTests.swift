@@ -11,6 +11,198 @@ struct FloatingBarControllerTests {
     )
 
     @Test(arguments: [false, true])
+    func interruptedClickDoesNotFallbackOrDisableAndAFreshRequestCanSucceed(useAXActivation: Bool) async throws {
+        let server = MutableWindowServer(items: [item])
+        server.clickError = CancellationError()
+        let image = try glyph(side: 8)
+        var axCalls = 0
+        var rehideCalls = 0
+        var autoRehideCalls = 0
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [1: image] },
+            preferences: Preferences(useAXActivation: useAXActivation), attribute: { $0 },
+            activateWithAX: { _, _, _ in axCalls += 1; return false }
+        )
+        bar.rehideItems = { rehideCalls += 1 }
+        bar.scheduleAutoRehideAfterActivation = { autoRehideCalls += 1 }
+        await bar.captureAndCache(anchorMinX: 1000)
+        bar.activate(windowID: item.windowID)
+        let interrupted = try #require(bar.currentActivationTask)
+        await interrupted.value
+
+        #expect(!interrupted.isCancelled)
+        #expect(server.clickCount == 1)
+        #expect(server.base.clickedWindowIDs.isEmpty)
+        #expect(axCalls == 0)
+        #expect(rehideCalls == 1)
+        #expect(autoRehideCalls == 0)
+        let items = try await bar.allManageableItems()
+        #expect(items.first?.isDisabled == false)
+
+        server.clickError = nil
+        bar.activate(windowID: item.windowID)
+        await (try #require(bar.currentActivationTask)).value
+        #expect(server.base.clickedWindowIDs == [item.windowID])
+        #expect(axCalls == 0)
+        #expect(rehideCalls == 1)
+        #expect(autoRehideCalls == 1)
+    }
+
+    @Test func interruptedAXDoesNotDisableAndReleasesAnUncancelledRequest() async throws {
+        let server = MutableWindowServer(items: [item])
+        server.clickError = WindowServerError.clickFailed(windowID: item.windowID)
+        let image = try glyph(side: 8)
+        var axCalls = 0
+        var cleanupCalls = 0
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [1: image] },
+            preferences: Preferences(useAXActivation: true), attribute: { $0 },
+            activateWithAX: { _, _, _ in axCalls += 1; throw CancellationError() }
+        )
+        bar.rehideItems = { cleanupCalls += 1 }
+        bar.scheduleAutoRehideAfterActivation = { cleanupCalls += 1 }
+        await bar.captureAndCache(anchorMinX: 1000)
+        bar.activate(windowID: item.windowID)
+        let interrupted = try #require(bar.currentActivationTask)
+        await interrupted.value
+
+        #expect(!interrupted.isCancelled)
+        #expect(server.clickCount == 1)
+        #expect(axCalls == 1)
+        #expect(cleanupCalls == 1)
+        let items = try await bar.allManageableItems()
+        #expect(items.first?.isDisabled == false)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func lateAXInterruptionCannotOverwriteTheNewerRequest(newerSucceeds: Bool, newerFinishesFirst: Bool) async throws {
+        let other = snapshot(2, x: 200, owner: "test.other")
+        let server = MutableWindowServer(items: [item, other])
+        server.clickError = WindowServerError.clickFailed(windowID: item.windowID)
+        let image = try glyph(side: 8)
+        let oldStarted = AsyncGate()
+        let oldFinish = AsyncGate()
+        let newStarted = AsyncGate()
+        let newFinish = AsyncGate()
+        var axCalls: [CGWindowID] = []
+        var rehideCalls = 0
+        var autoRehideCalls = 0
+        let preferences = Preferences(useAXActivation: true)
+        let engine = CosmeticHideEngine(preferences: preferences, onPreferencesChanged: { _ in })
+        defer { engine.uninstall() }
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [1: image, 2: image] },
+            preferences: preferences, attribute: { $0 },
+            activateWithAX: { id, _, _ in
+                axCalls.append(id)
+                if id == 1 {
+                    await oldStarted.open()
+                    await oldFinish.wait()
+                    throw CancellationError()
+                }
+                await newStarted.open()
+                await newFinish.wait()
+                return newerSucceeds
+            }
+        )
+        engine.floatingBar = bar
+        engine.toggleHidden()
+        bar.revealHiddenItems = { await engine.revealForActivation() }
+        bar.rehideItems = { rehideCalls += 1; engine.rehideAfterActivation() }
+        bar.scheduleAutoRehideAfterActivation = { autoRehideCalls += 1; engine.scheduleAutoRehideAfterActivation() }
+        await bar.captureAndCache(anchorMinX: 1000)
+        bar.activate(windowID: item.windowID)
+        let old = try #require(bar.currentActivationTask)
+        await oldStarted.wait()
+        bar.activate(windowID: other.windowID)
+        let newer = try #require(bar.currentActivationTask)
+        await newStarted.wait()
+        if newerFinishesFirst {
+            await newFinish.open()
+            await newer.value
+        }
+        await oldFinish.open()
+        await old.value
+        #expect(old.isCancelled)
+        #expect(!newer.isCancelled)
+        #expect(bar.currentActivationTask == newer)
+        if !newerFinishesFirst {
+            #expect(rehideCalls == 0)
+            #expect(autoRehideCalls == 0)
+            await newFinish.open()
+            await newer.value
+        }
+
+        #expect(axCalls == [1, 2])
+        #expect(server.clickCount == 2)
+        #expect(rehideCalls == (newerSucceeds ? 0 : 1))
+        #expect(autoRehideCalls == (newerSucceeds ? 1 : 0))
+        #expect(engine.stateMachine.visibility(of: .hidden) == (newerSucceeds ? .shown : .collapsed))
+        let items = try await bar.allManageableItems()
+        #expect(items.first(where: { $0.id == 1 })?.isDisabled == false)
+        #expect(items.first(where: { $0.id == 2 })?.isDisabled == !newerSucceeds)
+    }
+
+    @Test(arguments: [false, true])
+    func interruptedCurrentActivationReleasesRealEngineOwnership(interruptAX: Bool) async throws {
+        let server = MutableWindowServer(items: [item])
+        server.clickError = interruptAX ? WindowServerError.clickFailed(windowID: item.windowID) : CancellationError()
+        let image = try glyph(side: 8)
+        let preferences = Preferences(autoRehide: true, autoRehideDelay: 2, useAXActivation: true, revealOnHover: true)
+        var dividerWrites: [Bool] = []
+        let engine = CosmeticHideEngine(
+            preferences: preferences, setDividerCollapsed: { dividerWrites.append($0) },
+            onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [1: image] }, preferences: preferences,
+            attribute: { $0 }, activateWithAX: { _, _, _ in throw CancellationError() }
+        )
+        engine.floatingBar = bar
+        engine.toggleHidden()
+        bar.revealHiddenItems = { await engine.revealForActivation() }
+        bar.rehideItems = { engine.rehideAfterActivation() }
+        bar.scheduleAutoRehideAfterActivation = { engine.scheduleAutoRehideAfterActivation() }
+        await bar.captureAndCache(anchorMinX: 1000)
+        dividerWrites.removeAll()
+        bar.activate(windowID: item.windowID)
+        let task = try #require(bar.currentActivationTask)
+        await task.value
+        #expect(!task.isCancelled)
+        #expect(dividerWrites == [false, true])
+        #expect(engine.stateMachine.visibility(of: .hidden) == .collapsed)
+        #expect(engine.canRevealOnHover)
+        #expect(try await bar.allManageableItems().first?.isDisabled == false)
+    }
+
+    @Test(arguments: [false, true])
+    func ordinaryClickAndAXErrorsStillDisableTheItem(useAXActivation: Bool) async throws {
+        let server = MutableWindowServer(items: [item])
+        server.clickError = WindowServerError.clickFailed(windowID: item.windowID)
+        let image = try glyph(side: 8)
+        var axCalls = 0
+        var rehideCalls = 0
+        var autoRehideCalls = 0
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { _ in [1: image] },
+            preferences: Preferences(useAXActivation: useAXActivation), attribute: { $0 },
+            activateWithAX: { id, _, _ in axCalls += 1; throw WindowServerError.clickFailed(windowID: id) }
+        )
+        bar.rehideItems = { rehideCalls += 1 }
+        bar.scheduleAutoRehideAfterActivation = { autoRehideCalls += 1 }
+        await bar.captureAndCache(anchorMinX: 1000)
+        bar.activate(windowID: item.windowID)
+        await (try #require(bar.currentActivationTask)).value
+
+        #expect(axCalls == (useAXActivation ? 1 : 0))
+        #expect(rehideCalls == 1)
+        #expect(autoRehideCalls == 0)
+        let items = try await bar.allManageableItems()
+        #expect(items.first?.isDisabled == true)
+    }
+
+    @Test(arguments: [false, true])
     func lateUncancelledAXCompletionStillCleansUp(succeeded: Bool) async throws {
         let server = FakeWindowServer(items: [item])
         server.clickError = .clickFailed(windowID: item.windowID)
@@ -1013,7 +1205,9 @@ struct FloatingBarControllerTests {
 
 private final class MutableWindowServer: WindowServer, @unchecked Sendable {
     var base: FakeWindowServer
+    var clickError: (any Error)?
     private(set) var readCount = 0
+    private(set) var clickCount = 0
 
     init(items: [MenuBarItemSnapshot]) {
         base = FakeWindowServer(items: items)
@@ -1027,7 +1221,11 @@ private final class MutableWindowServer: WindowServer, @unchecked Sendable {
     func menuBarFrame(forDisplayContaining point: CGPoint) throws -> CGRect {
         try base.menuBarFrame(forDisplayContaining: point)
     }
-    func click(item: MenuBarItemSnapshot) throws { try base.click(item: item) }
+    func click(item: MenuBarItemSnapshot) throws {
+        clickCount += 1
+        if let clickError { throw clickError }
+        try base.click(item: item)
+    }
     func move(item: MenuBarItemSnapshot, toX targetX: CGFloat, relativeTo targetWindowID: CGWindowID) async throws {
         try await base.move(item: item, toX: targetX, relativeTo: targetWindowID)
     }

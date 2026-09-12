@@ -16,11 +16,11 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 | Per-item Shown/Hidden | Live verified for Maccy and ACME; observed placement and retry feedback implemented | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
 | Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | External-display restart yielded 0/9 glyphs with app-icon fallbacks; recovery, cold-boot collection, saturated-notch activation, and capacity beyond both grid axes remain unverified |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
-| Item activation | Positioned click, optional AX path, cancellation/ownership guards | Observe actual menu opening/closing, handle ambiguous AX outcomes, and qualify cursor/focus behavior |
-| Hover reveal | Implemented opt-in below Auto Re-hide; ownership, cancellation, geometry, and non-key ordering calls tested | Native first-click delivery, focus, animation transit, and display qualification |
+| Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
+| Hover reveal | Cache-only opens; optional captures revalidate after queue waits; ownership and non-key ordering tested | Native first-click delivery, focus, animation transit, display qualification, and freshness without intrusive capture |
 | Keyboard access | Configured global toggle and persistent keyboard-opened bar | Shortcut recorder/conflict feedback and accessible navigation/dismissal |
 | Display correctness | Placement re-reads controls; several coordinate fixes are tested | Explicit 2D display identity, negative-origin capture, stacked-display panel selection, and live external-display qualification |
-| Native-work resilience | Pause and superseding work cancel safely; activations join draining moves | Lock/Space/fullscreen/mouse-idle policies and genuine recovery from non-returning native calls |
+| Native-work resilience | Pause/superseding/session interruption cancel safely; submitted downs retain balancing ups; interrupted placement stays pending | Native lock-transition qualification, Space/fullscreen/mouse-idle policies, and genuine recovery from non-returning calls |
 
 ## Organization And Distribution
 
@@ -56,7 +56,7 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 
 ## Hover Verification
 
-Full build/test on 2026-09-11: 399 tests across 35 suites, 543 invocations, zero failures or skips.
+Full build/test on 2026-09-11: 456 tests across 38 suites, 706 invocations, zero failures or skips.
 The built app passed strict code-signature verification. Independent source review found no
 remaining issues after fixes for context-menu ownership, synthetic pointer excursions, focus-taking
 presentation calls, and held-click races.
@@ -70,6 +70,10 @@ presentation calls, and held-click races.
 | Hover stays non-key through re-layout; fresh click/keyboard opens may become key | Actual `present()` path with intercepted NSPanel ordering calls | Hostless integration |
 | Default off, legacy decoding, save/reload, layout round-trip, unrelated settings unchanged | `PreferencesTests`, `LayoutConfigTests`, `PlacementIntegrationTests` | Unit + hostless integration |
 | Row/cell hover pixels, stronger press feedback, no disabled highlight, stable light/dark sizing | `FloatingBarViewTests` drawing production button content through `NSHostingController` | Hostless rendering |
+| Actual cached opens with fresh/stale/empty/failed enumeration; skipped successors restore; warm-up cancellation preserves display refresh | `HoverRevealIntegrationTests`, `CosmeticHideEngineTests` with physical-divider spies and intercepted panels | Hostless integration |
+| Cursor capability fallback, own connection, missing position, cleanup failure/cancellation, session loss | `CursorConcealmentTests` with injected primitives and pure session data | Unit + adapter |
+| Delayed trigger/echo, timeout fallback, no duplicate down, balancing up after interruption | `ScrombleRelayTests` through production relay-state and move-pair methods | Adapter |
+| Terminal AX interruption, no later fallback, enabled items after interruption, current reveal released without touching successors | `AXActivatorTests`, `FloatingBarControllerTests`, `PlacementIntegrationTests` | Unit + hostless integration |
 
 Native focus/first-click delivery, animation feel, and multi-display behavior are deliberately not
 claimed as verified. Test panels never order onto the desktop, and tests do not post mouse events
@@ -82,3 +86,31 @@ presentation visibility, and hover-owned closure. There is no telemetry or per-p
 tests assert behavior, not log strings. No automated security scan was available (`scan_diff`,
 `gitleaks`, and `semgrep` were absent); the diff received manual security review.
 Item-level hover feedback adds no polling, logging, telemetry, or permission requirements.
+
+## Native Investigation
+
+- **Cached opening:** a standalone diagnostic toggle displayed the panel while all 40 samples
+  retained the 1728pt divider. This verifies that opening did not initiate a real-item reveal on
+  that run, not that background startup capture or explicit item activation never reveals items.
+- **Cursor capability:** on an unlocked desktop with another app frontmost, the ordinary hide call
+  returned success without hiding. Setting the calling process's `SetsCursorInBackground` property
+  produced visibility 1 -> 0 -> 1 with balanced hide/show. A controlled click compiled from the
+  production bridge opened Itsycal and restored within one point, stable after 350ms. Those endpoints
+  are not a complete visual-flicker recording; unsupported capability/hide failures remain best-effort.
+- **Itsycal placement:** the external setup exposed separate original and compositor windows, with
+  the original/AX geometry above the visible row. No replacement routing was shipped on that hypothesis.
+  The external displays became unavailable. Built-in Shown placement and successful menu opening do
+  not close the external-display bug.
+- **Capture:** unlocked built-in-display probes of the status windows returned transparent images
+  through both ScreenCaptureKit's independent-window API and `SLSHWCaptureWindowList`. No new capture
+  transport was shipped. Fresh glyph acquisition still uses the composited display; cached opening
+  does not need it. Icon freshness remains event-driven, and fallback recovery remains open.
+
+Apple documents ordinary off-screen independent-window capture in
+[WWDC22 session 10155](https://developer.apple.com/videos/play/wwdc2022/10155/), but that is not proof
+that Tahoe status-item surfaces contain usable glyphs. The private connection-property ABI is
+documented in [CGSInternal](https://github.com/NUIKit/CGSInternal/blob/master/CGSConnection.h);
+only the API mechanism was used, not third-party implementation code.
+[Bartender's support page](https://www.macbartender.com/Bartender6/support/) also says it moves the
+mouse for layout management and that On-Demand avoids unsolicited moves. Its closed-source capture
+implementation is not established by those public claims.
