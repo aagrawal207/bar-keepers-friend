@@ -24,6 +24,10 @@ The user explicitly requested hover reveal again on 2026-09-11: an opt-in settin
 Re-hide that opens the floating bar when hovering over the BKF icon and closes a hover-owned bar after leaving.
 Click/keyboard ownership, Pause, and disabling the setting must remain authoritative.
 
+The user requested staged placement and Settings previews on 2026-09-12. Hidden/Shown edits now
+stay in a session-only draft until Apply Changes; Discard abandons only the draft. Preview rendering
+must remain cache-only. Apply uses the existing serialized mover, not parallel native gestures.
+
 ## Loop charter (read first if you are an automated loop fire)
 
 A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
@@ -100,8 +104,8 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **456 tests, 38 suites**, 706 invocations including
-  parameterized cases). Last full build/test: 2026-09-11, macOS 26.6.2 / Xcode 26.6, zero failures
+- Test: same command with `test` (currently **510 tests, 42 suites**, 833 invocations including
+  parameterized cases). Last full build/test: 2026-09-12, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
@@ -140,8 +144,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   the menu opens. Needs Accessibility. Background cursor concealment is implemented and its native
   hide/show capability is verified; universal absence of event-time flicker remains unverified.
 - **Per-item Shown/Hidden (private API) — VERIFIED WORKING on-device 2026-06-28.** Settings → Items
-  lists every manageable item with a Shown/Hidden segmented control; flipping it **physically
-  moves** the real item across the anchor. The move uses Ice's two-tap "scromble" relay (a direct
+  lists every manageable item with a Shown/Hidden segmented control; Apply Changes **physically
+  moves** the requested items across the anchor. The move uses Ice's two-tap "scromble" relay (a direct
   `.cgSessionEventTap` post is INERT on Tahoe — it relocated 0/12; the relay routes each event to
   the item's owning process and relocated 17/24, the failures being genuinely-immovable transient
   windows). Three things had to be right: (1) the scromble relay (`scrombleEvent` in
@@ -219,11 +223,29 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Native pointer enter/exit in click-opened and hover-opened panels still needs hardware QA.
 - **Items list grouped Hidden / Shown** — Settings → Items splits into "Hidden (N)" and
   "Shown (N)" sections instead of one interleaved list, so the two states scan at a glance and a
-  toggled row visibly moves between them (cheap re-partition, no menu-bar re-scan). Pure
-  `ItemControlStore.partitionByHidden` + tested.
-- **Hide All / Show All** — bulk buttons in the Items header flip every item's intent in ONE
-  mutation (single reconcile, persisted once), each disabled when it'd be a no-op. Backed by
-  `SettingsModel.setHidden(_:forAll:)` + tested store semantics.
+  toggled row visibly moves between them without a menu-bar re-scan. `SettingsModel.partition`
+  uses draft choices while editing, requested placement while applying, and observed placement
+  afterward. Failed moves do not masquerade as completed placement.
+- **Staged placement and Settings previews (2026-09-12, pure + adapter + rendering-tested).**
+  Hidden/Shown and Hide All/Show All edit an owner-keyed `ItemPlacementDraft` without persistence,
+  enumeration, capture, or native movement. Apply merges only edited placements into current
+  preferences once; identical saved intent requests a fresh reconciliation, never trusting cached
+  flags as proof of native success. Discard leaves saved intent alone. Reversals preserve absent
+  intent, and choosing the observed side can replace an opposing saved request while paused.
+  Partial failures remain observed and retryable; repeated Apply cannot replace an active batch.
+  Drafts survive Settings close/reopen within the session, but not app restart. Successful import
+  replaces the draft; failed/cancelled import does not. Aliases save separately and survive row
+  regrouping without overwriting a newer rename.
+  Settings has inert Menu Bar and Hidden Bar/List schematics using cached glyphs/app icons.
+  "After Apply" projects merged saved-plus-draft intent; "Last Observed" uses loaded observations,
+  with unknown placement separate. These are manageable-item previews, not exact screen replicas.
+  The 640x720 window keeps its footer visible and cached rows present during reloads. Off-screen
+  tests cover actual controls, light/dark pixels, overflow, aliases, unknown placement, and full-window
+  fit with read/placement errors. Test windows never order on screen. Pointer/VoiceOver feel and
+  external-display placement still need native QA. No native delays, relay, or capture transport changed.
+- **Hide All / Show All** stage all applicable owner choices in the same draft, including explicit
+  choices for unknown placement. Buttons disable only when staging would be a no-op. One Apply
+  submits the whole mixed-direction batch through the existing serialized reconciliation.
 - **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
   menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
   sparkle, on a teal→blue squircle — the Bar Keepers Friend pun). Rendered by `Scripts/render_icon.swift`
@@ -246,6 +268,16 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[MITIGATED 2026-09-12, adapter-tested] Every Settings selection repeated expensive placement work.**
+  Editing is now local; multiple choices share one Apply sequence. A mixed-direction integration
+  test verifies one preference write, one placement attribution pass, sequential moves, and one
+  successful post-batch capture, rather than a cycle per edit. Native settling/retry delays and
+  separate capture/Settings attribution sweeps remain; this is not a measured native latency fix.
+  The unresolved external-display failures can still exhaust retries during Apply.
+- **[RESOLVED 2026-09-12, rendering-tested] Row regrouping lost an unfinished alias edit.**
+  Mounted field-editor tests reproduced alias loss when Hide All, Discard, or placement completion
+  moved a row between section subtrees. Disappearance commits use the same guarded path as Return
+  and blur; an intervening saved rename wins over the stale edit. Tests cover all three regroup paths.
 - **[FIXED 2026-09-11, adapter + limited native verification] Opening the list revealed real items.**
   Stale-cache checks queued capture before the panel became visible; already-queued optional work
   also lacked execution-time visibility checks. Opens are cache-only, and optional work yields to
@@ -735,6 +767,10 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
+- **Staged Settings interaction.** Off-screen tests exercise Apply/Discard/bulk controls, edited
+  aliases across regrouping, preview overflow, and the full window's bounds. Pointer/keyboard focus
+  transitions and VoiceOver navigation in an on-screen Settings window remain unverified. The
+  schematic cannot qualify exact native ordering, spacing, or external-display moves.
 - **Cursor concealment and Itsycal on external displays.** Repeat moves/activation on the failing
   external layout while unlocked, observe actual cursor visibility throughout the gesture, and verify
   both native representations and menu position. Capability flags, sampled endpoints, and fake relay
@@ -794,6 +830,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 - **Settings window refinement (UX polish).** *(User feedback 2026-06-28: "looks like someone new
   built it… refine it and make it a proper app." Low priority, loop item.)*
+  - **[DONE 2026-09-12, off-screen verified]** Staged Apply/Discard workflow, cached Menu Bar and
+    Hidden Bar/List previews, persistent footer, and visible cached rows during refresh. Settings
+    is 640x720; full-root tests include the identity header, tabs, unknown items, and error messages.
   - **[DONE this pass] App-identity header.** `SettingsView` now leads with an icon (the real
     `NSApp.applicationIconImage`) + app name + version banner above the tab strip — the concrete
     "no app identity" gap. The version string is composed by a pure, tested `AppInfo.displayVersion`

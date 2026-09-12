@@ -17,8 +17,8 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   or vertical list), so a too-narrow (notched) menu bar isn't relied on to show items.
   Clicking a mirrored icon reveals the section and triggers the real item. Needs Screen
   Recording (to capture icon images) + Accessibility (to click). ✅
-- **Phase 3** — per-item **Shown / Hidden** control in Settings that physically moves the real
-  item across the anchor (the Bartender-style direct picker), plus a global toggle shortcut
+- **Phase 3** — per-item **Shown / Hidden** choices in Settings, applied together to move the real
+  items across the anchor, plus a global toggle shortcut
   (⌥⌘B). Uses private window-server behavior, so it's fenced behind a protocol seam with a
   self-validating retry loop. ✅ *(Moves were verified on-device; activation limitations remain below.)*
 - **Hover reveal** is opt-in under Settings > General, below Auto Re-hide. Hovering over BKF
@@ -27,6 +27,23 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   a capture/reveal pass; hover waits for an already-active capture to finish.
 - **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
   Disabled items remain dimmed and non-interactive.
+
+### Arrange items
+
+1. Open **Settings > Items** and choose **Shown** or **Hidden** for any number of items.
+2. Review the **Menu Bar** and **Hidden Bar/List** previews. Draft edits update these immediately
+   without moving real items or capturing the desktop.
+3. Choose **Apply Changes** to save and apply the batch, or **Discard** to abandon the draft.
+
+The preview says **After Apply** while editing and **Last Observed** afterward. It uses cached
+glyphs or app icons for manageable items, not a live screenshot or an exact spacing/order preview.
+Unknown placements are listed separately. Failed moves show an error and **Retry**; a saved choice
+is not proof that macOS moved the item.
+
+Drafts survive closing Settings within the running session, but not an app restart. Apply and
+Discard affect placement only; names save separately on Return or when leaving the field. Bulk
+Hide All/Show All use the same draft. Batching avoids a placement-and-refresh cycle for each edit;
+native move retries and capture delays can still make Apply take time.
 
 ### Known limitations
 
@@ -96,7 +113,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 456 tests in 38 suites (706 invocations including parameterized cases).
+It currently contains 510 tests in 42 suites (833 invocations including parameterized cases).
 
 ## Credit
 

@@ -178,6 +178,7 @@ final class AppCoordinator {
     private func syncPlacementStatus() {
         guard let engine = hideEngine, let model = settingsWindowController?.model else { return }
         model.placementInProgress = engine.placementInProgress
+        model.placementPending = engine.placementPending
         model.placementMessage = engine.placementMessage
         model.placementFailed = engine.placementFailed
     }

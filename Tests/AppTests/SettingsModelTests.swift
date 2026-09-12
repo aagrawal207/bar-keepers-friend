@@ -232,6 +232,9 @@ struct SettingsModelTests {
         #expect(!model.placementInProgress)
         #expect(model.placementMessage == nil)
         #expect(!model.placementFailed)
+        #expect(!model.placementPending)
+        #expect(!model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 0)
 
         for hidden in [initiallyHidden, !initiallyHidden] {
             item.observedHidden = hidden
@@ -264,9 +267,23 @@ struct SettingsModelTests {
 
         model.setHidden(hidden, for: item)
 
+        #expect(model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.isHidden(item) == hidden)
+        #expect(model.preferences == .default)
+        #expect(writes.isEmpty)
+        #expect(retries == 0)
+        model.applyPlacementChanges()
+
         #expect(model.preferences.itemControls.hasPlacementIntent(item.snapshot))
         #expect(model.preferences.itemControls.isHidden(item.snapshot) == hidden)
         #expect(model.preferences.itemControls.shownInMenuBar.contains("ACME") == !hidden)
+        #expect(writes == [model.preferences])
+        #expect(retries == 0)
+        #expect(!model.hasPendingChanges)
+        #expect(!model.hasPendingChange(for: item))
+        model.applyPlacementChanges()
         #expect(writes == [model.preferences])
         #expect(retries == 0)
     }
@@ -300,9 +317,17 @@ struct SettingsModelTests {
         #expect(writes == 0)
 
         model.setHidden(hidden, for: item)
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.isHidden(item) == hidden)
+        #expect(retries == 0)
+        #expect(writes == 0)
+        model.applyPlacementChanges()
         #expect(retries == 1)
         #expect(writes == 0)
         #expect(model.preferences == requested)
+        #expect(!model.hasPendingChanges)
+        #expect(model.placementFailed)
+        #expect(model.placementMessage == "Couldn't move the item. Select Shown or Hidden to try again.")
 
         model.placementInProgress = true
         item.observedHidden = hidden
@@ -391,6 +416,13 @@ struct SettingsModelTests {
         )
 
         model.setHidden(hidden, forAll: items)
+        #expect(model.pendingChangeCount == 3)
+        #expect(items.allSatisfy { model.hasPendingChange(for: $0) })
+        #expect(items.allSatisfy { model.isHidden($0) == hidden })
+        #expect(model.preferences == preferences)
+        #expect(writes.isEmpty)
+        #expect(retries == 0)
+        model.applyPlacementChanges()
         let requested = model.preferences
         #expect(items.allSatisfy { requested.itemControls.hasPlacementIntent($0.snapshot) })
         #expect(items.allSatisfy { requested.itemControls.isHidden($0.snapshot) == hidden })
@@ -401,13 +433,805 @@ struct SettingsModelTests {
         #expect(parts.shown.map(\.id) == (hidden ? items.map(\.id) : []))
 
         model.setHidden(hidden, forAll: items)
+        #expect(model.pendingChangeCount == 3)
+        #expect(writes == [requested])
+        #expect(retries == 0)
+        model.applyPlacementChanges()
         #expect(writes == [requested])
         #expect(retries == 1)
         #expect(model.preferences == requested)
+        #expect(!model.hasPendingChanges)
+        model.applyPlacementChanges()
+        #expect(writes == [requested])
+        #expect(retries == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func keylessEditsAndEmptyApplyHaveNoSideEffects(hidden: Bool) {
+        let items = [makeItem(nil, id: 1, observedHidden: !hidden),
+                     makeItem("", id: 2, observedHidden: !hidden)]
+        var writes = 0
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+
+        #expect(!model.canSetHidden(hidden, forAll: items))
+        #expect(!model.canSetHidden(!hidden, forAll: items))
+        #expect(!model.canSetHidden(hidden, forAll: []))
+        model.setHidden(hidden, for: items[0])
+        model.setHidden(hidden, forAll: items)
+        model.setHidden(hidden, forAll: [])
+        model.applyPlacementChanges()
+        model.discardPlacementChanges()
+        model.retryPlacement()
+
+        #expect(!model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 0)
+        #expect(items.allSatisfy { !model.hasPendingChange(for: $0) })
+        #expect(model.preferences == .default)
+        #expect(writes == 0)
+        #expect(retries == 0)
+        #expect(reads == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func mixedOwnerSiblingsShareOneDraftChoiceForSingleAndBulkEdits(hidden: Bool, bulk: Bool) async {
+        var items = [
+            makeItem("ACME", id: 1, observedHidden: !hidden),
+            makeItem("ACME", id: 2, observedHidden: hidden),
+            makeItem("Maccy", id: 3, observedHidden: !hidden)
+        ]
+        for index in items.indices { items[index].alias = "Same" }
+        let preferences = Preferences(itemAliases: ItemAliasStore(aliases: ["ACME": "Same", "Maccy": "Same"]))
+        var writes: [Preferences] = []
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items },
+            onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+
+        #expect(model.canSetHidden(hidden, forAll: [items[1]]))
+        #expect(model.canSetHidden(!hidden, forAll: Array(items.prefix(2))))
+        #expect(model.pendingChangeCount == 0)
+        if bulk { model.setHidden(hidden, forAll: Array(items.prefix(2))) }
+        else { model.setHidden(hidden, for: items[0]) }
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.hasPendingChange(for: items[0]))
+        #expect(model.hasPendingChange(for: items[1]))
+        #expect(!model.hasPendingChange(for: items[2]))
+        #expect(model.isHidden(items[0]) == hidden)
+        #expect(model.isHidden(items[1]) == hidden)
+        #expect(model.isHidden(items[2]) == !hidden)
+        #expect(model.preferences == preferences)
+        #expect(writes.isEmpty)
+
+        #expect(!model.canSetHidden(hidden, forAll: [items[1]]))
+        #expect(model.canSetHidden(!hidden, forAll: [items[1]]))
+        #expect(model.pendingChangeCount == 1)
+        model.setHidden(!hidden, for: items[1])
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.isHidden(items[0]) == !hidden)
+        #expect(model.isHidden(items[1]) == !hidden)
+        #expect(!model.canSetHidden(!hidden, forAll: Array(items.prefix(2))))
+        model.applyPlacementChanges()
+
+        var expected = preferences
+        expected.itemControls.setHidden(!hidden, forKey: "ACME")
+        #expect(model.preferences == expected)
+        #expect(writes == [expected])
+        #expect(!model.preferences.itemControls.hasPlacementIntent(items[2].snapshot))
+        #expect(!model.hasPendingChanges)
+        #expect(retries == 0)
+        #expect(reads == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func reversingAnUnconfiguredEditPreservesAbsentIntent(hidden: Bool) {
+        let item = makeItem(observedHidden: hidden)
+        var writes = 0
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+
+        #expect(!model.canSetHidden(hidden, forAll: [item]))
+        #expect(model.canSetHidden(!hidden, forAll: [item]))
+        #expect(!model.hasPendingChanges)
+        model.setHidden(hidden, for: item)
+        #expect(!model.hasPendingChanges)
+        model.setHidden(!hidden, for: item)
+        #expect(model.hasPendingChanges)
+        #expect(!model.canSetHidden(!hidden, forAll: [item]))
+        #expect(model.canSetHidden(hidden, forAll: [item]))
+        #expect(model.pendingChangeCount == 1)
+        model.setHidden(hidden, for: item)
+        model.applyPlacementChanges()
+
+        #expect(!model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 0)
+        #expect(!model.hasPendingChange(for: item))
+        #expect(model.isHidden(item) == hidden)
+        #expect(!model.canSetHidden(hidden, forAll: [item]))
+        #expect(model.preferences == .default)
+        #expect(!model.preferences.itemControls.hasPlacementIntent(item.snapshot))
+        #expect(writes == 0)
+        #expect(retries == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func observedChoiceCanCancelDeferredOrFailedSavedIntent(hidden: Bool, failed: Bool) async {
+        let item = makeItem(observedHidden: !hidden)
+        var preferences = Preferences.default
+        preferences.itemControls.setHidden(hidden, for: item.snapshot)
+        var writes: [Preferences] = []
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+        let message = failed ? "Could not move the item." : "Paused. Placement will resume when unpaused."
+        model.placementMessage = message
+        model.placementPending = true
+        model.placementFailed = failed
+
+        #expect(model.isHidden(item) == !hidden)
+        #expect(model.canSetHidden(!hidden, forAll: [item]))
+        #expect(!model.hasPendingChanges)
+        model.setHidden(!hidden, for: item)
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.pendingChangeCount == 1)
+        #expect(!model.canSetHidden(!hidden, forAll: [item]))
+        #expect(model.preferences == preferences)
+        #expect(writes.isEmpty)
+        #expect(retries == 0)
+
+        model.discardPlacementChanges()
+        #expect(!model.hasPendingChanges)
+        #expect(model.preferences == preferences)
+        #expect(model.canSetHidden(!hidden, forAll: [item]))
+        #expect(writes.isEmpty)
+        model.setHidden(!hidden, forAll: [item])
+        #expect(model.pendingChangeCount == 1)
+        model.applyPlacementChanges()
+        model.applyPlacementChanges()
+
+        var expected = preferences
+        expected.itemControls.setHidden(!hidden, for: item.snapshot)
+        #expect(model.preferences == expected)
+        #expect(writes == [expected])
+        #expect(!model.hasPendingChanges)
+        #expect(model.isHidden(item) == !hidden)
+        #expect(!model.canSetHidden(!hidden, forAll: [item]))
+        #expect(model.placementPending)
+        #expect(model.placementFailed == failed)
+        #expect(model.placementMessage == message)
+        #expect(!model.placementInProgress)
+        #expect(retries == 0)
+        #expect(reads == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func unknownUnconfiguredBulkChoicesAreAvailableWithoutSideEffects(hidden: Bool) async {
+        let items = [makeItem("ACME", id: 1), makeItem("Maccy", id: 2), makeItem("ACME", id: 3)]
+        var reads = 0
+        var retries = 0
+        var writes: [Preferences] = []
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items },
+            onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+
+        #expect(model.canSetHidden(hidden, forAll: items))
+        #expect(model.canSetHidden(!hidden, forAll: items))
+        #expect(!model.hasPendingChanges)
+        #expect(model.placementPreview.unknown.map(\.id) == items.map(\.id))
+        #expect(model.preferences == .default)
+        #expect(reads == 1)
+        #expect(writes.isEmpty)
+        #expect(retries == 0)
+
+        model.setHidden(hidden, forAll: items)
+        #expect(!model.canSetHidden(hidden, forAll: items))
+        #expect(model.canSetHidden(!hidden, forAll: items))
+        #expect(model.pendingChangeCount == 2)
+        #expect(items.allSatisfy { model.hasPendingChange(for: $0) && model.isHidden($0) == hidden })
+        #expect(model.preferences == .default)
+        model.setHidden(!hidden, forAll: items)
+        #expect(model.pendingChangeCount == 2)
+        #expect(!model.canSetHidden(!hidden, forAll: items))
+        #expect(writes.isEmpty)
+        model.applyPlacementChanges()
+
+        var expected = Preferences.default
+        expected.itemControls.setHidden(!hidden, forKey: "ACME")
+        expected.itemControls.setHidden(!hidden, forKey: "Maccy")
+        #expect(model.preferences == expected)
+        #expect(writes == [expected])
+        #expect(!model.hasPendingChanges)
+        #expect(model.placementPreview.unknown.map(\.id) == items.map(\.id))
+        #expect(retries == 0)
+        #expect(reads == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func bulkAvailabilityRejectsSatisfiedChoicesWithoutMutatingOtherDrafts(hidden: Bool) {
+        let items = [makeItem("ACME", id: 1, observedHidden: hidden),
+                     makeItem("Maccy", id: 2, observedHidden: hidden)]
+        let other = makeItem("other", id: 3, observedHidden: !hidden)
+        var preferences = Preferences.default
+        preferences.itemControls.setHidden(hidden, for: items[0].snapshot)
+        var reads = 0
+        var writes = 0
+        var retries = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items + [other] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+
+        #expect(!model.canSetHidden(hidden, forAll: items))
+        #expect(model.canSetHidden(!hidden, forAll: items))
+        #expect(!model.hasPendingChanges)
+        model.setHidden(hidden, for: other)
+        #expect(!model.canSetHidden(hidden, forAll: items))
+        #expect(model.canSetHidden(!hidden, forAll: items))
+        model.setHidden(hidden, forAll: items)
+
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.hasPendingChange(for: other))
+        #expect(items.allSatisfy { !model.hasPendingChange(for: $0) })
+        #expect(model.preferences == preferences)
+        #expect(reads == 0)
+        #expect(writes == 0)
+        #expect(retries == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func draftSurvivesRefreshAndWindowReplacementWithoutRebasing(hidden: Bool, revert: Bool) async {
+        var item = makeItem(observedHidden: !hidden)
+        var writes = 0
+        var retries = 0
+        var reads = 0
+        let controller = SettingsWindowController(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        let model = controller.model
+        await model.reloadItems()
+        model.setHidden(hidden, for: item)
+
+        item = makeItem(id: 99, observedHidden: hidden)
+        await controller.model.reloadItems()
+        #expect(controller.model === model)
+        #expect(model.loadedItems.map(\.id) == [99])
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.pendingChangeCount == 1)
+        model.setHidden(hidden, for: item)
+        #expect(model.pendingChangeCount == 1)
+        #expect(writes == 0)
+        #expect(retries == 0)
+
+        if revert { model.setHidden(!hidden, for: item) }
+        model.applyPlacementChanges()
+        #expect(!model.hasPendingChanges)
+        #expect(model.isHidden(item) == hidden)
+        #expect(model.preferences.itemControls.hasPlacementIntent(item.snapshot) == !revert)
+        #expect(writes == (revert ? 0 : 1))
+        #expect(retries == 0)
+        #expect(reads == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func draftSurvivesEmptyAndFailedLoads(loadFails: Bool) async {
+        let item = makeItem(observedHidden: false)
+        var reads = 0
+        var writes = 0
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: {
+                reads += 1
+                if reads == 1 { return [item] }
+                if loadFails { throw WindowServerError.invalidServerResponse("enumeration failed") }
+                return []
+            }, onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+        model.setHidden(true, for: item)
+        await model.reloadItems()
+
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.loadedItems.map(\.id) == (loadFails ? [item.id] : []))
+        #expect(model.placementPreview.hidden.map(\.id) == (loadFails ? [item.id] : []))
+        #expect((model.itemsLoadError != nil) == loadFails)
+        #expect(writes == 0)
+        #expect(retries == 0)
+        model.applyPlacementChanges()
+        #expect(model.preferences.itemControls.hiddenInMenuBar == ["ACME"])
+        #expect(!model.hasPendingChanges)
+        #expect(writes == 1)
+        #expect(retries == 0)
+        #expect(reads == 2)
+    }
+
+    @Test func applyMergesOnlyEditedOwnersIntoCurrentPreferences() {
+        let hidden = makeItem("ACME", id: 1, observedHidden: false)
+        let shown = makeItem("Maccy", id: 2, observedHidden: true)
+        let untouched = makeItem("unconfigured", id: 3, observedHidden: false)
+        let initial = Preferences(itemControls: ItemControlStore(
+            hiddenInMenuBar: ["absent.hidden"], shownInMenuBar: ["absent.shown"]
+        ))
+        var writes: [Preferences] = []
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: initial, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [hidden, shown, untouched] },
+            onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        model.setHidden(true, for: hidden)
+        model.setHidden(false, forAll: [shown, untouched])
+        #expect(model.pendingChangeCount == 2)
+        #expect(!model.hasPendingChange(for: untouched))
+        #expect(writes.isEmpty)
+
+        model.preferences.autoRehide = false
+        model.preferences.autoRehideDelay = 43
+        model.preferences.floatingBarStyle = .vertical
+        model.preferences.revealOnHover = true
+        model.preferences.toggleHotkey = HotkeyCombo(keyCode: 12, modifiers: HotkeyCombo.option)
+        model.setAlias("New name", for: hidden)
+        model.preferences.itemControls.setSuppressed(true, for: hidden.snapshot)
+        model.preferences.itemControls.setOrderIndex(3, for: shown.snapshot)
+        var replacement = model.preferences
+        replacement.controlItemPositions = ["existing.slot": 42]
+        model.preferences = replacement
+        #expect(model.pendingChangeCount == 2)
+        #expect(model.preferences.itemControls == ItemControlStore(
+            hiddenInMenuBar: ["absent.hidden"], shownInMenuBar: ["absent.shown"],
+            suppressedFromBar: ["ACME"], barOrder: ["Maccy": 3]
+        ))
+        writes.removeAll()
+
+        var expected = model.preferences
+        expected.itemControls.setHidden(true, for: hidden.snapshot)
+        expected.itemControls.setHidden(false, for: shown.snapshot)
+        model.applyPlacementChanges()
+
+        #expect(model.preferences == expected)
+        #expect(writes == [expected])
+        #expect(!model.preferences.itemControls.hasPlacementIntent(untouched.snapshot))
+        #expect(!model.hasPendingChanges)
+        #expect(retries == 0)
+        #expect(reads == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func applyClearsDraftBeforeEitherCallbackCanReenter(alreadySaved: Bool) {
+        let item = makeItem(observedHidden: false)
+        var preferences = Preferences.default
+        if alreadySaved { preferences.itemControls.setHidden(true, for: item.snapshot) }
+        weak var observedModel: SettingsModel?
+        var callbackCounts: [Int] = []
+        var writes = 0
+        var retries = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(), itemsProvider: { [item] },
+            onRetryPlacement: {
+                retries += 1
+                callbackCounts.append(observedModel?.pendingChangeCount ?? -1)
+                observedModel?.applyPlacementChanges()
+            }, onChange: { _ in
+                writes += 1
+                callbackCounts.append(observedModel?.pendingChangeCount ?? -1)
+                observedModel?.applyPlacementChanges()
+            }
+        )
+        observedModel = model
+        model.setHidden(true, for: item)
+        model.applyPlacementChanges()
+        model.applyPlacementChanges()
+
+        #expect(callbackCounts == [0])
+        #expect(writes == (alreadySaved ? 0 : 1))
+        #expect(retries == (alreadySaved ? 1 : 0))
+        #expect(!model.hasPendingChanges)
+        #expect(!model.placementInProgress)
+        #expect(!model.placementFailed)
+        #expect(!model.placementPending)
+        #expect(model.placementMessage == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func activePlacementBlocksEditingDiscardApplyAndRetry(hasDraft: Bool) {
+        let item = makeItem(observedHidden: true)
+        let other = makeItem("Maccy", id: 2, observedHidden: false)
+        let preferences = Preferences(itemControls: ItemControlStore(hiddenInMenuBar: ["ACME"]))
+        var writes = 0
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item, other] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        if hasDraft { model.setHidden(false, for: item) }
+        model.placementInProgress = true
+        model.placementPending = true
+        model.placementFailed = true
+        model.placementMessage = "Applying saved placement."
+
+        #expect(!model.canSetHidden(true, forAll: [item, other]))
+        #expect(!model.canSetHidden(false, forAll: [item, other]))
+        model.setHidden(true, for: item)
+        model.setHidden(true, forAll: [item, other])
+        model.discardPlacementChanges()
+        model.applyPlacementChanges()
+        model.retryPlacement()
+
+        #expect(model.hasPendingChanges == hasDraft)
+        #expect(model.pendingChangeCount == (hasDraft ? 1 : 0))
+        #expect(model.hasPendingChange(for: item) == hasDraft)
+        #expect(!model.hasPendingChange(for: other))
+        #expect(model.isHidden(item) == !hasDraft)
+        #expect(model.preferences == preferences)
+        #expect(model.placementInProgress)
+        #expect(model.placementPending)
+        #expect(model.placementFailed)
+        #expect(model.placementMessage == "Applying saved placement.")
+        #expect(writes == 0)
+        #expect(retries == 0)
+        #expect(reads == 0)
+
+        model.placementInProgress = false
+        model.discardPlacementChanges()
+        #expect(!model.hasPendingChanges)
+        #expect(model.isHidden(item))
+        #expect(model.preferences == preferences)
+        #expect(model.placementPending)
+        #expect(model.placementFailed)
+        #expect(model.placementMessage == "Applying saved placement.")
+        #expect(writes == 0)
+        #expect(retries == 0)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func retryRequiresFailedOrPendingPlacementWithoutActiveWorkOrDraft(failed: Bool, pending: Bool) {
+        let item = makeItem(observedHidden: false)
+        var writes = 0
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        model.placementFailed = failed
+        model.placementPending = pending
+        model.placementMessage = "Native placement status."
+        model.retryPlacement()
+        let expectedRetries = failed || pending ? 1 : 0
+        #expect(retries == expectedRetries)
+
+        model.setHidden(true, for: item)
+        model.retryPlacement()
+        #expect(retries == expectedRetries)
+        model.discardPlacementChanges()
+        model.placementInProgress = true
+        model.retryPlacement()
+
+        #expect(retries == expectedRetries)
+        #expect(model.placementFailed == failed)
+        #expect(model.placementPending == pending)
+        #expect(model.placementMessage == "Native placement status.")
+        #expect(model.preferences == .default)
+        #expect(writes == 0)
+        #expect(reads == 0)
+    }
+
+    @Test(arguments: [false, true], [Optional<Bool>.none, false, true])
+    func applyingSavedIntentReconcilesOnceRegardlessOfCachedObservation(hidden: Bool, observed: Bool?) async {
+        var item = makeItem(observedHidden: !hidden)
+        var preferences = Preferences.default
+        preferences.itemControls.setHidden(hidden, for: item.snapshot)
+        var writes = 0
+        var retries = 0
+        var reads = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+        model.placementFailed = true
+        model.placementMessage = "Native result is still authoritative."
+        model.setHidden(hidden, for: item)
+        item.observedHidden = observed
+        await model.reloadItems()
+        #expect(model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.partition(model.loadedItems).hidden.map(\.id) == (hidden ? [item.id] : []))
+        #expect(model.partition(model.loadedItems).shown.map(\.id) == (hidden ? [] : [item.id]))
+        #expect(writes == 0)
+        #expect(retries == 0)
+
+        model.applyPlacementChanges()
+        #expect(retries == 1)
+        model.applyPlacementChanges()
+
+        #expect(!model.hasPendingChanges)
+        #expect(model.preferences == preferences)
+        #expect(writes == 0)
+        #expect(retries == 1)
+        let rowHidden = observed ?? hidden
+        #expect(model.partition(model.loadedItems).hidden.map(\.id) == (rowHidden ? [item.id] : []))
+        #expect(model.partition(model.loadedItems).shown.map(\.id) == (rowHidden ? [] : [item.id]))
+        #expect(reads == 2)
+        #expect(model.placementFailed)
+        #expect(model.placementMessage == "Native result is still authoritative.")
+        #expect(!model.placementInProgress)
+    }
+
+    @Test(arguments: [false, true])
+    func externalPlacementReplacementDiscardsStaleDraftBeforeCallback(changeHiddenSet: Bool) {
+        let item = makeItem(observedHidden: false)
+        weak var observedModel: SettingsModel?
+        var callbackCounts: [Int] = []
+        var writes: [Preferences] = []
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { [item] },
+            onRetryPlacement: { retries += 1 }, onChange: {
+                writes.append($0)
+                callbackCounts.append(observedModel?.pendingChangeCount ?? -1)
+            }
+        )
+        observedModel = model
+        model.setHidden(true, for: item)
+        var replacement = model.preferences
+        replacement.itemControls.setHidden(changeHiddenSet, forKey: "external.owner")
+        model.preferences = replacement
+        model.applyPlacementChanges()
+
+        #expect(callbackCounts == [0])
+        #expect(writes == [replacement])
+        #expect(!model.hasPendingChanges)
+        #expect(!model.hasPendingChange(for: item))
+        #expect(!model.isHidden(item))
+        #expect(model.preferences == replacement)
+        #expect(!model.preferences.itemControls.hasPlacementIntent(item.snapshot))
+        #expect(retries == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func cancelledAndFailedImportKeepTheDraft(fails: Bool) {
+        let item = makeItem(observedHidden: false)
+        var writes = 0
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { [item] },
+            onRetryPlacement: { retries += 1 }, onChange: { _ in writes += 1 }
+        )
+        model.setHidden(true, for: item)
+        model.importLayout(using: {
+            if fails { throw LayoutConfigError.malformed }
+            return nil
+        })
+
+        #expect(model.hasPendingChanges)
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.hasPendingChange(for: item))
+        #expect(model.isHidden(item))
+        #expect(model.preferences == .default)
+        #expect(model.transferFailed == fails)
+        #expect((model.transferMessage != nil) == fails)
+        #expect(writes == 0)
+        #expect(retries == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func successfulImportClearsDraftEvenWhenPlacementSetsAreIdentical(changesPlacement: Bool) {
+        let item = makeItem(observedHidden: false)
+        let loginItem = LoginItemService()
+        // Matching the current service state avoids requesting a native registration change.
+        let initial = Preferences(launchAtLogin: loginItem.isEnabled)
+        weak var observedModel: SettingsModel?
+        var callbackCounts: [Int] = []
+        var writes: [Preferences] = []
+        var retries = 0
+        let model = SettingsModel(
+            preferences: initial, loginItem: loginItem, itemsProvider: { [item] },
+            onRetryPlacement: { retries += 1 }, onChange: {
+                writes.append($0)
+                callbackCounts.append(observedModel?.pendingChangeCount ?? -1)
+            }
+        )
+        observedModel = model
+        model.setHidden(true, for: item)
+        var imported = initial
+        imported.autoRehide = false
+        imported.itemAliases.setAlias("Imported alias", for: item.snapshot)
+        if changesPlacement { imported.itemControls.setHidden(false, for: item.snapshot) }
+        model.importLayout(using: { imported })
+        model.applyPlacementChanges()
+
+        #expect(callbackCounts == [0])
+        #expect(writes == [imported])
+        #expect(!model.hasPendingChanges)
+        #expect(!model.hasPendingChange(for: item))
+        #expect(model.preferences == imported)
+        #expect(model.transferMessage == "Imported settings.")
+        #expect(!model.transferFailed)
+        #expect(retries == 0)
+    }
+
+    @Test func previewContainsOnlyLoadedItemsAndNeverCallsTheProvider() {
+        let item = makeItem(observedHidden: false)
+        let preferences = Preferences(itemControls: ItemControlStore(hiddenInMenuBar: ["absent"]))
+        var reads = 0
+        var writes = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return [item] }, onChange: { _ in writes += 1 }
+        )
+        model.setHidden(true, for: item)
+
+        for _ in 0..<3 {
+            #expect(model.placementPreview.shown.isEmpty)
+            #expect(model.placementPreview.hidden.isEmpty)
+            #expect(model.placementPreview.unknown.isEmpty)
+        }
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.preferences == preferences)
+        #expect(reads == 0)
+        #expect(writes == 0)
+    }
+
+    @Test func previewProjectsAllSavedIntentsWhileDraftingOrApplyingSeparatelyFromRows() async {
+        let items = [
+            makeItem("saved.hidden", id: 1, observedHidden: false),
+            makeItem("saved.shown", id: 2, observedHidden: true),
+            makeItem("unknown.hidden", id: 3), makeItem("unknown.shown", id: 4),
+            makeItem("unknown.unconfigured", id: 5),
+            makeItem("unconfigured.hidden", id: 6, observedHidden: true),
+            makeItem("unconfigured.shown", id: 7, observedHidden: false),
+            makeItem("unknown.untouched", id: 8)
+        ]
+        let preferences = Preferences(itemControls: ItemControlStore(
+            hiddenInMenuBar: ["saved.hidden", "unknown.hidden"],
+            shownInMenuBar: ["saved.shown", "unknown.shown"]
+        ))
+        var reads = 0
+        var writes = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+        model.placementPending = true
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 6])
+        #expect(model.placementPreview.shown.map(\.id) == [1, 7])
+        #expect(model.placementPreview.unknown.map(\.id) == [3, 4, 5, 8])
+        #expect(items.map { model.isHidden($0) } == [false, true, true, false, false, true, false, false])
+
+        model.setHidden(false, forAll: [items[2], items[4]])
+        #expect(model.pendingChangeCount == 2)
+        #expect(model.placementPreview.hidden.map(\.id) == [1, 6])
+        #expect(model.placementPreview.shown.map(\.id) == [2, 3, 4, 5, 7])
+        #expect(model.placementPreview.unknown.map(\.id) == [8])
+        #expect(model.partition(items).hidden.map(\.id) == [2, 6])
+        #expect(model.partition(items).shown.map(\.id) == [1, 3, 4, 5, 7, 8])
+        #expect(!model.hasPendingChange(for: items[0]))
+        #expect(!model.hasPendingChange(for: items[1]))
+
+        model.placementInProgress = true
+        #expect(model.placementPreview.hidden.map(\.id) == [1, 6])
+        #expect(model.placementPreview.shown.map(\.id) == [2, 3, 4, 5, 7])
+        #expect(model.placementPreview.unknown.map(\.id) == [8])
+        #expect(!model.isHidden(items[2]))
+        #expect(model.pendingChangeCount == 2)
+        model.placementInProgress = false
+        model.discardPlacementChanges()
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 6])
+        #expect(model.placementPreview.shown.map(\.id) == [1, 7])
+        #expect(model.placementPreview.unknown.map(\.id) == [3, 4, 5, 8])
+        model.placementInProgress = true
+        #expect(!model.hasPendingChanges)
+        #expect(model.placementPreview.hidden.map(\.id) == [1, 3, 6])
+        #expect(model.placementPreview.shown.map(\.id) == [2, 4, 7])
+        #expect(model.placementPreview.unknown.map(\.id) == [5, 8])
+        #expect(model.loadedItems.map(\.observedHidden) == items.map(\.observedHidden))
+        #expect(model.preferences == preferences)
+        #expect(writes == 0)
+        #expect(reads == 1)
+    }
+
+    @Test func previewReusesImagesAndCurrentAliasesWithHiddenOnlySuppressionAndOrdering() async throws {
+        var items = [
+            makeItem("shown.first", id: 1, observedHidden: false),
+            makeItem("hidden.unordered", id: 2, observedHidden: true),
+            makeItem("unknown", id: 3),
+            makeItem("hidden.ordered", id: 4, observedHidden: true),
+            makeItem("hidden.suppressed", id: 5, observedHidden: true),
+            makeItem("shown.last", id: 6, observedHidden: false),
+            makeItem("hidden.first", id: 7, observedHidden: true),
+            makeItem("unknown.suppressed", id: 8)
+        ]
+        for index in items.indices { items[index].alias = "Stale alias" }
+        items[3].isDisabled = true
+        let preferences = Preferences(
+            itemAliases: ItemAliasStore(aliases: ["hidden.ordered": "Current alias", "unknown": "Unknown alias"]),
+            itemControls: ItemControlStore(
+                suppressedFromBar: ["hidden.suppressed", "shown.first", "unknown.suppressed"],
+                barOrder: ["hidden.first": 0, "hidden.ordered": 1, "shown.last": 0, "shown.first": 9]
+            )
+        )
+        var reads = 0
+        var writes = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { reads += 1; return items }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+        let preview = model.placementPreview
+        #expect(preview.shown.map(\.id) == [1, 6])
+        #expect(preview.hidden.map(\.id) == [7, 4, 2])
+        #expect(preview.unknown.map(\.id) == [3, 8])
+        #expect(preview.hidden.map(\.alias) == [nil, "Current alias", nil])
+        #expect(preview.unknown.map(\.alias) == ["Unknown alias", nil])
+        #expect(preview.shown.allSatisfy { $0.alias == nil })
+        for item in preview.shown + preview.hidden + preview.unknown {
+            let original = try #require(items.first { $0.id == item.id })
+            #expect(item.image === original.image)
+            #expect(item.snapshot == original.snapshot)
+            #expect(item.observedHidden == original.observedHidden)
+            #expect(item.isDisabled == original.isDisabled)
+        }
+        #expect(writes == 0)
+
+        model.setHidden(true, for: items[0])
+        model.setAlias("", for: items[3])
+        model.setAlias("Fresh name", for: items[1])
+        #expect(model.hasPendingChange(for: items[0]))
+        #expect(model.placementPreview.shown.map(\.id) == [6])
+        #expect(model.placementPreview.hidden.map(\.id) == [7, 4, 2])
+        #expect(model.placementPreview.hidden.map(\.alias) == [nil, nil, "Fresh name"])
+        #expect(model.placementPreview.unknown.map(\.id) == [3, 8])
+        #expect(model.loadedItems.allSatisfy { $0.alias == "Stale alias" })
+        #expect(writes == 2)
+
+        model.preferences.itemControls.setOrderIndex(-1, for: items[1].snapshot)
+        model.preferences.itemControls.setSuppressed(false, for: items[4].snapshot)
+        #expect(model.hasPendingChange(for: items[0]))
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 7, 4, 5])
+        model.discardPlacementChanges()
+        #expect(!model.hasPendingChanges)
+        #expect(model.placementPreview.shown.map(\.id) == [1, 6])
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 7, 4, 5])
+        #expect(model.placementPreview.hidden.map(\.alias) == ["Fresh name", nil, nil, nil])
+        #expect(model.preferences.itemControls.hiddenInMenuBar.isEmpty)
+        #expect(model.preferences.itemControls.shownInMenuBar.isEmpty)
+        #expect(writes == 4)
+        #expect(reads == 1)
     }
 
     private func makeItem(
-        _ owner: String = "ACME",
+        _ owner: String? = "ACME",
         id: CGWindowID = 1,
         observedHidden: Bool? = nil
     ) -> FloatingBarItem {

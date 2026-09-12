@@ -39,6 +39,7 @@ struct PlacementIntegrationTests {
         engine.onPlacementStatusChanged = { [weak engine, weak model] in
             guard let engine, let model else { return }
             model.placementInProgress = engine.placementInProgress
+            model.placementPending = engine.placementPending
             model.placementMessage = engine.placementMessage
             model.placementFailed = engine.placementFailed
         }
@@ -55,6 +56,12 @@ struct PlacementIntegrationTests {
         #expect(model.preferences.itemControls.shownInMenuBar.isEmpty)
 
         model.setHidden(false, for: listed)
+        #expect(model.hasPendingChanges)
+        #expect(!model.placementInProgress)
+        #expect(engine.placementTask == nil)
+        #expect(server.moveRequests.isEmpty)
+        model.applyPlacementChanges()
+        #expect(!model.hasPendingChanges)
         #expect(model.placementInProgress)
         let task = try #require(engine.placementTask)
         await task.value
@@ -65,6 +72,7 @@ struct PlacementIntegrationTests {
         #expect(model.preferences.itemControls.shownInMenuBar == ["Test App"])
         #expect(!model.isHidden(try #require(model.loadedItems.first)))
         #expect(!model.placementInProgress)
+        #expect(!model.placementPending)
         #expect(!model.placementFailed)
         #expect(!engine.placementPending)
     }
@@ -201,6 +209,7 @@ struct PlacementIntegrationTests {
         server.moveError = .moveFailed(windowID: 1)
         await model.reloadItems()
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        model.applyPlacementChanges()
         await (try #require(engine.placementTask)).value
 
         #expect(model.placementFailed)
@@ -211,6 +220,8 @@ struct PlacementIntegrationTests {
 
         server.moveError = nil
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        #expect(model.hasPendingChanges)
+        model.applyPlacementChanges()
         await (try #require(engine.placementTask)).value
         #expect(!model.isHidden(try #require(model.loadedItems.first)))
         #expect(!model.placementFailed)
@@ -225,8 +236,12 @@ struct PlacementIntegrationTests {
         engine.onNeedsAccessibilityForMove = { permissionRequests += 1 }
         await model.reloadItems()
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        #expect(permissionRequests == 0)
+        #expect(!engine.placementPending)
+        model.applyPlacementChanges()
 
         #expect(engine.placementPending)
+        #expect(model.placementPending)
         #expect(server.moveRequests.isEmpty)
         #expect(permissionRequests == 1)
         #expect(!model.placementInProgress)
@@ -238,6 +253,7 @@ struct PlacementIntegrationTests {
 
         #expect(server.moveRequests.count == 1)
         #expect(!engine.placementPending)
+        #expect(!model.placementPending)
         #expect(!model.placementFailed)
         #expect(permissionRequests == 1)
     }
@@ -247,7 +263,10 @@ struct PlacementIntegrationTests {
         await model.reloadItems()
         engine.menuTogglePause()
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        #expect(!engine.placementPending)
+        model.applyPlacementChanges()
         #expect(engine.placementPending)
+        #expect(model.placementPending)
         #expect(server.moveRequests.isEmpty)
         #expect(!model.placementInProgress)
 
@@ -256,9 +275,10 @@ struct PlacementIntegrationTests {
         #expect(server.moveRequests.count == 1)
         #expect(!model.isHidden(try #require(model.loadedItems.first)))
         #expect(!engine.placementPending)
+        #expect(!model.placementPending)
     }
 
-    @Test func aSupersededRequestCannotMoveOrPublishFailureAfterTheNewRequest() async throws {
+    @Test func externalPreferenceUpdateSupersedesAnActiveApplyWithoutStaleMovesOrFailure() async throws {
         let (server, engine, model) = fixture()
         let started = AsyncGate()
         let finish = AsyncGate()
@@ -274,10 +294,15 @@ struct PlacementIntegrationTests {
         await model.reloadItems()
         let listed = try #require(model.loadedItems.first)
         model.setHidden(false, for: listed)
+        model.applyPlacementChanges()
         await started.wait()
         let old = try #require(engine.placementTask)
-        model.setHidden(true, for: listed)
+        var replacement = model.preferences.itemControls
+        replacement.setHidden(true, for: listed.snapshot)
+        model.preferences.itemControls = replacement
         let latest = try #require(engine.placementTask)
+        #expect(old.isCancelled)
+        #expect(!latest.isCancelled)
         await finish.open()
         await latest.value
         await old.value
@@ -286,7 +311,10 @@ struct PlacementIntegrationTests {
         #expect(model.isHidden(try #require(model.loadedItems.first)))
         #expect(model.preferences.itemControls.hiddenInMenuBar == ["Test App"])
         #expect(model.preferences.itemControls.shownInMenuBar.isEmpty)
+        #expect(calls == 2)
+        #expect(!model.hasPendingChanges)
         #expect(!model.placementInProgress)
+        #expect(!model.placementPending)
         #expect(!model.placementFailed)
     }
 
@@ -328,6 +356,7 @@ struct PlacementIntegrationTests {
         server.canSynthesizeClicks = false
         await model.reloadItems()
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        model.applyPlacementChanges()
         await engine.revealForActivation()
         server.canSynthesizeClicks = true
         engine.resumePendingPlacement()
@@ -388,6 +417,7 @@ struct PlacementIntegrationTests {
         }
         await model.reloadItems()
         model.setHidden(false, for: try #require(model.loadedItems.first))
+        model.applyPlacementChanges()
         await started.wait()
         let old = try #require(engine.placementTask)
         let activation = Task { await engine.revealForActivation() }

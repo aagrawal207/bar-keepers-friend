@@ -2,25 +2,37 @@ import AppKit
 import BarKeepersFriendCore
 import SwiftUI
 
-/// The settings UI: an app-identity header above a tabbed body. "General" holds the behavior
-/// toggles; "Items" is the per-item manager (show-in-bar / search-only, alias, order) plus an
-/// honest, read-only reflection of the OS-owned visible/hidden state.
+// Placement edits stay local to the Items tab's model until explicitly applied.
 struct SettingsView: View {
+    enum Tab: Hashable {
+        case general, items
+    }
+
     @Bindable var model: SettingsModel
+    @State private var selectedTab: Tab
+
+    init(model: SettingsModel, initialTab: Tab = .general) {
+        self.model = model
+        _selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             AppIdentityHeader()
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-identity-header")
             Divider()
-            TabView {
+            TabView(selection: $selectedTab) {
                 GeneralSettingsTab(model: model)
                     .tabItem { Label("General", systemImage: "gearshape") }
+                    .tag(Tab.general)
                 ItemsSettingsTab(model: model)
                     .tabItem { Label("Items", systemImage: "menubar.rectangle") }
+                    .tag(Tab.items)
             }
             .padding(.top, 8)
         }
-        .frame(width: 460, height: 620)
+        .frame(width: 640, height: 720)
     }
 }
 
@@ -238,30 +250,72 @@ private struct PermissionRow: View {
 
 // MARK: - Items tab
 
-/// Per-item manager: a single list of every menu bar item with a Shown / Hidden control. Flipping
-/// an item to Hidden moves it behind the anchor (into the floating bar); Shown moves it back. This
-/// is the whole point of the app, made direct — no dragging, no jargon.
-private struct ItemsSettingsTab: View {
+struct ItemsSettingsTab: View {
     @Bindable var model: SettingsModel
-    /// The listed items, loaded asynchronously (enumerating + attributing the live menu bar).
+
+    var body: some View {
+        content
+            .task { await model.reloadItems() }
+    }
+
+    var content: ItemsSettingsContent { ItemsSettingsContent(model: model) }
+}
+
+struct ItemsSettingsContent: View {
+    @Bindable var model: SettingsModel
     private var items: [FloatingBarItem] { model.loadedItems }
     private var loading: Bool { model.itemsLoading }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            placementPreview
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            listHeader
 
-            if loading {
+            if let error = model.itemsLoadError {
+                HStack(spacing: 8) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-items-error")
+                    Spacer(minLength: 0)
+                    Button("Retry Reading") { Task { await model.reloadItems() } }
+                        .controlSize(.small)
+                        .disabled(loading)
+                        .accessibilityIdentifier("settings-items-retry-reading")
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
+
+            if loading && items.isEmpty {
                 loadingState
             } else if items.isEmpty {
                 emptyState
             } else {
                 groupedList
             }
+
+            Divider()
+            placementFooter
         }
         .padding(.top, 8)
-        .disabled(model.placementInProgress)
-        .task { await model.reloadItems() }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-items-content")
+    }
+
+    private var placementPreview: some View {
+        let preview = model.placementPreview
+        return SettingsPlacementPreview(
+            shown: preview.shown, hidden: preview.hidden, unknown: preview.unknown,
+            style: model.preferences.floatingBarStyle,
+            useFloatingBar: model.preferences.useFloatingBar,
+            hasPendingChanges: model.hasPendingChanges,
+            placementInProgress: model.placementInProgress
+        )
     }
 
     private var groupedList: some View {
@@ -283,34 +337,38 @@ private struct ItemsSettingsTab: View {
             }
         }
         .listStyle(.inset)
+        .frame(minHeight: 120, maxHeight: .infinity)
+        .accessibilityIdentifier("settings-items-list")
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Choose which menu bar items to hide.")
-                    .font(.callout)
-                Spacer()
-                if !loading && !items.isEmpty {
-                    bulkActions
-                }
-            }
-            Text("Hidden items move into Bar Keeper's Friend's bar — click the menu bar icon (or press the shortcut) to reveal them.")
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Arrange Menu Bar Items")
+                .font(.headline)
+            Text("Choose Shown or Hidden, review the preview, then Apply Changes. Editing placement here does not move items.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            if model.placementInProgress {
-                Text("Applying placement...")
-                    .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+    }
+
+    private var listHeader: some View {
+        HStack(spacing: 8) {
+            Text("Items (\(items.count))")
+                .font(.subheadline.weight(.medium))
+            if loading && !items.isEmpty {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Refreshing...")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if let message = model.placementMessage {
-                Text(message)
-                    .font(.callout)
-                    .foregroundStyle(model.placementFailed ? .red : .secondary)
+                    .accessibilityIdentifier("settings-items-refreshing")
             }
-            if let error = model.itemsLoadError {
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.red)
+            Spacer()
+            if !items.isEmpty {
+                bulkActions
             }
         }
         .padding(.horizontal, 16)
@@ -318,18 +376,77 @@ private struct ItemsSettingsTab: View {
     }
 
     private var bulkActions: some View {
-        let parts = model.partition(items)
-        return HStack(spacing: 8) {
+        HStack(spacing: 8) {
             Button("Hide All") {
                 model.setHidden(true, forAll: items)
             }
-            .disabled(parts.shown.isEmpty)
+            .disabled(!model.canSetHidden(true, forAll: items))
+            .accessibilityIdentifier("settings-placement-hide-all")
             Button("Show All") {
                 model.setHidden(false, forAll: items)
             }
-            .disabled(parts.hidden.isEmpty)
+            .disabled(!model.canSetHidden(false, forAll: items))
+            .accessibilityIdentifier("settings-placement-show-all")
         }
         .controlSize(.small)
+    }
+
+    private var placementFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if model.placementInProgress {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    placementStatus(model.placementMessage ?? "Applying placement...")
+                }
+            } else if let message = model.placementMessage {
+                placementStatus(message)
+            } else if model.placementFailed {
+                placementStatus("Placement could not be completed. Retry to try the saved placement again.")
+            } else if model.placementPending {
+                placementStatus("Saved placement is waiting to be applied.")
+            }
+
+            HStack(spacing: 8) {
+                Text(model.pendingChangeCount == 1 ? "1 pending change" : "\(model.pendingChangeCount) pending changes")
+                    .font(.callout)
+                    .help("Placement drafts remain when Settings closes, but are not saved across app restarts. Discard affects placement edits only.")
+                    .accessibilityIdentifier("settings-placement-count")
+                Spacer(minLength: 8)
+                if !model.hasPendingChanges && (model.placementFailed || model.placementPending) {
+                    Button("Retry") { model.retryPlacement() }
+                        .disabled(model.placementInProgress)
+                        .help("Try the saved placement again.")
+                        .accessibilityIdentifier("settings-placement-retry")
+                }
+                Button("Discard") { model.discardPlacementChanges() }
+                    .disabled(!model.hasPendingChanges || model.placementInProgress)
+                    .accessibilityIdentifier("settings-placement-discard")
+                Button("Apply Changes") { model.applyPlacementChanges() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.hasPendingChanges || model.placementInProgress)
+                    .accessibilityIdentifier("settings-placement-apply")
+            }
+            Text("Apply and Discard affect placement only. Names save separately on Return or when you leave the field.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-placement-footer")
+    }
+
+    private func placementStatus(_ message: String) -> some View {
+        Text(message)
+            .font(.callout)
+            .foregroundStyle(model.placementFailed && !model.placementInProgress ? .red : .secondary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(message)
+            .accessibilityIdentifier("settings-placement-status")
     }
 
     private var loadingState: some View {
@@ -339,6 +456,7 @@ private struct ItemsSettingsTab: View {
             Text("Reading the menu bar…")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("settings-items-loading")
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -350,9 +468,11 @@ private struct ItemsSettingsTab: View {
             Image(systemName: "menubar.rectangle")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text("No manageable items found.")
+            Text(model.itemsLoadError == nil ? "No manageable items found." : "Items could not be loaded.")
                 .font(.headline)
-            Text("Only third-party menu bar items can be hidden. System items (Control Center, the clock, Spotlight) are left alone.")
+            Text(model.itemsLoadError == nil
+                 ? "This list contains manageable menu bar items, not every system item."
+                 : "Use Retry Reading to load the items again. Your placement draft is kept.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -363,13 +483,17 @@ private struct ItemsSettingsTab: View {
     }
 }
 
-/// One row in the Items list: glyph, editable name, and a Shown/Hidden toggle. Toggling moves the
-/// real item across the anchor (via the engine's reconcile, fired by the preferences change).
 private struct ItemRow: View {
     @Bindable var model: SettingsModel
     let item: FloatingBarItem
-    @State private var alias: String = ""
+    @State private var aliasEdit: (text: String, baseline: String)?
     @FocusState private var aliasFocused: Bool
+
+    private var displayName: String {
+        var current = item
+        current.alias = model.alias(for: item)
+        return current.displayName
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -379,19 +503,39 @@ private struct ItemRow: View {
                 .frame(width: 18, height: 18)
                 .opacity(model.isHidden(item) ? 0.5 : 1)
 
-            TextField(item.displayName, text: $alias)
+            TextField(displayName, text: Binding(
+                get: { aliasEdit?.text ?? model.alias(for: item) },
+                set: { text in
+                    let saved = model.alias(for: item)
+                    aliasEdit = text == saved ? nil : (text, aliasEdit?.baseline ?? saved)
+                }
+            ))
                 .textFieldStyle(.plain)
                 .lineLimit(1)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .focused($aliasFocused)
-                // Commit the nickname on Return or when the field loses focus — NOT on every
-                // keystroke. setAlias mutates preferences, which fires the app-wide onChange
-                // (persist + re-apply); doing that per character would thrash the disk.
-                .onSubmit { model.setAlias(alias, for: item) }
+                .accessibilityLabel("Display name for \(displayName)")
+                .accessibilityIdentifier("settings-item-alias-\(item.id)")
+                .help("Rename \(displayName). Names save on Return or when you leave the field; they do not need Apply.")
+                // Committing only on Return or blur avoids persisting every keystroke.
+                .onSubmit { commitAlias() }
                 .onChange(of: aliasFocused) { _, focused in
-                    if !focused { model.setAlias(alias, for: item) }
+                    if !focused { commitAlias() }
                 }
 
             Spacer(minLength: 8)
+
+            if model.hasPendingChange(for: item) {
+                Text("Pending")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings-item-pending-\(item.id)")
+            } else if item.observedHidden == nil {
+                Text("Unknown")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("No placement observation is available. The control shows saved intent or its default, not a confirmed position.")
+            }
 
             Picker("", selection: Binding(
                 get: { model.isHidden(item) },
@@ -403,10 +547,23 @@ private struct ItemRow: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
+            .disabled(model.placementInProgress)
+            .accessibilityLabel("Placement for \(displayName)")
+            .accessibilityHint("Changes are staged until you choose Apply Changes.")
+            .help("Placement for \(displayName). Changes are staged until Apply Changes.")
+            .accessibilityIdentifier("settings-item-placement-\(item.id)")
         }
         .padding(.vertical, 4)
-        .onAppear {
-            alias = model.alias(for: item)
-        }
+        .accessibilityElement(children: .contain)
+        // Regrouping can remove a row before its focus-loss callback commits the name.
+        .onDisappear { commitAlias() }
+    }
+
+    private func commitAlias() {
+        guard let edit = aliasEdit else { return }
+        aliasEdit = nil
+        // A rename arriving during editing must not be overwritten by a stale Return or blur.
+        guard model.alias(for: item) == edit.baseline, edit.text != edit.baseline else { return }
+        model.setAlias(edit.text, for: item)
     }
 }

@@ -1,6 +1,6 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-11. Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-12. Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
@@ -31,7 +31,7 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 | Presets/profiles | One layout can be exported/imported | Named arrangements before automatic triggers |
 | Triggers | Not implemented | Battery, Wi-Fi, app/schedule conditions after presets are stable |
 | Groups/Always Hidden | Not implemented as usable workflows | Tested models and native qualification without weakening protected-item guards |
-| Settings/onboarding | Settings and live permission status exist | Export errors, login approval, first-run guidance, and visual refinement |
+| Settings/onboarding | Staged Apply/Discard placement, cached Menu Bar and Hidden Bar/List previews, live permission status | Native focus/VoiceOver QA, export errors, login approval, and first-run guidance |
 | Updates/install | Local Apple Development build | Restart, signed update feed, Developer ID signing, notarization, and installation verification |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
@@ -53,6 +53,37 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 - Never race a new native operation past an unfinished one merely to make a timeout appear fixed.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
+
+## Settings Verification
+
+Full build/test on 2026-09-12: 510 tests across 42 suites, 833 invocations, zero failures or skips.
+The built app passed strict code-signature verification. Independent reviews found no remaining
+issues after fixes for stale-observation retries, deferred-intent reversal, complete draft previews,
+and alias loss during row regrouping.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Owner-keyed drafts, reversal without manufacturing intent, mixed/unknown siblings, merge preservation | `ItemPlacementDraftTests` | Unit |
+| Apply once, identical-intent retry, in-progress guards, import replacement, concurrent reloads, preview order/aliases | `SettingsModelTests` | Adapter |
+| Zero native work while drafting/discarding/previewing; one shared placement cycle and successful capture after Apply | `StagedPlacementIntegrationTests` with counted native dependencies | Hostless integration |
+| Partial failure, unresolved-only retry, stale/overlapping Shown observations, paused request replacement | `StagedPlacementIntegrationTests`, `PlacementIntegrationTests` | Hostless integration |
+| Actual Apply/Discard/bulk actions, retained cached rows, unknown choices, mounted alias edits across regrouping | `SettingsViewTests` | Hostless rendering + interaction |
+| Cached pixels, accessible non-button labels, horizontal/vertical overflow, full 640x720 window fit with errors | `SettingsPlacementPreviewTests`, `SettingsViewTests` | Hostless rendering |
+
+Draft edits and previews add no polling, capture, telemetry, or permission requirement. Existing
+placement/capture diagnostics remain in use; tests assert work counts rather than log strings.
+`scan_diff`, `gitleaks`, and `semgrep` were unavailable; the production diff received manual security
+review, not an automated scan pass.
+
+The previews are schematics of manageable items. They use cached glyphs or app icons, keep unknown
+placement separate, and do not promise exact native spacing/order or fresh images. Unapplied drafts
+survive closing Settings only within the running session. Apply persists desired placement before
+native verification, so failures remain visible and retryable rather than rolling back saved intent.
+Batching removes repeated outer cycles; native settling/retries and separate post-move attribution
+passes remain. No native end-to-end speed measurement or external-display fix is claimed.
+
+Test windows never order on screen or post input. They enable and restore process-local accessibility
+metadata for in-process control testing. On-screen focus and VoiceOver navigation still need human QA.
 
 ## Hover Verification
 

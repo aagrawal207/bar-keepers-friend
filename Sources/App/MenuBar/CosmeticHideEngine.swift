@@ -615,7 +615,7 @@ final class CosmeticHideEngine {
             if result.observationFailed {
                 self.updatePlacementStatus(applying: false, message: "Couldn't read a stable menu bar layout. Items have been left revealed; try again.", failed: true)
             } else if !result.failed.isEmpty {
-                self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Shown or Hidden to retry.", failed: true)
+                self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Retry to apply the saved placement again.", failed: true)
             } else {
                 self.updatePlacementStatus(applying: false)
             }

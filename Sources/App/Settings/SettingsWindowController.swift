@@ -46,7 +46,13 @@ final class SettingsWindowController {
 @Observable
 final class SettingsModel {
     var preferences: Preferences {
-        didSet { onChange(preferences) }
+        didSet {
+            if oldValue.itemControls.hiddenInMenuBar != preferences.itemControls.hiddenInMenuBar
+                || oldValue.itemControls.shownInMenuBar != preferences.itemControls.shownInMenuBar {
+                placementDraft = ItemPlacementDraft()
+            }
+            onChange(preferences)
+        }
     }
 
     private let loginItem: LoginItemService
@@ -126,9 +132,14 @@ final class SettingsModel {
     private(set) var itemsLoading = true
     private(set) var itemsLoadError: String? = nil
     @ObservationIgnored private var itemsLoadGeneration: UInt64 = 0
+    private var placementDraft = ItemPlacementDraft()
     var placementInProgress = false
     var placementMessage: String? = nil
     var placementFailed = false
+    var placementPending = false
+
+    var hasPendingChanges: Bool { !placementDraft.isEmpty }
+    var pendingChangeCount: Int { placementDraft.count }
 
     func reloadItems() async {
         guard !Task.isCancelled else { return }
@@ -163,6 +174,7 @@ final class SettingsModel {
 
     /// Pending placement can display intent, but an observed failure must remain actionable.
     func isHidden(_ item: FloatingBarItem) -> Bool {
+        if let hidden = placementDraft.hidden(for: item.snapshot) { return hidden }
         let controls = preferences.itemControls
         if placementInProgress && controls.hasPlacementIntent(item.snapshot) {
             return controls.isHidden(item.snapshot)
@@ -170,22 +182,82 @@ final class SettingsModel {
         return item.observedHidden ?? controls.isHidden(item.snapshot)
     }
 
+    func hasPendingChange(for item: FloatingBarItem) -> Bool {
+        placementDraft.hidden(for: item.snapshot) != nil
+    }
+
     func setHidden(_ hidden: Bool, for item: FloatingBarItem) {
         setHidden(hidden, forAll: [item])
     }
 
-    /// A batch needs only one preference write. Identical intent still needs a retry because
-    /// a native move may have failed without changing the saved request.
     func setHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) {
-        var controls = preferences.itemControls
-        for item in items {
-            controls.setHidden(hidden, for: item.snapshot)
+        guard !placementInProgress else { return }
+        placementDraft = draftSettingHidden(hidden, forAll: items)
+    }
+
+    func canSetHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) -> Bool {
+        guard !placementInProgress else { return false }
+        return draftSettingHidden(hidden, forAll: items) != placementDraft
+    }
+
+    private func draftSettingHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) -> ItemPlacementDraft {
+        let keys = Set(items.compactMap { ItemControlStore.key(for: $0.snapshot) })
+        let itemIDs = Set(items.map(\.id))
+        let siblings = loadedItems.filter {
+            guard let key = ItemControlStore.key(for: $0.snapshot) else { return false }
+            return keys.contains(key) && !itemIDs.contains($0.id)
         }
-        if controls == preferences.itemControls {
-            onRetryPlacement()
-        } else {
+        var draft = placementDraft
+        draft.setHidden(
+            hidden, for: (items + siblings).map { ($0.snapshot, $0.observedHidden) },
+            controls: preferences.itemControls
+        )
+        return draft
+    }
+
+    func applyPlacementChanges() {
+        guard !placementInProgress, hasPendingChanges else { return }
+        let controls = placementDraft.applying(to: preferences.itemControls)
+        // Callbacks can synchronously reenter Settings; no applied edits may remain pending.
+        placementDraft = ItemPlacementDraft()
+        if controls != preferences.itemControls {
             preferences.itemControls = controls
+        } else {
+            // Cached section membership cannot verify the native destination's full-edge postcondition.
+            onRetryPlacement()
         }
+    }
+
+    func discardPlacementChanges() {
+        guard !placementInProgress else { return }
+        placementDraft = ItemPlacementDraft()
+    }
+
+    func retryPlacement() {
+        guard !placementInProgress, !hasPendingChanges, placementFailed || placementPending else { return }
+        onRetryPlacement()
+    }
+
+    var placementPreview: (shown: [FloatingBarItem], hidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
+        // Apply reconciles every saved owner, including owners not edited in this draft.
+        let controls = placementDraft.applying(to: preferences.itemControls)
+        let projectsIntent = hasPendingChanges || placementInProgress
+        var shown: [FloatingBarItem] = []
+        var hidden: [FloatingBarItem] = []
+        var unknown: [FloatingBarItem] = []
+        for var item in loadedItems {
+            item.alias = preferences.itemAliases.alias(for: item.snapshot)
+            let projectedHidden: Bool? = projectsIntent && controls.hasPlacementIntent(item.snapshot)
+                ? controls.isHidden(item.snapshot) : item.observedHidden
+            switch projectedHidden {
+            case true?: hidden.append(item)
+            case false?: shown.append(item)
+            case nil: unknown.append(item)
+            }
+        }
+        let byID = Dictionary(hidden.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let visible = ItemControlStore.visibleBarItems(from: hidden.map(\.snapshot), controls: controls)
+        return (shown, visible.compactMap { byID[$0.windowID] }, unknown)
     }
 
     /// The user's display nickname for the item, edited via the name field. Empty clears it.
@@ -218,14 +290,17 @@ final class SettingsModel {
     /// Reads settings from a user-chosen JSON file and applies them. A malformed/incompatible
     /// file surfaces an error line instead of throwing into the UI. Assigning `preferences`
     /// triggers `onChange`, so the whole app (engine, bar, hotkeys) re-applies at once.
-    func importLayout() {
+    func importLayout(
+        using importer: @MainActor () throws -> Preferences? = { try LayoutTransferService.importLayout() }
+    ) {
         do {
-            if var imported = try LayoutTransferService.importLayout() {
+            if var imported = try importer() {
                 // Keep the login-item registration in sync with the imported flag, and record
                 // what actually took: if registration was rejected, don't persist a launchAtLogin
                 // the system didn't honor (same truth-over-intent rule as the toggle setter).
                 let succeeded = loginItem.setEnabled(imported.launchAtLogin)
                 if !succeeded { imported.launchAtLogin = loginItem.isEnabled }
+                placementDraft = ItemPlacementDraft()
                 preferences = imported
                 transferFailed = false
                 transferMessage = "Imported settings."
