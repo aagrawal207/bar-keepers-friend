@@ -39,6 +39,8 @@ final class FloatingBarController {
     private(set) var isVisible = false
     var windowFrame: CGRect? { panel?.frame }
     var onDidHide: (() -> Void)?
+    /// Fires after a capture pass commits new cached glyphs, for consumers that render from the cache.
+    var onCacheUpdated: (() -> Void)?
 
     /// True when at least one hidden item still lacks a real captured glyph (it was omitted or is
     /// showing an app-icon fallback). The launch warm-up uses this to decide whether a second,
@@ -202,6 +204,7 @@ final class FloatingBarController {
             capturedGlyphIDs.removeAll()
             unactivatableWindowIDs.removeAll()
             hasCapturedOnce = true
+            onCacheUpdated?()
             return
         }
         // Collapse co-located windows that back the same visible icon (Tahoe returns a
@@ -285,6 +288,7 @@ final class FloatingBarController {
         capturedGlyphIDs = capturedGlyphIDs.intersection(liveIDs)
         hasCapturedOnce = true
         DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped; glyphs=\(captured) appIconFallback=\(fellBack) omitted=\(omitted); cache size=\(iconCache.count)")
+        onCacheUpdated?()
         // If the bar is open, re-lay-it-out so a freshly captured glyph (or a now-complete set)
         // appears without the user having to reopen it.
         if isVisible {
@@ -977,4 +981,24 @@ final class FloatingBarController {
 private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+// MARK: - Group status items
+
+extension FloatingBarController {
+    /// Cached hidden items with their cached glyph or app-icon fallback, for group menus.
+    /// Reads the cache only; nothing is enumerated, captured, or moved.
+    func cachedHiddenItems() -> [FloatingBarItem] {
+        cachedHiddenOrder.map { snapshot in
+            FloatingBarItem(
+                snapshot: snapshot,
+                image: iconCache[snapshot.windowID] ?? AppIconProvider.icon(forPID: snapshot.ownerPID),
+                isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
+                alias: preferences.itemAliases.alias(for: snapshot)
+            )
+        }
+    }
+
+    /// Window ids whose cached image is a captured menu bar glyph rather than an app-icon fallback.
+    var capturedGlyphWindowIDs: Set<CGWindowID> { capturedGlyphIDs }
 }

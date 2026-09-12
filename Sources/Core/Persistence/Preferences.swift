@@ -70,6 +70,27 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Hover reveal is opt-in and applies only to the floating bar, independently of auto-rehide.
     public var revealOnHover: Bool
 
+    /// Scroll/swipe reveal is opt-in like hover and also applies only to the floating bar.
+    public var revealOnScroll: Bool
+
+    /// Named saved arrangements; applying one replaces `itemControls` only.
+    public var presets: [LayoutPreset]
+
+    /// Rules that apply a preset while their conditions hold, then restore the prior arrangement.
+    public var triggers: [TriggerRule]
+
+    /// Which trigger is active and the arrangement to restore when it deactivates.
+    public var triggerState: TriggerRuntimeState
+
+    /// Items combined behind one BKF-owned menu bar icon; grouped owners count as Hidden.
+    public var itemGroups: [ItemGroup]
+
+    /// Global NSStatusItemSpacing/SelectionPadding override shared by every app after relaunch.
+    public var menuBarSpacing: MenuBarSpacing
+
+    /// Device-local flag; the first-run walkthrough shows until it is completed or skipped.
+    public var hasCompletedOnboarding: Bool
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -83,7 +104,14 @@ public struct Preferences: Equatable, Sendable, Codable {
         itemAliases: ItemAliasStore = ItemAliasStore(),
         itemControls: ItemControlStore = ItemControlStore(),
         dismissBarOnMouseExit: Bool = true,
-        revealOnHover: Bool = false
+        revealOnHover: Bool = false,
+        revealOnScroll: Bool = false,
+        presets: [LayoutPreset] = [],
+        triggers: [TriggerRule] = [],
+        triggerState: TriggerRuntimeState = TriggerRuntimeState(),
+        itemGroups: [ItemGroup] = [],
+        menuBarSpacing: MenuBarSpacing = .systemDefault,
+        hasCompletedOnboarding: Bool = false
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay)
@@ -98,6 +126,13 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.itemControls = itemControls
         self.dismissBarOnMouseExit = dismissBarOnMouseExit
         self.revealOnHover = revealOnHover
+        self.revealOnScroll = revealOnScroll
+        self.presets = PresetLibrary.normalized(presets)
+        self.triggers = triggers
+        self.triggerState = triggerState
+        self.itemGroups = ItemGroupLibrary.normalized(itemGroups)
+        self.menuBarSpacing = menuBarSpacing
+        self.hasCompletedOnboarding = hasCompletedOnboarding
     }
 
     public static let `default` = Preferences()
@@ -123,6 +158,19 @@ public struct Preferences: Equatable, Sendable, Codable {
         case itemControls
         case dismissBarOnMouseExit
         case revealOnHover
+        case revealOnScroll
+        case presets
+        case triggers
+        case triggerState
+        case itemGroups
+        case menuBarSpacing
+        case hasCompletedOnboarding
+    }
+
+    /// Keeps every readable element so one corrupt entry cannot reset the whole store.
+    private struct Lossy<Value: Decodable>: Decodable {
+        let value: Value?
+        init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
     }
 
     /// Decodes leniently: any missing key falls back to its default, so adding a new
@@ -145,6 +193,18 @@ public struct Preferences: Equatable, Sendable, Codable {
         itemControls = try container.decodeIfPresent(ItemControlStore.self, forKey: .itemControls) ?? d.itemControls
         dismissBarOnMouseExit = try container.decodeIfPresent(Bool.self, forKey: .dismissBarOnMouseExit) ?? d.dismissBarOnMouseExit
         revealOnHover = try container.decodeIfPresent(Bool.self, forKey: .revealOnHover) ?? false
+        revealOnScroll = try container.decodeIfPresent(Bool.self, forKey: .revealOnScroll) ?? false
+        let rawPresets = (try? container.decodeIfPresent([Lossy<LayoutPreset>].self, forKey: .presets)) ?? nil
+        presets = PresetLibrary.normalized((rawPresets ?? []).compactMap(\.value))
+        let rawTriggers = (try? container.decodeIfPresent(TriggerRule.LossyArray.self, forKey: .triggers)) ?? nil
+        triggers = rawTriggers?.rules ?? []
+        triggerState = ((try? container.decodeIfPresent(TriggerRuntimeState.self, forKey: .triggerState)) ?? nil)
+            ?? TriggerRuntimeState()
+        let rawGroups = (try? container.decodeIfPresent([Lossy<ItemGroup>].self, forKey: .itemGroups)) ?? nil
+        itemGroups = ItemGroupLibrary.normalized((rawGroups ?? []).compactMap(\.value))
+        menuBarSpacing = ((try? container.decodeIfPresent(MenuBarSpacing.self, forKey: .menuBarSpacing)) ?? nil)
+            ?? d.menuBarSpacing
+        hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
     }
 }
 

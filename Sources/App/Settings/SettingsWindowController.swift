@@ -25,15 +25,18 @@ final class SettingsWindowController {
         )
     }
 
-    func show() {
+    /// A nil tab keeps whatever the user last selected; the window is created only once.
+    func show(tab: SettingsView.Tab? = nil) {
         if window == nil {
-            let hosting = NSHostingController(rootView: SettingsView(model: model))
+            let hosting = NSHostingController(rootView: SettingsView(model: model, initialTab: tab ?? .general))
             let window = NSWindow(contentViewController: hosting)
             window.title = "Bar Keeper's Friend"
             window.styleMask = [.titled, .closable, .miniaturizable]
             window.isReleasedWhenClosed = false
             window.center()
             self.window = window
+        } else if let tab {
+            model.requestedTab = tab
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -49,6 +52,10 @@ final class SettingsModel {
         didSet {
             if oldValue.itemControls.hiddenInMenuBar != preferences.itemControls.hiddenInMenuBar
                 || oldValue.itemControls.shownInMenuBar != preferences.itemControls.shownInMenuBar {
+                // A draft is relative to the arrangement that just changed underneath it.
+                if !placementDraft.isEmpty {
+                    draftDiscardedNotice = "Your pending placement edits were discarded because the saved arrangement changed (a preset or trigger applied)."
+                }
                 placementDraft = ItemPlacementDraft()
             }
             onChange(preferences)
@@ -137,8 +144,25 @@ final class SettingsModel {
     var placementMessage: String? = nil
     var placementFailed = false
     var placementPending = false
+    /// Set once a spacing change was written to the global domain; other apps read it at relaunch.
+    var spacingNeedsLogout = false
+    /// One-shot tab request from outside the window (onboarding, menu); the view consumes it.
+    var requestedTab: SettingsView.Tab?
+    /// Shown in the Items footer until the next edit, so a vanished draft is explained.
+    var draftDiscardedNotice: String?
+
+    /// Placement reads intent with grouped owners forced Hidden, exactly as the engine does.
+    private var effectiveControls: ItemControlStore {
+        ItemGroupLibrary.effectiveControls(groups: preferences.itemGroups, base: preferences.itemControls)
+    }
 
     var hasPendingChanges: Bool { !placementDraft.isEmpty }
+
+    /// Grouped owners are placed by their group, so the Items tab must not offer them a choice.
+    func group(containing item: FloatingBarItem) -> ItemGroup? {
+        guard let key = ItemControlStore.key(for: item.snapshot) else { return nil }
+        return ItemGroupLibrary.group(containing: key, in: preferences.itemGroups)
+    }
     var pendingChangeCount: Int { placementDraft.count }
 
     func reloadItems() async {
@@ -175,7 +199,7 @@ final class SettingsModel {
     /// Pending placement can display intent, but an observed failure must remain actionable.
     func isHidden(_ item: FloatingBarItem) -> Bool {
         if let hidden = placementDraft.hidden(for: item.snapshot) { return hidden }
-        let controls = preferences.itemControls
+        let controls = effectiveControls
         if placementInProgress && controls.hasPlacementIntent(item.snapshot) {
             return controls.isHidden(item.snapshot)
         }
@@ -192,6 +216,7 @@ final class SettingsModel {
 
     func setHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) {
         guard !placementInProgress else { return }
+        draftDiscardedNotice = nil
         placementDraft = draftSettingHidden(hidden, forAll: items)
     }
 
@@ -201,6 +226,9 @@ final class SettingsModel {
     }
 
     private func draftSettingHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) -> ItemPlacementDraft {
+        // Grouped owners are placed by their group; staging them would save intent that only
+        // takes effect after an ungroup.
+        let items = items.filter { group(containing: $0) == nil }
         let keys = Set(items.compactMap { ItemControlStore.key(for: $0.snapshot) })
         let itemIDs = Set(items.map(\.id))
         let siblings = loadedItems.filter {
@@ -240,7 +268,7 @@ final class SettingsModel {
 
     var placementPreview: (shown: [FloatingBarItem], hidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
         // Apply reconciles every saved owner, including owners not edited in this draft.
-        let controls = placementDraft.applying(to: preferences.itemControls)
+        let controls = placementDraft.applying(to: effectiveControls)
         let projectsIntent = hasPendingChanges || placementInProgress
         var shown: [FloatingBarItem] = []
         var hidden: [FloatingBarItem] = []
@@ -300,6 +328,9 @@ final class SettingsModel {
                 // the system didn't honor (same truth-over-intent rule as the toggle setter).
                 let succeeded = loginItem.setEnabled(imported.launchAtLogin)
                 if !succeeded { imported.launchAtLogin = loginItem.isEnabled }
+                // A trigger baseline and the onboarding flag describe this machine, not the file.
+                imported.triggerState = TriggerRuntimeState()
+                imported.hasCompletedOnboarding = preferences.hasCompletedOnboarding
                 placementDraft = ItemPlacementDraft()
                 preferences = imported
                 transferFailed = false

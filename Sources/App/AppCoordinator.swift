@@ -19,12 +19,27 @@ final class AppCoordinator {
     private let hotkeys = HotkeyService()
     private var activationObserver: NSObjectProtocol?
 
+    private var groupStatusItems: GroupStatusItemsController?
+    private let triggerMonitor = TriggerMonitor.system()
+    private let menuBarSpacing = MenuBarSpacingService()
+    private var spacingNeedsLogout = false
+    private let restart = RestartService()
+    private let updates = UpdateCheckService()
+    private var updateCheckInFlight = false
+    private var onboardingController: OnboardingWindowController?
+    /// True while a trigger rewrites intent, so placement defers instead of acting like a Settings edit.
+    private var backgroundApplyInFlight = false
+
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
     /// Listens for SIGUSR2 to toggle the floating bar so it can be screenshotted (dev aid).
     private var showBarSignalSource: DispatchSourceSignal?
 
+    /// Captured before the first save so an upgrade from a pre-onboarding build is not "fresh".
+    private let isFreshInstall: Bool
+
     init() {
+        isFreshInstall = !preferencesStore.hasSavedPreferences
         preferences = preferencesStore.load()
     }
 
@@ -69,6 +84,29 @@ final class AppCoordinator {
         hideEngine = engine
         engine.onOpenSettings = { [weak self] in self?.showSettings() }
         engine.onQuit = { NSApp.terminate(nil) }
+        engine.onRestart = { [weak self] in
+            // Quitting without a helper would just leave the app closed.
+            guard self?.restart.restart() == true else {
+                let alert = NSAlert()
+                alert.messageText = "Could not restart"
+                alert.informativeText = "The relaunch helper failed to start. Quit and reopen Bar Keeper's Friend manually."
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+                return
+            }
+            NSApp.terminate(nil)
+        }
+        engine.onCheckForUpdates = { [weak self] in self?.checkForUpdates() }
+        engine.onApplyPreset = { [weak self] id in self?.applyPreset(id: id) }
+        let scroll = ScrollRevealMonitor(
+            menuBarFrame: { [windowServer] point in try? windowServer.menuBarFrame(forDisplayContaining: point) },
+            onReveal: { [weak engine] in engine?.revealFloatingBarOnScroll() },
+            onHide: { [weak engine] in engine?.hideFloatingBarOnScroll() }
+        )
+        engine.scrollRevealMonitor = scroll
+        let groups = GroupStatusItemsController(activate: { [weak bar] id in bar?.activate(windowID: id) })
+        groupStatusItems = groups
+        bar.onCacheUpdated = { [weak self] in self?.refreshGroupStatusItems() }
         engine.onNeedsAccessibilityForMove = { AccessibilityPermission.requestAndOpenSettings() }
         engine.onPlacementStatusChanged = { [weak self] in self?.syncPlacementStatus() }
         engine.onPlacementCompleted = { [weak self] in
@@ -98,6 +136,110 @@ final class AppCoordinator {
 
         reconcileLoginItem()
         installDiagnosticsSignalHandler()
+        refreshGroupStatusItems()
+        spacingNeedsLogout = menuBarSpacing.applyAtLaunch(preferences.menuBarSpacing)
+        triggerMonitor.onEnvironmentChanged = { [weak self] environment in self?.evaluateTriggers(environment) }
+        triggerMonitor.update(rules: preferences.triggers)
+        if isFreshInstall, !preferences.hasCompletedOnboarding { showOnboarding() }
+    }
+
+    /// Group icons show cached glyphs; rebuilt after every capture and preference change.
+    private func refreshGroupStatusItems() {
+        guard let bar = floatingBar else { return }
+        groupStatusItems?.update(
+            groups: preferences.itemGroups,
+            items: bar.cachedHiddenItems(),
+            aliases: preferences.itemAliases,
+            capturedGlyphWindowIDs: bar.capturedGlyphWindowIDs
+        )
+    }
+
+    /// Triggers rewrite saved intent through the same path as a Settings change, so placement
+    /// and the open Settings window stay consistent with what the rule applied.
+    private func evaluateTriggers(_ environment: TriggerEnvironment) {
+        let result = TriggerEvaluator.step(
+            state: preferences.triggerState, rules: preferences.triggers, presets: preferences.presets,
+            environment: environment, currentControls: preferences.itemControls
+        )
+        var updated = preferences
+        updated.triggerState = result.state
+        if let controls = result.controls { updated.itemControls = controls }
+        guard updated != preferences else { return }
+        DebugLog.log("triggers: active=\(result.state.activeRuleID?.uuidString ?? "none") changedControls=\(result.controls != nil)")
+        backgroundApplyInFlight = true
+        defer { backgroundApplyInFlight = false }
+        applyPreferences(updated)
+    }
+
+    private func applyPreset(id: UUID) {
+        guard let preset = preferences.presets.first(where: { $0.id == id }) else { return }
+        applyPreferences(PresetLibrary.applying(preset, to: preferences))
+    }
+
+    /// One funnel for every preference change made outside the Settings window.
+    private func applyPreferences(_ updated: Preferences) {
+        if let model = settingsWindowController?.model {
+            // The model's didSet re-fires onChange, which persists and re-applies once.
+            model.preferences = updated
+        } else {
+            handlePreferencesChange(updated)
+        }
+    }
+
+    private func handlePreferencesChange(_ updated: Preferences) {
+        let previous = preferences
+        persist(updated)
+        hideEngine?.apply(preferences: updated, userInitiated: !backgroundApplyInFlight)
+        floatingBar?.preferences = updated
+        hotkeys.apply(preferences: updated)
+        triggerMonitor.update(rules: updated.triggers)
+        // A deleted or edited preset changes what an active rule means; rules alone would not re-evaluate.
+        if updated.presets != previous.presets { triggerMonitor.refresh() }
+        refreshGroupStatusItems()
+        // Only an explicit spacing edit may touch the global domain; other apps' manual values stay.
+        if updated.menuBarSpacing != previous.menuBarSpacing, menuBarSpacing.apply(updated.menuBarSpacing) {
+            spacingNeedsLogout = true
+        }
+        settingsWindowController?.model.spacingNeedsLogout = spacingNeedsLogout
+    }
+
+    private func checkForUpdates() {
+        guard !updateCheckInFlight else { return }
+        updateCheckInFlight = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.updateCheckInFlight = false }
+            let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+            let result = await self.updates.checkNow(currentVersion: current)
+            self.hideEngine?.updateAvailable = result.isAvailable
+            let alert = NSAlert()
+            alert.messageText = result.alertTitle
+            alert.informativeText = result.alertMessage
+            alert.addButton(withTitle: "OK")
+            if case .available(_, let url) = result {
+                alert.addButton(withTitle: "Open GitHub")
+                NSApp.activate(ignoringOtherApps: true)
+                if alert.runModal() == .alertSecondButtonReturn { NSWorkspace.shared.open(url) }
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
+    }
+
+    private func showOnboarding() {
+        let model = OnboardingModel(
+            onOpenSettings: { [weak self] in self?.showSettings(tab: .items) },
+            onComplete: { [weak self] in
+                guard let self else { return }
+                var updated = self.preferences
+                updated.hasCompletedOnboarding = true
+                self.applyPreferences(updated)
+                self.onboardingController = nil
+            }
+        )
+        onboardingController = OnboardingWindowController(model: model)
+        onboardingController?.show()
     }
 
     /// Dumps a read-only diagnostics report on `kill -USR1 <pid>`, and toggles the floating
@@ -149,11 +291,12 @@ final class AppCoordinator {
     func stop() {
         hideEngine?.uninstall()
         hotkeys.teardown()
+        triggerMonitor.stop()
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
         activationObserver = nil
     }
 
-    func showSettings() {
+    func showSettings(tab: SettingsView.Tab? = nil) {
         floatingBar?.hide()
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(
@@ -162,17 +305,15 @@ final class AppCoordinator {
                 itemsProvider: { [weak self] in try await self?.floatingBar?.allManageableItems() ?? [] },
                 onRetryPlacement: { [weak self] in self?.hideEngine?.reconcileHiddenItems(userInitiated: true) }
             ) { [weak self] updated in
-                self?.persist(updated)
-                self?.hideEngine?.apply(preferences: updated)
-                self?.floatingBar?.preferences = updated
-                self?.hotkeys.apply(preferences: updated)
+                self?.handlePreferencesChange(updated)
             }
             settingsWindowController?.model.onAccessibilityGranted = { [weak self] in
                 self?.hideEngine?.resumePendingPlacement()
             }
+            settingsWindowController?.model.spacingNeedsLogout = spacingNeedsLogout
         }
         syncPlacementStatus()
-        settingsWindowController?.show()
+        settingsWindowController?.show(tab: tab)
     }
 
     private func syncPlacementStatus() {

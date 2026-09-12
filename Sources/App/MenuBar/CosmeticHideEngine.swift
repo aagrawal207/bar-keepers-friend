@@ -15,6 +15,10 @@ import BarKeepersFriendCore
 final class CosmeticHideEngine {
     /// Called when settings should open (chosen from the anchor's right-click menu).
     var onOpenSettings: (() -> Void)?
+    var onRestart: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
+    /// Applies a saved preset by id; the coordinator owns preference persistence.
+    var onApplyPreset: ((UUID) -> Void)?
     /// Called when the user chooses Quit from the anchor's right-click menu.
     var onQuit: (() -> Void)?
 
@@ -23,6 +27,7 @@ final class CosmeticHideEngine {
     /// into the (possibly too-narrow) menu bar.
     var floatingBar: FloatingBarController?
     var hoverRevealController: HoverRevealController?
+    var scrollRevealMonitor: ScrollRevealMonitor?
     private var anchorMenuIsOpen = false
 
     /// Performs the per-item Shown/Hidden control by physically moving items across the anchor
@@ -108,19 +113,26 @@ final class CosmeticHideEngine {
 
     /// A plain-language summary of what the engine is doing right now, for the anchor menu's status
     /// line. Derived in Core (`AppStatus.derive`) from the engine's live counters so the label is
-    /// unit-tested rather than hand-assembled here. `updateAvailable` is wired false until Sparkle
-    /// lands (see "Features not yet built").
+    /// unit-tested rather than hand-assembled here. `updateAvailable` is set by a manual update check.
     var currentStatus: AppStatus {
         AppStatus.derive(
             paused: isPaused,
             moving: reconcileInFlightCount > 0,
             capturing: captureInFlightCount > 0,
-            updateAvailable: false
+            updateAvailable: updateAvailable
         )
     }
 
     /// Whether the app is currently paused (for the menu's checkmark).
     var paused: Bool { isPaused }
+
+    /// Grouped owners are hidden behind their group icon, so placement treats them as Hidden.
+    private var placementControls: ItemControlStore {
+        ItemGroupLibrary.effectiveControls(groups: preferences.itemGroups, base: preferences.itemControls)
+    }
+
+    /// Set while a manual update check found a newer release; feeds the status line.
+    var updateAvailable = false
 
     /// Deadline for the predecessor race, not a hard timeout: `awaitBounded` still joins its waiter.
     private static let captureSequenceTimeout: TimeInterval = 8
@@ -308,6 +320,7 @@ final class CosmeticHideEngine {
         }
         observeScreenChanges()
         updateHoverMonitoring()
+        updateScrollMonitoring()
     }
 
     /// The defaults key AppKit uses to persist a status item's horizontal slot, by autosave name.
@@ -379,6 +392,7 @@ final class CosmeticHideEngine {
 
     func uninstall() {
         hoverRevealController?.stop()
+        scrollRevealMonitor?.stop()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
         cancelCaptureSequences()
@@ -393,12 +407,15 @@ final class CosmeticHideEngine {
 
     // MARK: - Preferences
 
-    func apply(preferences: Preferences) {
+    /// Background callers (triggers) must defer like launch placement instead of closing menus
+    /// or prompting for Accessibility the way an explicit Settings change does.
+    func apply(preferences: Preferences, userInitiated: Bool = true) {
         let wasFloatingBar = self.preferences.useFloatingBar
-        let previousControls = self.preferences.itemControls
+        let previousControls = placementControls
         self.preferences = preferences
         stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
         updateHoverMonitoring()
+        updateScrollMonitoring()
 
         // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
         // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
@@ -419,9 +436,10 @@ final class CosmeticHideEngine {
         // If the per-item Hidden intent changed (the user toggled Shown/Hidden in Settings),
         // physically move the affected items to the correct side of the anchor and refresh the
         // mirror. Only when it actually changed, so an unrelated settings edit doesn't drag icons.
-        if preferences.itemControls.hiddenInMenuBar != previousControls.hiddenInMenuBar
-            || preferences.itemControls.shownInMenuBar != previousControls.shownInMenuBar {
-            reconcileHiddenItems(userInitiated: true)
+        let controls = placementControls
+        if controls.hiddenInMenuBar != previousControls.hiddenInMenuBar
+            || controls.shownInMenuBar != previousControls.shownInMenuBar {
+            reconcileHiddenItems(userInitiated: userInitiated)
         }
     }
 
@@ -512,7 +530,8 @@ final class CosmeticHideEngine {
         let requestID = placementRequestID
         let wasApplying = placementInProgress
         placementTask?.cancel()
-        guard !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty else {
+        let controls = placementControls
+        guard !controls.hiddenInMenuBar.isEmpty || !controls.shownInMenuBar.isEmpty else {
             placementPending = false
             updatePlacementStatus(applying: false)
             guard wasApplying else { return }
@@ -566,7 +585,7 @@ final class CosmeticHideEngine {
         autoRehideWorkItem = nil
         cancelPendingCacheRefreshes()
         updatePlacementStatus(applying: true)
-        DebugLog.log("placement: queued request=\(requestID) hidden=\(preferences.itemControls.hiddenInMenuBar.count) shown=\(preferences.itemControls.shownInMenuBar.count)")
+        DebugLog.log("placement: queued request=\(requestID) hidden=\(controls.hiddenInMenuBar.count) shown=\(controls.shownInMenuBar.count)")
 
         placementTask = runCaptureSequence(forceCollapseAfter: false) { [weak self] in
             guard let self, !Task.isCancelled, requestID == self.placementRequestID else { return }
@@ -580,7 +599,7 @@ final class CosmeticHideEngine {
                 result = await controller.reconcile(
                     anchorWindowID: controls.anchor,
                     dividerWindowID: controls.divider,
-                    controls: self.preferences.itemControls,
+                    controls: self.placementControls,
                     displayXRange: self.anchorDisplayXRange,
                     displayMenuBarTop: self.anchorDisplayMenuBarTop
                 )
@@ -699,6 +718,23 @@ final class CosmeticHideEngine {
         pause.state = isPaused ? .on : .off
         menu.addItem(pause)
 
+        if !preferences.presets.isEmpty {
+            menu.addItem(.separator())
+            let active = PresetLibrary.activePreset(in: preferences)?.id
+            let presetsItem = NSMenuItem(title: "Presets", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            submenu.autoenablesItems = false
+            for preset in preferences.presets {
+                let item = NSMenuItem(title: preset.name, action: #selector(menuApplyPreset(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = preset.id.uuidString
+                item.state = preset.id == active ? .on : .off
+                submenu.addItem(item)
+            }
+            presetsItem.submenu = submenu
+            menu.addItem(presetsItem)
+        }
+
         menu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(menuOpenSettings), keyEquivalent: ",")
         settings.target = self
@@ -706,8 +742,14 @@ final class CosmeticHideEngine {
         let about = NSMenuItem(title: "About \(Self.appName)", action: #selector(menuShowAbout), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(menuCheckForUpdates), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
 
         menu.addItem(.separator())
+        let restart = NSMenuItem(title: "Restart \(Self.appName)", action: #selector(menuRestart), keyEquivalent: "")
+        restart.target = self
+        menu.addItem(restart)
         let quit = NSMenuItem(title: "Quit \(Self.appName)", action: #selector(menuQuit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -734,12 +776,19 @@ final class CosmeticHideEngine {
 
     @objc private func menuOpenSettings() { onOpenSettings?() }
     @objc private func menuQuit() { onQuit?() }
+    @objc private func menuRestart() { onRestart?() }
+    @objc private func menuCheckForUpdates() { onCheckForUpdates?() }
+    @objc private func menuApplyPreset(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
+        onApplyPreset?(id)
+    }
 
     /// Pause reveals items and cancels automation; resume restores saved intent and unfinished
     /// icon collection. An already-posted native gesture finishes before cancellation takes effect.
     @objc func menuTogglePause() {
         isPaused.toggle()
         updateHoverMonitoring()
+        updateScrollMonitoring()
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
@@ -869,6 +918,25 @@ final class CosmeticHideEngine {
 
     private func updateHoverMonitoring() {
         hoverRevealController?.setEnabled(preferences.revealOnHover && preferences.useFloatingBar && !isPaused)
+    }
+
+    private func updateScrollMonitoring() {
+        scrollRevealMonitor?.setEnabled(preferences.revealOnScroll && preferences.useFloatingBar && !isPaused)
+    }
+
+    /// A scroll gesture is deliberate like a click, so it takes ownership from hover and opens
+    /// from the cache; hide closes whatever presentation is showing.
+    func revealFloatingBarOnScroll() {
+        guard !isPaused, preferences.revealOnScroll, preferences.useFloatingBar,
+              let bar = floatingBar, !bar.isVisible, !captureInFlight, !activationOwnsSection,
+              !placementInProgress, stateMachine.visibility(of: .hidden) == .collapsed else { return }
+        toggleFloatingBar()
+    }
+
+    func hideFloatingBarOnScroll() {
+        guard !isPaused, preferences.revealOnScroll, let bar = floatingBar, bar.isVisible else { return }
+        hoverRevealController?.relinquishForManualInteraction()
+        bar.hide()
     }
 
     func revealFloatingBarOnHover() async {
@@ -1062,7 +1130,7 @@ final class CosmeticHideEngine {
         // when idle.
         guard !isPaused else { return }
         if sectionInUse {
-            placementPending = !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty
+            placementPending = !placementControls.hiddenInMenuBar.isEmpty || !placementControls.shownInMenuBar.isEmpty
             return
         }
         enact(stateMachine.apply(.screenParametersChanged))
@@ -1082,7 +1150,7 @@ final class CosmeticHideEngine {
         // so the items on the now-current display land on the right side of the anchor. No-op when
         // nothing is marked hidden. The planner is display-scoped (see `anchorDisplayXRange`), so
         // this only touches the active display's items, never the other display's mirror copies.
-        if !preferences.itemControls.hiddenInMenuBar.isEmpty || !preferences.itemControls.shownInMenuBar.isEmpty {
+        if !placementControls.hiddenInMenuBar.isEmpty || !placementControls.shownInMenuBar.isEmpty {
             reconcileHiddenItems()
         } else {
             refreshFloatingBarCache()

@@ -30,6 +30,12 @@ public final class PreferencesStore: @unchecked Sendable {
         self.backing = backing
     }
 
+    /// Whether anything was ever saved; a store written before onboarding existed still counts
+    /// as a set-up install, so the walkthrough is only for genuinely fresh installs.
+    public var hasSavedPreferences: Bool {
+        backing.data(forKey: Self.storageKey) != nil
+    }
+
     /// Reads the stored preferences, or `.default` if nothing valid is stored.
     public func load() -> Preferences {
         guard let data = backing.data(forKey: Self.storageKey) else {

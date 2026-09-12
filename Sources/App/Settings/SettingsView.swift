@@ -5,7 +5,7 @@ import SwiftUI
 // Placement edits stay local to the Items tab's model until explicitly applied.
 struct SettingsView: View {
     enum Tab: Hashable {
-        case general, items
+        case general, items, presets, triggers, groups
     }
 
     @Bindable var model: SettingsModel
@@ -29,10 +29,27 @@ struct SettingsView: View {
                 ItemsSettingsTab(model: model)
                     .tabItem { Label("Items", systemImage: "menubar.rectangle") }
                     .tag(Tab.items)
+                PresetsSettingsTab(model: model)
+                    .tabItem { Label("Presets", systemImage: "square.on.square") }
+                    .tag(Tab.presets)
+                TriggersSettingsTab(model: model)
+                    .tabItem { Label("Triggers", systemImage: "bolt") }
+                    .tag(Tab.triggers)
+                GroupsSettingsTab(model: model)
+                    .tabItem { Label("Groups", systemImage: "square.grid.2x2") }
+                    .tag(Tab.groups)
             }
             .padding(.top, 8)
         }
         .frame(width: 640, height: 720)
+        .onAppear { consumeRequestedTab() }
+        .onChange(of: model.requestedTab) { _, _ in consumeRequestedTab() }
+    }
+
+    private func consumeRequestedTab() {
+        guard let tab = model.requestedTab else { return }
+        selectedTab = tab
+        model.requestedTab = nil
     }
 }
 
@@ -127,7 +144,15 @@ private struct GeneralSettingsTab: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Toggle("Reveal on scroll or swipe", isOn: $model.preferences.revealOnScroll)
+                    .disabled(!model.preferences.useFloatingBar)
+                Text("Scroll down or swipe left on the menu bar to open the floating bar; the opposite gesture closes it.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)
 
             Section("Backup") {
                 LabeledContent("Layout file") {
@@ -406,6 +431,13 @@ struct ItemsSettingsContent: View {
             } else if model.placementPending {
                 placementStatus("Saved placement is waiting to be applied.")
             }
+            if let notice = model.draftDiscardedNotice {
+                Text(notice)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings-placement-draft-discarded")
+            }
 
             HStack(spacing: 8) {
                 Text(model.pendingChangeCount == 1 ? "1 pending change" : "\(model.pendingChangeCount) pending changes")
@@ -525,7 +557,13 @@ private struct ItemRow: View {
 
             Spacer(minLength: 8)
 
-            if model.hasPendingChange(for: item) {
+            if let group = model.group(containing: item) {
+                Text("In group \(group.name)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("Grouped items stay hidden behind their group icon. Manage them in the Groups tab.")
+                    .accessibilityIdentifier("settings-item-grouped-\(item.id)")
+            } else if model.hasPendingChange(for: item) {
                 Text("Pending")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -547,7 +585,7 @@ private struct ItemRow: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .disabled(model.placementInProgress)
+            .disabled(model.placementInProgress || model.group(containing: item) != nil)
             .accessibilityLabel("Placement for \(displayName)")
             .accessibilityHint("Changes are staged until you choose Apply Changes.")
             .help("Placement for \(displayName). Changes are staged until Apply Changes.")

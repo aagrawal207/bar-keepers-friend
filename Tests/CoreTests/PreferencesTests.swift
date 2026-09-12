@@ -113,7 +113,9 @@ import Testing
         #expect(Set(object.keys) == [
             "autoRehide", "autoRehideDelay", "launchAtLogin", "useFloatingBar",
             "floatingBarStyle", "useAXActivation", "controlItemPositions", "enableGlobalHotkey",
-            "toggleHotkey", "itemAliases", "itemControls", "dismissBarOnMouseExit", "revealOnHover"
+            "toggleHotkey", "itemAliases", "itemControls", "dismissBarOnMouseExit", "revealOnHover",
+            "revealOnScroll", "presets", "triggers", "triggerState", "itemGroups", "menuBarSpacing",
+            "hasCompletedOnboarding"
         ])
     }
 
@@ -139,6 +141,16 @@ import Testing
     @Test func storeLoadsDefaultWhenEmpty() {
         let store = PreferencesStore(backing: InMemoryPreferences())
         #expect(store.load() == .default)
+        #expect(!store.hasSavedPreferences)
+    }
+
+    @Test func storeReportsSavedDataEvenWhenItPredatesOnboarding() {
+        let backing = InMemoryPreferences()
+        backing.set(Data(#"{"autoRehide":false}"#.utf8), forKey: "com.agraabhi.BarKeepersFriend.preferences")
+        let store = PreferencesStore(backing: backing)
+        #expect(store.hasSavedPreferences)
+        #expect(!store.load().hasCompletedOnboarding)
+        #expect(!store.load().autoRehide)
     }
 
     @Test(arguments: [false, true])
