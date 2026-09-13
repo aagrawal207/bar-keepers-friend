@@ -4,9 +4,40 @@ import SwiftUI
 
 // Placement edits stay local to the Items tab's model until explicitly applied.
 struct SettingsView: View {
-    enum Tab: Hashable {
+    /// Raw values are sidebar accessibility identifiers; the cases are the window controller's API.
+    enum Tab: String, CaseIterable, Identifiable {
         case general, items, presets, triggers, groups, widgets, style
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .general: "General"
+            case .items: "Items"
+            case .presets: "Presets"
+            case .triggers: "Triggers"
+            case .groups: "Groups"
+            case .widgets: "Widgets"
+            case .style: "Style"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .general: "gearshape"
+            case .items: "menubar.rectangle"
+            case .presets: "square.on.square"
+            case .triggers: "bolt"
+            case .groups: "square.grid.2x2"
+            case .widgets: "star.square.on.square"
+            case .style: "paintpalette"
+            }
+        }
     }
+
+    static let windowSize = CGSize(width: 820, height: 720)
+    /// Tahoe floats the sidebar 8pt inside the window, so the detail keeps at least 630pt of width.
+    static let sidebarWidth: CGFloat = 180
 
     @Bindable var model: SettingsModel
     @State private var selectedTab: Tab
@@ -17,81 +48,55 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            AppIdentityHeader()
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("settings-identity-header")
-            Divider()
-            TabView(selection: $selectedTab) {
-                GeneralSettingsTab(model: model)
-                    .tabItem { Label("General", systemImage: "gearshape") }
-                    .tag(Tab.general)
-                ItemsSettingsTab(model: model)
-                    .tabItem { Label("Items", systemImage: "menubar.rectangle") }
-                    .tag(Tab.items)
-                PresetsSettingsTab(model: model)
-                    .tabItem { Label("Presets", systemImage: "square.on.square") }
-                    .tag(Tab.presets)
-                TriggersSettingsTab(model: model)
-                    .tabItem { Label("Triggers", systemImage: "bolt") }
-                    .tag(Tab.triggers)
-                GroupsSettingsTab(model: model)
-                    .tabItem { Label("Groups", systemImage: "square.grid.2x2") }
-                    .tag(Tab.groups)
-                WidgetsSettingsTab(model: model)
-                    .tabItem { Label("Widgets", systemImage: "star.square.on.square") }
-                    .tag(Tab.widgets)
-                StyleSettingsTab(model: model)
-                    .tabItem { Label("Style", systemImage: "paintpalette") }
-                    .tag(Tab.style)
-            }
-            .padding(.top, 8)
+        // A constant visibility plus no toggle keeps the sidebar, the only pane switcher, on screen.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
+            // toolbar(removing:) must sit inside the width modifier; outside it, the width is lost.
+            SettingsSidebar(selection: $selectedTab)
+                .toolbar(removing: .sidebarToggle)
+                .navigationSplitViewColumnWidth(Self.sidebarWidth)
+        } detail: {
+            detail
         }
-        .frame(width: 640, height: 720)
+        .navigationSplitViewStyle(.balanced)
+        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
         .onAppear { consumeRequestedTab() }
         .onChange(of: model.requestedTab) { _, _ in consumeRequestedTab() }
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(selectedTab.title)
+                .font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("settings-detail-title")
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+            paneContent
+        }
+        // Fully flexible so the split view sizes this column: a column's minimum size becomes an
+        // autolayout constraint, and wrapped pane text would make that minimum taller than the window.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-detail")
+    }
+
+    @ViewBuilder private var paneContent: some View {
+        switch selectedTab {
+        case .general: GeneralSettingsTab(model: model)
+        case .items: ItemsSettingsTab(model: model)
+        case .presets: PresetsSettingsTab(model: model)
+        case .triggers: TriggersSettingsTab(model: model)
+        case .groups: GroupsSettingsTab(model: model)
+        case .widgets: WidgetsSettingsTab(model: model)
+        case .style: StyleSettingsTab(model: model)
+        }
     }
 
     private func consumeRequestedTab() {
         guard let tab = model.requestedTab else { return }
         selectedTab = tab
         model.requestedTab = nil
-    }
-}
-
-/// A small app-identity banner — icon, name, version — so the Settings window reads like a real
-/// app's rather than a bare tab strip. The user's note was that it "looks like someone new built
-/// it"; giving it a clear identity is the first, lowest-risk step. Values come from the bundle;
-/// the version string is composed by the pure, tested `AppInfo.displayVersion`.
-private struct AppIdentityHeader: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 48, height: 48)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Self.appName)
-                    .font(.headline)
-                Text("Version \(Self.versionString)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
-    private static var appName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Bar Keeper's Friend"
-    }
-
-    private static var versionString: String {
-        AppInfo.displayVersion(
-            short: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-            build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        )
     }
 }
 
@@ -102,9 +107,7 @@ private struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("General") {
-                Toggle("Launch at login", isOn: $model.launchAtLogin)
-            }
+            LaunchAtLoginSection(model: model)
 
             PermissionsSection(model: model)
 
@@ -151,21 +154,11 @@ private struct GeneralSettingsTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            NotchSettingsSection(model: model, mode: $model.preferences.notchOverflow)
+
             SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)
 
-            Section("Backup") {
-                LabeledContent("Layout file") {
-                    HStack {
-                        Button("Export…") { model.exportLayout() }
-                        Button("Import…") { model.importLayout() }
-                    }
-                }
-                if let message = model.transferMessage {
-                    Text(message)
-                        .font(.callout)
-                        .foregroundStyle(model.transferFailed ? .red : .secondary)
-                }
-            }
+            BackupSettingsSection(model: model)
 
             Section {
                 // A plain full-width row, not a LabeledContent: a "Tip" label would claim the
@@ -181,6 +174,67 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The "General" section. `register()` can succeed while macOS still waits for the user's
+/// approval, so the toggle alone would show "on" for an item that never launches.
+struct LaunchAtLoginSection: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Section("General") {
+            Toggle("Launch at login", isOn: $model.launchAtLogin)
+                .accessibilityIdentifier("settings-launch-at-login")
+            if let notice = model.loginItemNotice {
+                HStack(spacing: 8) {
+                    Label(notice.text, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-launch-at-login-notice")
+                    Spacer(minLength: 8)
+                    if notice == .needsApproval {
+                        Button("Open Login Items…") { model.openLoginItemSettings() }
+                            .controlSize(.small)
+                            .accessibilityIdentifier("settings-launch-at-login-open")
+                    }
+                }
+            }
+        }
+        .onAppear { model.refreshLoginItemStatus() }
+        .task {
+            // Approval happens in System Settings; poll so the notice clears without reopening.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                model.refreshLoginItemStatus()
+            }
+        }
+    }
+}
+
+struct BackupSettingsSection: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Section("Backup") {
+            LabeledContent("Layout file") {
+                HStack {
+                    Button("Export…") { model.exportLayout() }
+                        .accessibilityIdentifier("settings-backup-export")
+                    Button("Import…") { model.importLayout() }
+                        .accessibilityIdentifier("settings-backup-import")
+                }
+            }
+            if let message = model.transferMessage {
+                // A write failure carries the system's full sentence; wrap it rather than truncate.
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(model.transferFailed ? .red : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings-backup-status")
+            }
+        }
     }
 }
 

@@ -28,6 +28,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.coordinator = coordinator
     }
 
+    /// Termination waits for tucked notch victims to move back, bounded by the engine's timeout.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let coordinator, coordinator.needsRestoreBeforeQuit else { return .terminateNow }
+        Task { @MainActor in
+            await coordinator.restoreBeforeQuit()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         coordinator?.stop()
     }

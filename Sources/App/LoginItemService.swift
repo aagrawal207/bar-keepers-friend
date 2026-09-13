@@ -46,3 +46,19 @@ final class LoginItemService {
         SMAppService.openSystemSettingsLoginItems()
     }
 }
+
+/// Seam over the live registration so Settings can be driven by a fake that never registers,
+/// unregisters, or opens System Settings.
+@MainActor
+protocol LoginItemManaging: AnyObject {
+    var status: LoginItemStatus { get }
+    @discardableResult
+    func setEnabled(_ enabled: Bool) -> Bool
+    func openSystemSettings()
+}
+
+extension LoginItemManaging {
+    var isEnabled: Bool { status == .enabled }
+}
+
+extension LoginItemService: LoginItemManaging {}

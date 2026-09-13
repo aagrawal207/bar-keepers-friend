@@ -4,22 +4,38 @@ import UniformTypeIdentifiers
 
 /// Bridges `LayoutConfig` export/import to the AppKit save/open panels. The serialization logic
 /// lives in Core (`LayoutConfig`, unit-tested); this is the thin UI-facing wrapper.
-///
-/// The public surface is fixed — Settings calls `exportLayout(_:)` and `importLayout()`. Keep
-/// those signatures stable; the panels (NSSavePanel/NSOpenPanel) are the only AppKit dependency.
 @MainActor
 enum LayoutTransferService {
-    /// Presents a save panel and writes the given preferences as a `LayoutConfig` JSON file.
-    /// No-op if the user cancels. Returns the written URL on success, nil otherwise.
-    ///
-    /// We `activate(ignoringOtherApps:)` first because this is an accessory (LSUIElement) app:
-    /// without a regular Dock presence the panel can open behind the frontmost app — or never
-    /// take focus — leaving the user staring at a dialog they can't see. Encoding goes through
-    /// `LayoutConfig` so the on-disk shape (and its version stamp) stays identical to what
-    /// `importLayout()` expects, and the write is atomic so a crash mid-write can't leave a
-    /// half-written file the user would later fail to import.
-    @discardableResult
-    static func exportLayout(_ preferences: Preferences) -> URL? {
+    /// A cancel is not news, but a failed write is; the caller renders them differently.
+    enum ExportOutcome: Equatable, Sendable {
+        case saved(URL)
+        case cancelled
+        /// The user-facing reason for the failure.
+        case failed(String)
+    }
+
+    /// Writes atomically so a crash mid-write cannot leave a half-written file; `destination` and
+    /// `write` are injectable so tests can drive a cancel or a failed write without a dialog.
+    static func exportLayout(
+        _ preferences: Preferences,
+        destination: @MainActor () -> URL? = { presentExportPanel() },
+        write: @MainActor (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
+    ) -> ExportOutcome {
+        guard let url = destination() else { return .cancelled }
+
+        do {
+            let data = try LayoutConfig(preferences: preferences).encoded()
+            try write(data, url)
+            return .saved(url)
+        } catch {
+            DebugLog.log("Layout export failed: \(error)")
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// An accessory (LSUIElement) app has no Dock presence, so without activating first the panel
+    /// can open behind the frontmost app or never take focus.
+    private static func presentExportPanel() -> URL? {
         NSApp.activate(ignoringOtherApps: true)
 
         let panel = NSSavePanel()
@@ -28,19 +44,8 @@ enum LayoutTransferService {
         panel.title = "Export Layout"
         panel.message = "Save your Bar Keeper's Friend settings and item positions to a JSON file."
 
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-
-        do {
-            let data = try LayoutConfig(preferences: preferences).encoded()
-            try data.write(to: url, options: .atomic)
-            return url
-        } catch {
-            // Returning nil (rather than throwing) keeps export best-effort: the caller treats a
-            // nil result as "nothing was written". We still log the underlying cause so a failed
-            // export isn't silent when diagnosing from the log file.
-            DebugLog.log("Layout export failed: \(error)")
-            return nil
-        }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
 
     /// Presents an open panel, reads + decodes a `LayoutConfig`, and returns the imported

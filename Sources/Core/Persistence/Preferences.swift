@@ -103,6 +103,9 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// User-defined menu bar items that run a small allowlisted action when clicked.
     public var widgets: [MenuBarWidget]
 
+    /// Whether a notch-clipped reveal may temporarily tuck shown items to make room (reflow/activation).
+    public var notchOverflow: NotchOverflowMode
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -127,7 +130,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         layoutMode: LayoutMode = .onDemand,
         itemHotkeys: [String: HotkeyCombo] = [:],
         menuBarStyle: MenuBarStyle = .none,
-        widgets: [MenuBarWidget] = []
+        widgets: [MenuBarWidget] = [],
+        notchOverflow: NotchOverflowMode = .never
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay)
@@ -153,6 +157,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.itemHotkeys = itemHotkeys
         self.menuBarStyle = menuBarStyle.normalized()
         self.widgets = WidgetLibrary.normalized(widgets)
+        self.notchOverflow = notchOverflow
     }
 
     public static let `default` = Preferences()
@@ -189,6 +194,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case itemHotkeys
         case menuBarStyle
         case widgets
+        case notchOverflow
     }
 
     /// Keeps every readable element so one corrupt entry cannot reset the whole store.
@@ -234,6 +240,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         menuBarStyle = (((try? container.decodeIfPresent(MenuBarStyle.self, forKey: .menuBarStyle)) ?? nil) ?? .none).normalized()
         let rawWidgets = (try? container.decodeIfPresent([Lossy<MenuBarWidget>].self, forKey: .widgets)) ?? nil
         widgets = WidgetLibrary.normalized((rawWidgets ?? []).compactMap(\.value))
+        notchOverflow = ((try? container.decodeIfPresent(NotchOverflowMode.self, forKey: .notchOverflow)) ?? nil) ?? .never
     }
 }
 

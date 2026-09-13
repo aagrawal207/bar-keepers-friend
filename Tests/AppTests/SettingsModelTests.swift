@@ -1394,6 +1394,246 @@ struct SettingsModelTests {
         #expect(model.placement(of: item) == .alwaysHidden)
     }
 
+    // MARK: - Layout export
+
+    @Test func exportDistinguishesCancelFromFailureWithoutWritingPreferencesOrTheDraft() {
+        let item = makeItem(observedHidden: false)
+        var preferences = Preferences.default
+        preferences.autoRehide = false
+        var writes = 0
+        var exported: [Preferences] = []
+        let model = SettingsModel(
+            preferences: preferences, loginItem: SettingsTestLoginItem(), itemsProvider: { [item] },
+            onChange: { _ in writes += 1 }
+        )
+        model.setHidden(true, for: item)
+
+        model.exportLayout(using: { exported.append($0); return .failed("The disk is full.") })
+        #expect(model.transferFailed)
+        #expect(model.transferMessage == "Couldn't write the layout file: The disk is full.")
+
+        model.exportLayout(using: { exported.append($0); return .cancelled })
+        #expect(model.transferMessage == nil)
+
+        model.exportLayout(using: { exported.append($0); return .saved(URL(fileURLWithPath: "/tmp/exports/My Layout.json")) })
+        #expect(!model.transferFailed)
+        #expect(model.transferMessage == "Exported to My Layout.json.")
+
+        #expect(exported == [preferences, preferences, preferences])
+        #expect(model.preferences == preferences)
+        #expect(model.hasPendingChanges)
+        #expect(model.hasPendingChange(for: item))
+        #expect(writes == 0)
+    }
+
+    @Test func failedExportIsClearedByALaterSuccessfulImport() {
+        var writes = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: SettingsTestLoginItem(), itemsProvider: { [] },
+            onChange: { _ in writes += 1 }
+        )
+        model.exportLayout(using: { _ in .failed("The disk is full.") })
+        #expect(model.transferFailed)
+        model.importLayout(using: { Preferences(autoRehide: false) })
+        #expect(!model.transferFailed)
+        #expect(model.transferMessage == "Imported settings.")
+        #expect(writes == 1)
+    }
+
+    @Test func layoutExportServiceReportsCancelFailureAndTheWrittenBytes() throws {
+        var preferences = Preferences.default
+        preferences.autoRehideDelay = 42
+        preferences.itemAliases.setAlias("Clipboard", for: makeItem().snapshot)
+        let target = URL(fileURLWithPath: "/tmp/never-written/Layout.json")
+        var writes: [(Data, URL)] = []
+        struct WriteFailure: LocalizedError {
+            var errorDescription: String? { "The disk is full." }
+        }
+
+        let cancelled = LayoutTransferService.exportLayout(preferences, destination: { nil }, write: { writes.append(($0, $1)) })
+        #expect(cancelled == .cancelled)
+        #expect(writes.isEmpty)
+
+        let failed = LayoutTransferService.exportLayout(preferences, destination: { target }, write: { _, _ in throw WriteFailure() })
+        #expect(failed == .failed("The disk is full."))
+
+        let saved = LayoutTransferService.exportLayout(preferences, destination: { target }, write: { writes.append(($0, $1)) })
+        #expect(saved == .saved(target))
+        #expect(writes.count == 1)
+        #expect(writes.first?.1 == target)
+        let data = try #require(writes.first?.0)
+        #expect(try LayoutConfig.decode(from: data).preferences == preferences)
+    }
+
+    @Test func defaultWriterSavesAnImportableFileAndNamesAnUnwritableDestination() throws {
+        var preferences = Preferences.default
+        preferences.itemControls.setHidden(true, forKey: "ACME")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bkf-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("Layout.json")
+
+        #expect(LayoutTransferService.exportLayout(preferences, destination: { target }) == .saved(target))
+        #expect(try LayoutConfig.decode(from: Data(contentsOf: target)).preferences == preferences)
+
+        let missingFolder = directory.appendingPathComponent("missing/Layout.json")
+        guard case .failed(let reason) = LayoutTransferService.exportLayout(preferences, destination: { missingFolder }) else {
+            Issue.record("Writing into a missing folder must report a failure, not a cancel or a save.")
+            return
+        }
+        #expect(!reason.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: missingFolder.path))
+    }
+
+    // MARK: - Launch at login
+
+    @Test(arguments: [LoginItemStatus.enabled, .requiresApproval, .notRegistered, .notFound], [false, true])
+    func loginItemNoticeNeedsBothSavedIntentAndAnUnmetStatus(status: LoginItemStatus, launchAtLogin: Bool) {
+        let loginItem = SettingsTestLoginItem(status: status)
+        var writes = 0
+        let model = SettingsModel(
+            preferences: Preferences(launchAtLogin: launchAtLogin), loginItem: loginItem, itemsProvider: { [] },
+            onChange: { _ in writes += 1 }
+        )
+        let unmet: SettingsModel.LoginItemNotice? = switch status {
+        case .enabled: nil
+        case .requiresApproval: .needsApproval
+        case .notRegistered, .notFound: .notRegistered
+        }
+
+        #expect(model.loginItemStatus == status)
+        #expect(model.loginItemNotice == (launchAtLogin ? unmet : nil))
+        #expect(model.launchAtLogin == launchAtLogin)
+        #expect(loginItem.setEnabledCalls.isEmpty)
+        #expect(loginItem.openSystemSettingsCalls == 0)
+        #expect(writes == 0)
+    }
+
+    @Test func refreshFollowsApprovalAndLossWithoutTouchingRegistration() {
+        let loginItem = SettingsTestLoginItem(status: .requiresApproval)
+        var writes = 0
+        let model = SettingsModel(
+            preferences: Preferences(launchAtLogin: true), loginItem: loginItem, itemsProvider: { [] },
+            onChange: { _ in writes += 1 }
+        )
+        #expect(model.loginItemNotice == .needsApproval)
+        #expect(model.loginItemNotice?.text == "Needs approval in System Settings > General > Login Items")
+
+        loginItem.status = .enabled
+        #expect(model.loginItemNotice == .needsApproval)
+        model.refreshLoginItemStatus()
+        #expect(model.loginItemStatus == .enabled)
+        #expect(model.loginItemNotice == nil)
+
+        loginItem.status = .notRegistered
+        model.refreshLoginItemStatus()
+        #expect(model.loginItemNotice == .notRegistered)
+        #expect(model.loginItemNotice?.text == "Not registered; toggle off and on to retry")
+        #expect(model.preferences.launchAtLogin)
+        #expect(loginItem.setEnabledCalls.isEmpty)
+        #expect(loginItem.openSystemSettingsCalls == 0)
+        #expect(writes == 0)
+    }
+
+    @Test func enablingThatStopsAtApprovalPersistsTrueAndShowsTheApprovalNotice() {
+        let loginItem = SettingsTestLoginItem(status: .notRegistered)
+        loginItem.statusAfterRegister = .requiresApproval
+        var writes: [Preferences] = []
+        let model = SettingsModel(
+            preferences: .default, loginItem: loginItem, itemsProvider: { [] }, onChange: { writes.append($0) }
+        )
+        #expect(model.loginItemNotice == nil)
+
+        model.launchAtLogin = true
+
+        #expect(loginItem.setEnabledCalls == [true])
+        #expect(model.preferences.launchAtLogin)
+        #expect(model.loginItemStatus == .requiresApproval)
+        #expect(model.loginItemNotice == .needsApproval)
+        #expect(writes.map(\.launchAtLogin) == [true])
+        #expect(loginItem.openSystemSettingsCalls == 0)
+    }
+
+    @Test func rejectedEnableKeepsTheSavedFalseAndShowsNoNotice() {
+        let loginItem = SettingsTestLoginItem(status: .notRegistered)
+        loginItem.rejectsChanges = true
+        var writes: [Preferences] = []
+        let model = SettingsModel(
+            preferences: .default, loginItem: loginItem, itemsProvider: { [] }, onChange: { writes.append($0) }
+        )
+
+        model.launchAtLogin = true
+
+        #expect(loginItem.setEnabledCalls == [true])
+        #expect(!model.launchAtLogin)
+        #expect(!model.preferences.launchAtLogin)
+        #expect(model.loginItemStatus == .notRegistered)
+        #expect(model.loginItemNotice == nil)
+        #expect(writes.allSatisfy { !$0.launchAtLogin })
+    }
+
+    @Test func togglingOffAndOnRecoversALostRegistration() {
+        let loginItem = SettingsTestLoginItem(status: .notRegistered)
+        var writes: [Preferences] = []
+        let model = SettingsModel(
+            preferences: Preferences(launchAtLogin: true), loginItem: loginItem, itemsProvider: { [] },
+            onChange: { writes.append($0) }
+        )
+        #expect(model.loginItemNotice == .notRegistered)
+
+        model.launchAtLogin = false
+        #expect(!model.preferences.launchAtLogin)
+        #expect(model.loginItemNotice == nil)
+        #expect(loginItem.status == .notRegistered)
+
+        model.launchAtLogin = true
+        #expect(model.preferences.launchAtLogin)
+        #expect(model.loginItemStatus == .enabled)
+        #expect(model.loginItemNotice == nil)
+        #expect(loginItem.setEnabledCalls == [false, true])
+        #expect(writes.map(\.launchAtLogin) == [false, true])
+    }
+
+    @Test func openLoginItemSettingsOnlyForwardsToTheSeam() {
+        let loginItem = SettingsTestLoginItem(status: .requiresApproval)
+        var writes = 0
+        let model = SettingsModel(
+            preferences: Preferences(launchAtLogin: true), loginItem: loginItem, itemsProvider: { [] },
+            onChange: { _ in writes += 1 }
+        )
+        model.openLoginItemSettings()
+        model.openLoginItemSettings()
+
+        #expect(loginItem.openSystemSettingsCalls == 2)
+        #expect(loginItem.setEnabledCalls.isEmpty)
+        #expect(model.loginItemNotice == .needsApproval)
+        #expect(model.preferences == Preferences(launchAtLogin: true))
+        #expect(writes == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func importRefreshesLoginStatusAndKeepsTruthOverIntent(rejected: Bool) {
+        let loginItem = SettingsTestLoginItem(status: .notRegistered)
+        loginItem.rejectsChanges = rejected
+        loginItem.statusAfterRegister = .requiresApproval
+        var writes: [Preferences] = []
+        let model = SettingsModel(
+            preferences: .default, loginItem: loginItem, itemsProvider: { [] }, onChange: { writes.append($0) }
+        )
+
+        model.importLayout(using: { Preferences(autoRehide: false, launchAtLogin: true) })
+
+        #expect(loginItem.setEnabledCalls == [true])
+        #expect(model.preferences.launchAtLogin == !rejected)
+        #expect(!model.preferences.autoRehide)
+        #expect(model.loginItemStatus == (rejected ? .notRegistered : .requiresApproval))
+        #expect(model.loginItemNotice == (rejected ? nil : .needsApproval))
+        #expect(model.transferMessage == "Imported settings.")
+        #expect(!model.transferFailed)
+        #expect(writes.map(\.launchAtLogin) == [!rejected])
+    }
+
     private func makeItem(
         _ owner: String? = "ACME",
         id: CGWindowID = 1,
@@ -1416,5 +1656,33 @@ struct SettingsModelTests {
             image: NSImage(size: CGSize(width: 18, height: 18)),
             observedHidden: observedHidden
         )
+    }
+}
+
+/// Stands in for `LoginItemService` with the same enable/disable rules, so Settings tests can
+/// reach every registration state without registering anything or opening System Settings.
+@MainActor
+final class SettingsTestLoginItem: LoginItemManaging {
+    var status: LoginItemStatus
+    /// Where a successful `setEnabled(true)` lands; approval-gated systems stop short of `.enabled`.
+    var statusAfterRegister: LoginItemStatus = .enabled
+    var rejectsChanges = false
+    private(set) var setEnabledCalls: [Bool] = []
+    private(set) var openSystemSettingsCalls = 0
+
+    init(status: LoginItemStatus = .notRegistered) {
+        self.status = status
+    }
+
+    func setEnabled(_ enabled: Bool) -> Bool {
+        setEnabledCalls.append(enabled)
+        guard !rejectsChanges else { return false }
+        if enabled, status != .enabled { status = statusAfterRegister }
+        if !enabled, status == .enabled { status = .notRegistered }
+        return true
+    }
+
+    func openSystemSettings() {
+        openSystemSettingsCalls += 1
     }
 }

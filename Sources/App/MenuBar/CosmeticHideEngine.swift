@@ -40,6 +40,15 @@ final class CosmeticHideEngine {
     var hoverRevealController: HoverRevealController?
     var scrollRevealMonitor: ScrollRevealMonitor?
     var liveLayoutMonitor: LiveLayoutMonitor?
+    /// Tucks shown items to make room for a notch-clipped reveal and restores them before collapse.
+    private(set) var notchOverflowCoordinator: NotchOverflowCoordinator?
+    private var makeRoomTask: Task<Void, Never>?
+    /// Test seam: hostless fixtures have no notched NSScreen to derive geometry from.
+    var notchGeometryProvider: (() -> NotchGeometry?)?
+    /// Bumped by every new activation reveal so a stale async collapse cannot close its successor.
+    private var activationGeneration = 0
+    /// Notch make-room/restore outcomes are reported separately from placement status.
+    private(set) var notchMessage: String?
     /// Lets the coordinator re-lay-out style overlays on the same debounced screen change.
     var onScreenParametersChanged: (() -> Void)?
     private var anchorMenuIsOpen = false
@@ -505,6 +514,7 @@ final class CosmeticHideEngine {
         hoverRevealController?.stop()
         scrollRevealMonitor?.stop()
         liveLayoutMonitor?.stop()
+        makeRoomTask?.cancel()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
         cancelCaptureSequences()
@@ -714,6 +724,9 @@ final class CosmeticHideEngine {
                 DebugLog.log("placement: starting request=\(requestID) anchorWindow=\(controls.anchor) dividerWindow=\(controls.divider) alwaysHiddenWindow=\(alwaysHiddenID.map(String.init) ?? "none")")
                 self.reconcileInFlightCount += 1
                 defer { self.reconcileInFlightCount -= 1 }
+                // Tucked victims are shown items; planning against them would read them as Hidden.
+                await self.restoreNotchVictimsIfNeeded()
+                guard !Task.isCancelled, requestID == self.placementRequestID else { return }
                 result = await controller.reconcile(
                     anchorWindowID: controls.anchor,
                     dividerWindowID: controls.divider,
@@ -935,17 +948,32 @@ final class CosmeticHideEngine {
             _ = stateMachine.apply(.show(.alwaysHidden))
             setHidden(collapsed: false)
             setAlwaysHiddenCollapsed(false)
+            // Pause reveals everything, which includes undoing BKF's own make-room displacement.
+            if notchOverflowCoordinator?.hasTuckedItems == true || makeRoomTask != nil {
+                Task { @MainActor in await self.restoreNotchVictimsIfNeeded() }
+            }
             updatePlacementStatus(applying: false, message: "Changes will apply when Bar Keeper's Friend resumes.")
         } else {
             // Back to baseline: collapse both tiers, then re-apply intent recorded while paused.
-            _ = stateMachine.apply(.hide(.hidden))
-            _ = stateMachine.apply(.hide(.alwaysHidden))
-            setHidden(collapsed: true)
-            setAlwaysHiddenCollapsed(true)
-            if let bar = floatingBar, bar.needsCapture {
-                warmUpFloatingBarCache()
+            let resume: @MainActor () -> Void = { [weak self] in
+                guard let self, !self.isPaused else { return }
+                _ = self.stateMachine.apply(.hide(.hidden))
+                _ = self.stateMachine.apply(.hide(.alwaysHidden))
+                self.setHidden(collapsed: true)
+                self.setAlwaysHiddenCollapsed(true)
+                if let bar = self.floatingBar, bar.needsCapture {
+                    self.warmUpFloatingBarCache()
+                }
+                self.reconcileHiddenItems()
             }
-            reconcileHiddenItems()
+            if notchOverflowCoordinator?.hasTuckedItems == true {
+                Task { @MainActor in
+                    await self.restoreNotchVictimsIfNeeded()
+                    resume()
+                }
+            } else {
+                resume()
+            }
         }
     }
 
@@ -1003,12 +1031,15 @@ final class CosmeticHideEngine {
         // If a prior activation left the section revealed in the menu bar, the anchor should
         // tidy it back up (re-hide) rather than show a redundant panel.
         if stateMachine.visibility(of: .hidden) == .shown {
-            _ = stateMachine.apply(.hide(.hidden))
-            _ = stateMachine.apply(.hide(.alwaysHidden))
             bar.hide()
-            setHidden(collapsed: true)
-            setAlwaysHiddenCollapsed(true)
-            resumePendingPlacement()
+            afterRestoringNotchVictims { [weak self] in
+                guard let self else { return }
+                _ = self.stateMachine.apply(.hide(.hidden))
+                _ = self.stateMachine.apply(.hide(.alwaysHidden))
+                self.setHidden(collapsed: true)
+                self.setAlwaysHiddenCollapsed(true)
+                self.resumePendingPlacement()
+            }
             return
         }
         if bar.isVisible, !widensOpenBar {
@@ -1131,17 +1162,134 @@ final class CosmeticHideEngine {
         anchorClicked(sender)
     }
 
+    /// Builds the notch coordinator from the engine's own control geometry; the window server
+    /// and attribution are the same ones placement uses.
+    func configureNotchOverflow(
+        windowServer: WindowServer,
+        attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
+    ) {
+        notchOverflowCoordinator = NotchOverflowCoordinator(
+            observe: { try windowServer.menuBarItems() },
+            move: { try await windowServer.move(item: $0, toX: $1, relativeTo: $2) },
+            controls: { [weak self] in
+                guard let self, let ids = self.placementControlIDs else { return nil }
+                let tierTucked = self.stateMachine.visibility(of: .alwaysHidden) == .collapsed
+                return .init(anchor: ids.anchor, divider: ids.divider,
+                             alwaysHidden: tierTucked ? self.alwaysHiddenControlWindowID : nil)
+            },
+            notch: { [weak self] in
+                if let provider = self?.notchGeometryProvider { return provider() }
+                guard let screen = self?.anchorScreen else { return nil }
+                return NotchGeometry(displayFrame: screen.frame, leftArea: screen.auxiliaryTopLeftArea,
+                                     rightArea: screen.auxiliaryTopRightArea)
+            },
+            displayMenuBarTop: { [weak self] in self?.anchorDisplayMenuBarTop ?? 0 },
+            excludedWindowIDs: { [weak self] in self?.floatingBar?.controlItemWindowIDs ?? [] },
+            immovable: { ImmovableItems.isImmovable($0, immovablePIDs: ImmovableProcessIDs.current()) },
+            attribute: attribute
+        )
+    }
+
+    /// Make-room shares the native mover with placement, so it never starts while a batch or capture runs.
+    private var notchOverflowActive: Bool {
+        preferences.notchOverflow == .whenNeeded && !isPaused && hiddenItemController?.canMoveItems == true
+            && notchOverflowCoordinator != nil && !placementInProgress && !captureInFlight
+    }
+
+    /// Runs after a reveal has settled; a `.never` mode or missing notch returns without observing.
+    private func makeRoomForNotchIfNeeded() async {
+        guard notchOverflowActive, let coordinator = notchOverflowCoordinator else { return }
+        coordinator.currentMode = preferences.notchOverflow
+        let task = Task { @MainActor [weak self] in
+            let result = await coordinator.makeRoomIfNeeded(mode: coordinator.currentMode)
+            guard let self else { return }
+            if result.needed {
+                DebugLog.log("notch: required=\(Int(result.requiredWidth)) tucked=\(result.tucked.count) failed=\(result.failed.count) remaining=\(Int(result.remainingDeficit))")
+            }
+            self.notchMessage = result.failed.isEmpty ? nil
+                : "Couldn't move \(result.failed.count) item(s) to make room near the notch."
+        }
+        makeRoomTask = task
+        await task.value
+        // A finished pass must not leave every later collapse on the async restore path.
+        if makeRoomTask == task { makeRoomTask = nil }
+    }
+
+    /// Victims must return before the divider expands, or a reconcile would read them as Hidden.
+    private func restoreNotchVictimsIfNeeded() async {
+        guard let coordinator = notchOverflowCoordinator, coordinator.hasTuckedItems || makeRoomTask != nil else { return }
+        makeRoomTask?.cancel()
+        makeRoomTask = nil
+        let result = await coordinator.restore()
+        if !result.failed.isEmpty {
+            notchMessage = "Couldn't restore \(result.failed.count) item(s) moved to make room near the notch."
+        } else if !result.allRestored {
+            DebugLog.log("notch: restore incomplete remaining=\(result.remaining) cancelled=\(result.cancelled) observationFailed=\(result.observationFailed)")
+        } else {
+            notchMessage = nil
+        }
+    }
+
+    /// Quit-time hook: victims left tucked would persist on the wrong side of the bar, so the app
+    /// delegate defers termination until this returns. Bounded so a wedged move cannot block quit.
+    func restoreNotchVictimsBeforeQuit(timeout: Duration = .seconds(3)) async {
+        makeRoomTask?.cancel()
+        guard let coordinator = notchOverflowCoordinator, coordinator.hasTuckedItems else { return }
+        let restore = Task { @MainActor in await self.restoreNotchVictimsIfNeeded() }
+        // Poll rather than race tasks: the restore may not honor cancellation mid-gesture.
+        let deadline = ContinuousClock.now + timeout
+        while coordinator.hasTuckedItems, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        restore.cancel()
+    }
+
+    /// Whether quitting now would strand shown items in the hidden section.
+    var hasNotchVictimsToRestore: Bool { notchOverflowCoordinator?.hasTuckedItems == true }
+
+    /// Every collapse site funnels through here so victims are never stranded in the hidden section.
+    private func afterRestoringNotchVictims(_ collapse: @escaping @MainActor () -> Void) {
+        guard notchOverflowCoordinator?.hasTuckedItems == true || makeRoomTask != nil else { return collapse() }
+        Task { @MainActor in
+            await self.restoreNotchVictimsIfNeeded()
+            guard !self.isPaused else { return }
+            collapse()
+        }
+    }
+
     func toggleHidden() {
         guard !isPaused else { return }
         hoverRevealController?.relinquishForManualInteraction()
+        if stateMachine.visibility(of: .hidden) == .shown,
+           notchOverflowCoordinator?.hasTuckedItems == true || makeRoomTask != nil {
+            // Restoring is a native move sequence, so the collapse waits for it.
+            afterRestoringNotchVictims { [weak self] in
+                guard let self, self.stateMachine.visibility(of: .hidden) == .shown else { return }
+                self.collapseHiddenAfterToggle()
+            }
+            return
+        }
         let intents = stateMachine.apply(.toggle(.hidden))
         enact(intents)
         // Collapsing the hidden tier ends any option-click reveal; a plain reveal never opens it.
         if stateMachine.visibility(of: .hidden) == .collapsed {
             enact(stateMachine.apply(.hide(.alwaysHidden)))
+        } else if notchOverflowActive {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !self.isPaused, self.stateMachine.visibility(of: .hidden) == .shown else { return }
+                await self.makeRoomForNotchIfNeeded()
+            }
         }
         scheduleAutoRehideIfNeeded()
         if stateMachine.visibility(of: .hidden) == .collapsed { resumePendingPlacement() }
+    }
+
+    private func collapseHiddenAfterToggle() {
+        enact(stateMachine.apply(.toggle(.hidden)))
+        enact(stateMachine.apply(.hide(.alwaysHidden)))
+        scheduleAutoRehideIfNeeded()
+        resumePendingPlacement()
     }
 
     /// Option-click in reflow mode: reveals both tiers in place, or collapses both once shown.
@@ -1153,9 +1301,21 @@ final class CosmeticHideEngine {
         let events: [HideShowStateMachine.Event] = bothShown
             ? [.hide(.hidden), .hide(.alwaysHidden)]
             : [.show(.hidden), .show(.alwaysHidden)]
-        for event in events { enact(stateMachine.apply(event)) }
-        scheduleAutoRehideIfNeeded()
-        if stateMachine.visibility(of: .hidden) == .collapsed { resumePendingPlacement() }
+        let apply: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            for event in events { self.enact(self.stateMachine.apply(event)) }
+            self.scheduleAutoRehideIfNeeded()
+            if self.stateMachine.visibility(of: .hidden) == .collapsed {
+                self.resumePendingPlacement()
+            } else if self.notchOverflowActive {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !self.isPaused, self.stateMachine.visibility(of: .hidden) == .shown else { return }
+                    await self.makeRoomForNotchIfNeeded()
+                }
+            }
+        }
+        if bothShown { afterRestoringNotchVictims(apply) } else { apply() }
     }
 
     /// Reveals the hidden section (and, on request, the always-hidden one) so a real item can be
@@ -1164,6 +1324,7 @@ final class CosmeticHideEngine {
         guard !isPaused, !Task.isCancelled else { return }
         hoverRevealController?.relinquishForManualInteraction()
         activationOwnsSection = true
+        activationGeneration += 1
         _ = stateMachine.apply(.show(.hidden))
         if includeAlwaysHidden { _ = stateMachine.apply(.show(.alwaysHidden)) }
         if placementInProgress {
@@ -1178,15 +1339,22 @@ final class CosmeticHideEngine {
         setHidden(collapsed: false)
         if includeAlwaysHidden { setAlwaysHiddenCollapsed(false) }
         try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled, !isPaused, activationOwnsSection else { return }
+        await makeRoomForNotchIfNeeded()
     }
 
     /// Failed or interrupted current activations must release both logical and physical ownership.
     /// A superseded task or Pause must not collapse the state established by its successor.
     func rehideAfterActivation() {
         guard !isPaused, !Task.isCancelled else { return }
-        enact(stateMachine.apply(.hide(.hidden)))
-        enact(stateMachine.apply(.hide(.alwaysHidden)))
-        resumePendingPlacement()
+        let generation = activationGeneration
+        afterRestoringNotchVictims { [weak self] in
+            // A successor activation re-revealed the section; its own rehide owns the collapse.
+            guard let self, generation == self.activationGeneration else { return }
+            self.enact(self.stateMachine.apply(.hide(.hidden)))
+            self.enact(self.stateMachine.apply(.hide(.alwaysHidden)))
+            self.resumePendingPlacement()
+        }
     }
 
     private func enact(_ intents: [HideShowStateMachine.Intent]) {
@@ -1288,7 +1456,10 @@ final class CosmeticHideEngine {
               stateMachine.visibility(of: .hidden) == .shown else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isPaused else { return }
-            self.enact(self.stateMachine.apply(.autoRehide))
+            self.afterRestoringNotchVictims { [weak self] in
+                guard let self else { return }
+                self.enact(self.stateMachine.apply(.autoRehide))
+            }
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)
@@ -1311,9 +1482,14 @@ final class CosmeticHideEngine {
             // toggleFloatingBar also cancels this timer on re-interaction; the guard is belt-and-
             // suspenders for any path that doesn't.
             guard self.stateMachine.visibility(of: .hidden) == .shown else { return }
-            self.enact(self.stateMachine.apply(.autoRehide))
-            self.floatingBar?.hide()
-            self.resumePendingPlacement()
+            let generation = self.activationGeneration
+            self.afterRestoringNotchVictims { [weak self] in
+                guard let self, generation == self.activationGeneration,
+                      self.stateMachine.visibility(of: .hidden) == .shown else { return }
+                self.enact(self.stateMachine.apply(.autoRehide))
+                self.floatingBar?.hide()
+                self.resumePendingPlacement()
+            }
         }
         autoRehideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + preferences.autoRehideDelay, execute: work)

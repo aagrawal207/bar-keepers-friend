@@ -11,7 +11,7 @@ final class SettingsWindowController {
 
     init(
         preferences: Preferences,
-        loginItem: LoginItemService,
+        loginItem: any LoginItemManaging,
         itemsProvider: @escaping () async throws -> [FloatingBarItem],
         onRetryPlacement: @escaping () -> Void = {},
         onChange: @escaping (Preferences) -> Void
@@ -61,7 +61,7 @@ final class SettingsModel {
         }
     }
 
-    private let loginItem: LoginItemService
+    private let loginItem: any LoginItemManaging
     private let onRetryPlacement: () -> Void
     private let onChange: (Preferences) -> Void
     /// Supplies every manageable menu bar item (both shown and hidden) so the Items tab can list
@@ -71,13 +71,14 @@ final class SettingsModel {
 
     init(
         preferences: Preferences,
-        loginItem: LoginItemService,
+        loginItem: any LoginItemManaging,
         itemsProvider: @escaping () async throws -> [FloatingBarItem],
         onRetryPlacement: @escaping () -> Void = {},
         onChange: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
         self.loginItem = loginItem
+        self.loginItemStatus = loginItem.status
         self.itemsProvider = itemsProvider
         self.onRetryPlacement = onRetryPlacement
         self.onChange = onChange
@@ -91,8 +92,46 @@ final class SettingsModel {
             // false and we keep the prior value — so the @Observable toggle snaps back instead
             // of claiming "on" while the app won't actually launch.
             let succeeded = loginItem.setEnabled(newValue)
+            loginItemStatus = loginItem.status
             preferences.launchAtLogin = succeeded ? newValue : preferences.launchAtLogin
         }
+    }
+
+    // MARK: - Launch at login status
+
+    /// Why a saved `launchAtLogin` preference is not in effect. A successful `register()` can
+    /// still leave the item waiting for approval, which the saved flag alone cannot show.
+    enum LoginItemNotice: Equatable, Sendable {
+        case needsApproval
+        case notRegistered
+
+        var text: String {
+            switch self {
+            case .needsApproval: return "Needs approval in System Settings > General > Login Items"
+            case .notRegistered: return "Not registered; toggle off and on to retry"
+            }
+        }
+    }
+
+    /// Live registration state, re-read after every registration change and polled while visible.
+    private(set) var loginItemStatus: LoginItemStatus
+
+    var loginItemNotice: LoginItemNotice? {
+        guard preferences.launchAtLogin else { return nil }
+        switch loginItemStatus {
+        case .enabled: return nil
+        case .requiresApproval: return .needsApproval
+        case .notRegistered, .notFound: return .notRegistered
+        }
+    }
+
+    func refreshLoginItemStatus() {
+        loginItemStatus = loginItem.status
+    }
+
+    /// Opens System Settings > General > Login Items, where the pending approval lives.
+    func openLoginItemSettings() {
+        loginItem.openSystemSettings()
     }
 
     // MARK: - Permissions
@@ -361,14 +400,20 @@ final class SettingsModel {
     private(set) var transferMessage: String?
     private(set) var transferFailed = false
 
-    /// Writes the current settings to a user-chosen JSON file.
-    func exportLayout() {
-        if let url = LayoutTransferService.exportLayout(preferences) {
+    /// Writes the current settings to a user-chosen JSON file. A cancel clears the status line;
+    /// a failed write names its reason so the user does not mistake it for a cancel.
+    func exportLayout(
+        using exporter: @MainActor (Preferences) -> LayoutTransferService.ExportOutcome = { LayoutTransferService.exportLayout($0) }
+    ) {
+        switch exporter(preferences) {
+        case .saved(let url):
             transferFailed = false
             transferMessage = "Exported to \(url.lastPathComponent)."
-        } else {
-            // Nil means the user cancelled or the write failed; treat a cancel as no-news.
+        case .cancelled:
             transferMessage = nil
+        case .failed(let reason):
+            transferFailed = true
+            transferMessage = "Couldn't write the layout file: \(reason)"
         }
     }
 
@@ -384,6 +429,7 @@ final class SettingsModel {
                 // what actually took: if registration was rejected, don't persist a launchAtLogin
                 // the system didn't honor (same truth-over-intent rule as the toggle setter).
                 let succeeded = loginItem.setEnabled(imported.launchAtLogin)
+                loginItemStatus = loginItem.status
                 if !succeeded { imported.launchAtLogin = loginItem.isEnabled }
                 // A trigger baseline and the onboarding flag describe this machine, not the file.
                 imported.triggerState = TriggerRuntimeState()

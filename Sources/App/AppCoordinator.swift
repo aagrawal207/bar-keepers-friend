@@ -74,6 +74,7 @@ final class AppCoordinator {
         }
         engine.floatingBar = bar
         engine.hiddenItemController = mover
+        engine.configureNotchOverflow(windowServer: windowServer) { await AXAttributionProvider.attribute($0) }
         let hover = HoverRevealController(
             anchorFrame: { [weak engine] in engine?.anchorWindowFrame },
             panelFrame: { [weak bar] in bar?.windowFrame },
@@ -309,6 +310,13 @@ final class AppCoordinator {
         case .unregister: loginItem.setEnabled(false)
         case .none: break
         }
+    }
+
+    /// True when quitting should first put notch make-room victims back where they were.
+    var needsRestoreBeforeQuit: Bool { hideEngine?.hasNotchVictimsToRestore == true }
+
+    func restoreBeforeQuit() async {
+        await hideEngine?.restoreNotchVictimsBeforeQuit()
     }
 
     func stop() {
