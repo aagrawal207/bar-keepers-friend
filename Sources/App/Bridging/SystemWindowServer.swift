@@ -19,11 +19,42 @@ import CoreGraphics
 /// (`AXAttributionProvider`) before a move so the synthesized events target the real pid. For
 /// mirroring images, the window id + frame are sufficient.
 final class SystemWindowServer: WindowServer, @unchecked Sendable {
+    typealias MoveRelay = (CGEvent, pid_t, TimeInterval, CursorConcealment, Bool) -> ScrombleRelay.Result
+
+    private let readItems: (() throws -> [MenuBarItemSnapshot])?
+    private let hasAccessibility: () -> Bool
+    private let makeMoveCursor: () throws -> CursorConcealment?
+    private let relayMove: MoveRelay
+    private let postEvent: (CGEvent) -> Void
+    private let uptime: () -> TimeInterval
+    private let sleepForGrab: (TimeInterval) -> Void
+    private let sleep: (Duration) async throws -> Void
+
+    init(
+        readItems: (() throws -> [MenuBarItemSnapshot])? = nil,
+        hasAccessibility: @escaping () -> Bool = { AXIsProcessTrusted() },
+        makeMoveCursor: @escaping () throws -> CursorConcealment? = { try CursorConcealment() },
+        relayMove: @escaping MoveRelay = scrombleEvent,
+        postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) },
+        uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        sleepForGrab: @escaping (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) },
+        sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
+        self.readItems = readItems
+        self.hasAccessibility = hasAccessibility
+        self.makeMoveCursor = makeMoveCursor
+        self.relayMove = relayMove
+        self.postEvent = postEvent
+        self.uptime = uptime
+        self.sleepForGrab = sleepForGrab
+        self.sleep = sleep
+    }
 
     /// Status-item windows live at this layer (`kCGStatusWindowLevel`).
     private static let statusLayer = Int(CGWindowLevelForKey(.statusWindow))
 
     func menuBarItems() throws -> [MenuBarItemSnapshot] {
+        if let readItems { return try readItems() }
         // Must NOT use .optionOnScreenOnly: the hidden items we care about are pushed
         // off-screen (negative x) by the expanded divider, and on-screen-only enumeration
         // would exclude exactly those. Enumerate all windows and filter to the status layer.
@@ -76,7 +107,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     /// Each attempt revalidates the requested side; a neighbor's reflow is not a successful move.
     func move(item: MenuBarItemSnapshot, toX targetX: CGFloat, relativeTo targetWindowID: CGWindowID) async throws {
         try Task.checkCancellation()
-        guard AXIsProcessTrusted() else {
+        guard hasAccessibility() else {
             throw WindowServerError.missingPermission(.accessibility)
         }
         let initial = try menuBarItems()
@@ -86,6 +117,13 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             throw WindowServerError.moveFailed(windowID: item.windowID)
         }
         let beforeReference = targetX < reference.frame.minX
+        func usableGeometry(_ item: MenuBarItemSnapshot, _ target: MenuBarItemSnapshot) -> Bool {
+            [item.frame, target.frame].allSatisfy {
+                $0.minX.isFinite && $0.maxX.isFinite && $0.minY.isFinite && $0.maxY.isFinite
+                    && $0.width >= 0 && $0.height >= 18 && $0.height <= 40
+                    && abs($0.minY - reference.frame.minY) <= 40
+            } && HiddenItemsResolver.isPlausibleMenuBarItem(item, displayMenuBarTop: reference.frame.minY)
+        }
         guard let source = CGEventSource(stateID: .hidSystemState) else {
             throw WindowServerError.moveFailed(windowID: item.windowID)
         }
@@ -98,7 +136,7 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
 
         // Positioned events can move the real pointer despite window-ID routing.
         // A restore point is required even when background concealment is unavailable.
-        guard let cursor = try CursorConcealment() else {
+        guard let cursor = try makeMoveCursor() else {
             throw WindowServerError.moveFailed(windowID: item.windowID)
         }
         defer { cursor.restore() }
@@ -110,7 +148,8 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             let current = try menuBarItems()
             try cursor.checkInterruption()
             guard let liveItem = current.first(where: { $0.windowID == item.windowID }),
-                  let liveReference = current.first(where: { $0.windowID == targetWindowID }) else {
+                  let liveReference = current.first(where: { $0.windowID == targetWindowID }),
+                  usableGeometry(liveItem, liveReference) else {
                 throw WindowServerError.moveFailed(windowID: item.windowID)
             }
             if HiddenLayoutPlanner.isPlacementSatisfied(
@@ -124,36 +163,66 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             guard try cursor.performGesture({
                 try postMoveGesture(
                     source: source, windowID: item.windowID, pid: item.ownerPID,
-                    targetWindowID: targetWindowID, destination: destination, cursor: cursor
+                    targetWindowID: targetWindowID, destination: destination, cursor: cursor,
+                    waitForGrab: { try self.waitForGrab(of: liveItem, cursor: cursor) }, relay: relayMove
                 )
             }) else { throw WindowServerError.moveFailed(windowID: item.windowID) }
 
-            try await Task.sleep(for: .milliseconds(Self.moveSettleMs))
-            try cursor.checkInterruption()
-            let after = try menuBarItems()
-            try cursor.checkInterruption()
-            guard let placed = after.first(where: { $0.windowID == item.windowID }),
-                  let target = after.first(where: { $0.windowID == targetWindowID }) else {
-                throw WindowServerError.moveFailed(windowID: item.windowID)
-            }
-            let satisfied = HiddenLayoutPlanner.isPlacementSatisfied(
-                item: placed, hidden: beforeReference,
-                anchorMaxX: target.frame.maxX, dividerMinX: target.frame.minX
-            )
-            DebugLog.log("move: attempt=\(attempt) window=\(item.windowID) pid=\(item.ownerPID) startX=\(liveItem.frame.minX) targetWindow=\(targetWindowID) dropX=\(dropX) liveX=\(placed.frame.minX) placed=\(satisfied)")
+            try await sleep(.milliseconds(Self.moveSettleMs))
+            // Controls animate independently after a drop; do not re-grab or click a settling item.
+            let deadline = uptime() + Self.movePlacementTimeout
+            var placed = liveItem
+            var satisfied = false
+            var geometryUsable = false
+            repeat {
+                try cursor.checkInterruption()
+                let after = try menuBarItems()
+                try cursor.checkInterruption()
+                guard let observed = after.first(where: { $0.windowID == item.windowID }),
+                      let target = after.first(where: { $0.windowID == targetWindowID }) else {
+                    throw WindowServerError.moveFailed(windowID: item.windowID)
+                }
+                placed = observed
+                // A release can still be processing while the item reports its off-bar grab frame.
+                geometryUsable = usableGeometry(placed, target)
+                satisfied = geometryUsable && HiddenLayoutPlanner.isPlacementSatisfied(
+                    item: placed, hidden: beforeReference,
+                    anchorMaxX: target.frame.maxX, dividerMinX: target.frame.minX
+                )
+                if satisfied || uptime() >= deadline { break }
+                try await sleep(.milliseconds(10))
+            } while true
+            DebugLog.log("move: attempt=\(attempt) window=\(item.windowID) pid=\(item.ownerPID) startX=\(liveItem.frame.minX) targetWindow=\(targetWindowID) dropX=\(dropX) liveX=\(placed.frame.minX) ready=\(geometryUsable) placed=\(satisfied)")
             if satisfied {
                 return
             }
+            guard geometryUsable else { throw WindowServerError.moveFailed(windowID: item.windowID) }
             if attempt < Self.maxMoveAttempts {
                 // Nudge an unresponsive item with a plain (no-modifier) click at its current
                 // centre, the way Ice "wakes up" a stuck item, then retry.
                 guard try cursor.performGesture({
                     try wakeUp(source: source, item: placed.attributed(bundleID: item.ownerBundleID, pid: item.ownerPID), cursor: cursor)
                 }) else { throw WindowServerError.moveFailed(windowID: item.windowID) }
-                try await Task.sleep(for: .milliseconds(Self.moveRetryDelayMs))
+                try await sleep(.milliseconds(Self.moveRetryDelayMs))
             }
         }
         throw WindowServerError.moveFailed(windowID: item.windowID)
+    }
+
+    private func waitForGrab(of item: MenuBarItemSnapshot, cursor: CursorConcealment) throws -> Bool {
+        let deadline = uptime() + Self.moveGrabTimeout
+        while true {
+            try cursor.checkInterruption()
+            let current = try menuBarItems()
+            try cursor.checkInterruption()
+            guard let grabbed = current.first(where: { $0.windowID == item.windowID }) else {
+                throw WindowServerError.moveFailed(windowID: item.windowID)
+            }
+            if grabbed.frame != item.frame { return true }
+            let remaining = deadline - uptime()
+            guard remaining > 0 else { return false }
+            sleepForGrab(min(0.01, remaining))
+        }
     }
 
     /// Posts a complete grab/drop pair through the same relay, including the balancing up on failure.
@@ -167,7 +236,8 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     func postMoveGesture(
         source: CGEventSource, windowID: CGWindowID, pid: pid_t,
         targetWindowID: CGWindowID, destination: CGPoint, cursor: CursorConcealment,
-        relay: (CGEvent, pid_t, TimeInterval, CursorConcealment, Bool) -> ScrombleRelay.Result = scrombleEvent
+        waitForGrab: () throws -> Bool,
+        relay: MoveRelay = scrombleEvent
     ) throws {
         try cursor.checkInterruption()
         guard let (down, up) = moveEvents(
@@ -175,11 +245,17 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             targetWindowID: targetWindowID, destination: destination
         ) else { return }
         let downResult = relay(down, pid, Self.scrombleTimeout, cursor, false)
+        // A session-tap echo precedes the owner's grab; releasing there can cancel the drag entirely.
+        let grabResult: Result<Bool, Error> = downResult.submitted && !downResult.interrupted ? Result {
+            try cursor.checkInterruption()
+            return try waitForGrab()
+        } : .success(false)
         // A submitted down can already be in flight even when its owner echo was interrupted.
         let upResult = downResult.submitted ? relay(up, pid, Self.scrombleTimeout, cursor, true) : nil
-        DebugLog.log("move relay: window=\(windowID) targetWindow=\(targetWindowID) pid=\(pid) down=\(downResult.delivered) up=\(upResult?.delivered ?? false) submitted=\(downResult.submitted) interrupted=\(downResult.interrupted || upResult?.interrupted == true)")
+        DebugLog.log("move relay: window=\(windowID) targetWindow=\(targetWindowID) pid=\(pid) down=\(downResult.delivered) grabbed=\((try? grabResult.get()) ?? false) up=\(upResult?.delivered ?? false) submitted=\(downResult.submitted) interrupted=\(downResult.interrupted || upResult?.interrupted == true)")
         guard !downResult.interrupted, upResult?.interrupted != true else { throw CancellationError() }
         try cursor.checkInterruption()
+        _ = try grabResult.get()
     }
 
     /// Builds events without posting them, so routing fields can be verified without moving the mouse.
@@ -210,8 +286,8 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
         stampWindowID(item.windowID, pid: item.ownerPID, into: down)
         stampWindowID(item.windowID, pid: item.ownerPID, into: up)
         try cursor.checkInterruption()
-        down.post(tap: .cgSessionEventTap)
-        up.post(tap: .cgSessionEventTap)
+        postEvent(down)
+        postEvent(up)
     }
 
     /// Stamps a window id (and owner pid) into the mouse-event fields the window server routes a
@@ -232,6 +308,8 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
     /// Move tuning. The mechanism is undocumented and known to be intermittent on recent macOS,
     /// so the retry loop with frame-change confirmation is load-bearing, not polish.
     private static let maxMoveAttempts = 5
+    private static let moveGrabTimeout: TimeInterval = 0.25
+    private static let movePlacementTimeout: TimeInterval = 1
     private static let moveSettleMs = 120
     private static let moveRetryDelayMs = 80
     /// Upper bound on a single scromble round-trip. Ice's frame-change wait is ~50ms; the relay

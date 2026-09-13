@@ -124,7 +124,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 1132 tests in 80 suites (1760 invocations including parameterized cases).
+It currently contains 1145 tests in 81 suites (1789 invocations including parameterized cases).
 
 ## Credit
 

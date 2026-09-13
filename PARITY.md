@@ -16,7 +16,7 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 | Capability | Current State | Remaining Work |
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
-| Per-item Shown/Hidden | Live verified for Maccy and ACME; observed placement and retry feedback implemented | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
+| Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
 | Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | External-display restart yielded 0/9 glyphs with app-icon fallbacks; recovery, cold-boot collection, saturated-notch activation, and capacity beyond both grid axes remain unverified |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
@@ -84,6 +84,41 @@ path including quit).
 
 No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
 is the acceptance checklist before any of these is described as working on a real menu bar.
+
+## Apply Reliability Verification
+
+On 2026-09-13 the user narrowed work to repeated Items Apply failures. Current logs identified Alfred
+as the failed item in two mixed batches, with successful relay forwarding but no relocation. During
+supervised testing with BKF paused, three immediate-drop attempts failed and three attempts waiting
+for observed grab movement succeeded. The item entered drag state after the relay echo; one successful
+drop then needed about 500ms for the divider to reach its final position.
+
+The mover now waits up to 250ms for grab movement, preserving a balancing up across timeout, read
+failure, or cancellation. After the initial 120ms settle it polls live item/control geometry for up
+to one second before retrying. A frame still outside the menu-bar row cannot count as success or
+receive a recovery click. The five-attempt limit and event-routing fields are unchanged.
+
+Full build/test: 1145 tests across 81 suites, 1789 invocations, zero failures or skips. Strict code
+signature verification passed. An independent review found a delayed-release validation gap; the
+on-row guard and its regression tests addressed it before native verification.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Delayed grab, 500ms control animation, Hidden/Shown, negative origins, refreshed retry geometry | `NativeMoveTests` invokes the real `SystemWindowServer.move` with scripted dependencies | Adapter |
+| Delayed/off-row release, bounded failure, observation errors, cancellation during grab and settling, balanced cursor cleanup | `NativeMoveTests`, `ScrombleRelayTests`, `CursorConcealmentTests` | Adapter |
+| Staging, one saved write, sequential mixed moves, partial failure and Retry | Existing `StagedPlacementIntegrationTests` and `HiddenItemControllerTests` remain green | Hostless integration |
+| Six batches, including four mixed-direction batches; ten moves, each on attempt one | Production controller/mover, native events, independently confirmed Alfred/ACME owners; fresh window-list verification after each batch; original frames restored | Native, built-in display |
+| Saved Alfred Hidden request after standalone restart | Production AX attribution and placement: one planned move, one success, zero failures; collapsed-state observation confirmed Alfred hidden and ACME shown | Native, built-in display |
+
+The new suite adds 13 tests / 29 cases; the initial 19 failing cases reproduced defects before the
+behavioral fix. Automated tests replace every native-effect hook and never post input. Existing
+diagnostics add `grabbed` and geometry `ready` outcomes; tests assert behavior rather than log strings.
+No capture or AX-attribution pass, idle timer, telemetry, persistence key, or permission was added.
+`scan_diff`, `gitleaks`, and `semgrep` were unavailable; the diff received manual security review.
+
+These results do not qualify every third-party item, external displays, visual cursor flicker, or
+native lock transitions. Polling deadlines cannot interrupt a non-returning synchronous native read.
+The remaining Settings attribution/capture costs are separate from this move-sequencing fix.
 
 ## Settings Verification
 

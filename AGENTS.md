@@ -35,6 +35,10 @@ notch make-room, Settings sidebar, export/login feedback). Every feature is host
 existing seams and defaults to today's behavior; the native QA list below is what still separates
 "feature shipped" from "feature verified". Do not describe any of them as hardware-verified.
 
+Current focus (2026-09-13): the user requested Items Apply Changes reliability only, not further
+parity expansion. The native grab/drop sequencing defect below is fixed and verified for Alfred and
+ACME on the built-in display. Other native layouts still need evidence; do not broaden this claim.
+
 ## Loop charter (read first if you are an automated loop fire)
 
 A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
@@ -111,7 +115,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1132 tests, 80 suites**, 1760 invocations including
+- Test: same command with `test` (currently **1145 tests, 81 suites**, 1789 invocations including
   parameterized cases). Last full build/test: 2026-09-13, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
@@ -171,6 +175,13 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Settings shows observed placement, progress, and failures; repeating an unmet request retries
   without rewriting identical preferences. A single or bulk Shown request no longer depends on
   changing the Hidden set, and opening Settings dismisses the mirror.
+- **Apply move sequencing (2026-09-13, adapter + built-in-display verified).** The mover waits up to
+  250ms for observed grab movement before releasing, then polls placement for up to one second after
+  the initial 120ms settle instead of retrying during control animation. Off-bar release frames cannot
+  count as success or receive recovery clicks. Submitted downs retain a balancing up on interruption
+  or observation failure. Six native Alfred/ACME batches completed all ten moves on their first attempt;
+  a standalone restart also applied saved Alfred Hidden intent on its first attempt. See the bug entry
+  and `PARITY.md` for the reproduction, tests, and remaining limits.
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
 - **Opt-in hover reveal (2026-09-11, pure + adapter-tested).** Settings > General > Behavior has
@@ -336,6 +347,22 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Bugs (open)
 
+- **[FIXED 2026-09-13, adapter + native verified for Alfred/ACME] Apply could drop before the native
+  grab took effect.** Current logs showed Alfred exhausting five attempts in consecutive mixed batches
+  despite successful relay submission. A supervised A/B test reproduced three immediate-drop failures
+  and three successful drops after observing grab movement, with the original layout restored each time.
+  A relay echo confirms forwarding, not that the owner has entered drag state. A successful drop also
+  left the divider animating for about 500ms, so the old 120ms check retried valid moves prematurely.
+  Bounded grab and placement polling fix these paths without changing event routing or saved identity.
+  `NativeMoveTests` exercises the real mover with fake events, frames, clocks, and cursor operations:
+  13 tests / 29 cases, including delayed release, permanently off-row frames, cancellation, read errors,
+  and bounded failure. The initial 19 failing cases passed after the fix; independent review prompted
+  the additional off-row release coverage. Native mixed batches used the production controller/mover
+  with independently confirmed owners; all ten moves succeeded, and starting frames were restored.
+  The restarted app independently attributed and hid Alfred successfully, ending with `failed=false`.
+  This does not establish external-display reliability, universal cursor invisibility, or recovery
+  from a non-returning synchronous native read. Automated security scanners were unavailable; the diff
+  received manual security review.
 - **[MITIGATED 2026-09-12, adapter-tested] Every Settings selection repeated expensive placement work.**
   Editing is now local; multiple choices share one Apply sequence. A mixed-direction integration
   test verifies one preference write, one placement attribution pass, sequential moves, and one

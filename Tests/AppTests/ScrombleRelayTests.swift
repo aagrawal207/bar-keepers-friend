@@ -157,6 +157,7 @@ struct ScrombleRelayTests {
                 try SystemWindowServer().postMoveGesture(
                     source: source, windowID: 75, pid: 1811, targetWindowID: 90,
                     destination: fixture.target, cursor: cursor,
+                    waitForGrab: { true },
                     relay: { event, pid, timeout, cursor, balancingUp in
                         legs.append(event.type)
                         #expect(pid == 1811)
@@ -219,6 +220,7 @@ struct ScrombleRelayTests {
                 try SystemWindowServer().postMoveGesture(
                     source: source, windowID: 75, pid: 1811, targetWindowID: 90,
                     destination: fixture.target, cursor: cursor,
+                    waitForGrab: { true },
                     relay: { event, _, _, cursor, balancingUp in
                         let relay = makeRelay(canSubmit: { cursor.canSubmitInput }, balancingUp: balancingUp)
                         return relay.perform(run: {
