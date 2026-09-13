@@ -27,6 +27,12 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   a capture/reveal pass; hover waits for an already-active capture to finish.
 - **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
   Disabled items remain dimmed and non-interactive.
+- **Bartender 6 feature set (2026-09-13):** presets, triggers (battery, charging, low power, Wi-Fi,
+  frontmost app, external display, time/weekday), groups, widgets, menu bar styling, item spacing,
+  scroll/swipe reveal, an Always Hidden tier (Option-click reveals it), Live layout mode, a shortcut
+  recorder with per-item shortcuts, notch make-room, first-run onboarding, Restart and Check for
+  Updates. Everything is off or empty by default. These are tested against fakes and off-screen views;
+  none has been verified on a live menu bar yet (see PARITY.md).
 
 ### Arrange items
 
@@ -58,6 +64,11 @@ native move retries and capture delays can still make Apply take time.
   and the feel of anchor-to-panel travel still need hardware QA.
 - Cached opening prioritizes non-interruption over freshness. Stale or unfinished icons wait for
   existing display, placement, or lifecycle refreshes rather than forcing a capture when opened.
+- The 2026-09-13 parity features (presets, triggers, groups, widgets, styling, spacing, Always Hidden,
+  Live mode, shortcuts, notch make-room) have not been exercised on hardware. In particular, whether
+  the style overlay renders behind Tahoe's menu bar and whether the Always Hidden divider lands in
+  the right slot on first creation are open questions.
+- Quick Search is intentionally not implemented. Styles and presets apply to all displays at once.
 
 Current work and verification details are tracked in [AGENTS.md](AGENTS.md), with the remaining
 capability gaps in [PARITY.md](PARITY.md).
@@ -113,7 +124,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 510 tests in 42 suites (833 invocations including parameterized cases).
+It currently contains 1132 tests in 80 suites (1760 invocations including parameterized cases).
 
 ## Credit
 

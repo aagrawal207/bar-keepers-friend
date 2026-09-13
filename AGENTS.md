@@ -28,6 +28,13 @@ The user requested staged placement and Settings previews on 2026-09-12. Hidden/
 stay in a session-only draft until Apply Changes; Discard abandons only the draft. Preview rendering
 must remain cache-only. Apply uses the existing serialized mover, not parallel native gestures.
 
+On 2026-09-12 the user asked for full Bartender 6 parity and authorized commits/pushes for it. Three
+waves shipped (presets, triggers, groups, spacing, scroll reveal, onboarding, restart, update check;
+Always Hidden tier, Live layout mode, shortcut recorder + item shortcuts, menu bar styling, widgets;
+notch make-room, Settings sidebar, export/login feedback). Every feature is hostless-tested behind the
+existing seams and defaults to today's behavior; the native QA list below is what still separates
+"feature shipped" from "feature verified". Do not describe any of them as hardware-verified.
+
 ## Loop charter (read first if you are an automated loop fire)
 
 A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
@@ -104,8 +111,8 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **510 tests, 42 suites**, 833 invocations including
-  parameterized cases). Last full build/test: 2026-09-12, macOS 26.6.2 / Xcode 26.6, zero failures
+- Test: same command with `test` (currently **1132 tests, 80 suites**, 1760 invocations including
+  parameterized cases). Last full build/test: 2026-09-13, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
@@ -256,6 +263,67 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   (previously the blank generic icon). *Large/mid sizes verified by eye here; the in-Settings/About
   appearance is review-only (no Settings visibility from this rig).*
 
+- **Bartender-parity tier (2026-09-12/13, pure + adapter + rendering-tested; native QA pending).**
+  All persisted as new lenient/lossy `Preferences` fields; existing stores load unchanged and every
+  feature is off or empty by default, so a user who never touches them keeps the prior behavior.
+  - **Presets** (`LayoutPreset`, `PresetLibrary`; Settings > Presets; anchor-menu submenu with the
+    active preset checked). Applying replaces `itemControls` only and runs the normal placement path.
+  - **Triggers** (`TriggerRule`, `TriggerEvaluator`, `TriggerMonitor`; Settings > Triggers). Battery,
+    charging, battery-below, low power, Wi-Fi, frontmost app, external display, time-of-day/weekday.
+    A matching rule applies its preset and remembers the prior arrangement in `triggerState`; the
+    baseline is restored when no rule matches or the rule/preset is deleted. Evaluation is idempotent;
+    trigger applies use `apply(preferences:userInitiated: false)` so they defer like launch placement
+    (never close an open menu or prompt for Accessibility). Sources are armed only for the conditions
+    in use; a 30s poll exists only while a Wi-Fi/battery rule exists. An unapplied Items draft is
+    discarded when a trigger/preset changes the saved sets, with a footer notice.
+  - **Groups** (`ItemGroup`, `ItemGroupLibrary`, `GroupStatusItemsController`; Settings > Groups).
+    Grouped owners are forced Hidden through `ItemGroupLibrary.effectiveControls` (placement, change
+    detection, Items rows, previews) and reachable from a `BKFGroup-<uuid>` status item whose menu
+    activates members from the glyph cache. Items rows for grouped owners are disabled ("In group").
+  - **Widgets** (`MenuBarWidget`, `WidgetActionRunner`, `WidgetStatusItemsController`; Settings >
+    Widgets). `BKFWidget-<uuid>` status items running allowlisted actions only: http/https/mailto
+    URL, launch app by bundle id, `shortcuts run -- <name>` (argv, no shell), toggle bar.
+  - **Menu bar item spacing** (`MenuBarSpacing`, `MenuBarSpacingService`; General tab). Writes the
+    global-domain `NSStatusItemSpacing`/`NSStatusItemSelectionPadding` (ByHost + AnyHost) only on an
+    explicit change; launch never removes values set elsewhere. Needs app relaunch/logout to show.
+  - **Scroll/swipe reveal** (`ScrollRevealRecognizer`, `ScrollRevealMonitor`; opt-in below hover).
+    Global+local scroll monitors (no Accessibility), one effect per gesture, 400ms cooldown.
+  - **Onboarding** (`Onboarding*`): shown once for genuinely fresh installs (no saved store), never
+    for upgrades. Welcome, layout mode, permissions with live chips, done.
+  - **Restart** (`RestartService`: detached `/bin/sh` waits for our pid to exit, then `open`) and
+    **Check for Updates** (`UpdateCheckService`: manual GET of the GitHub latest release, no polling)
+    in the anchor menu; `AppStatus.updateAvailable` is fed by the manual check.
+  - **Always Hidden tier**: `ItemPlacement { shown, hidden, alwaysHidden }`, store key
+    `alwaysHiddenInMenuBar` (omitted when empty). The `BKFAlwaysHidden` divider is created lazily
+    only when some owner has that intent; plain reveal (click/hover/scroll/hotkey) keeps it tucked;
+    Option-click reveals both tiers (reflow) or appends an "Always hidden" group to the floating bar.
+    Only intent-backed owners live in the tier; a stray item that physically lands past the divider
+    is mirrored as plain hidden. Planner output is byte-identical without the divider. Items rows use
+    a three-segment picker plus Show-in-bar and bar-order controls (presentation-only, immediate).
+  - **Live layout mode** (`LayoutMode`, `LiveLayoutPolicy`, `LiveLayoutMonitor`): after app launch/quit,
+    waits for a 1.5s settle and 0.8s pointer idle (30s deadline, 10s min interval), runs a plan-only
+    preview (`HiddenItemController.previewMoves`, shared observe/plan with `reconcile`), and only then
+    requests a background reconcile; defers while the bar/menu/placement/capture is busy and backs off
+    after a failed batch until intent changes. On-Demand remains the default.
+  - **Shortcuts** (`HotkeyAssignments`, `HotkeyRecorderView`, `ShortcutsSettingsSection`): a recorder
+    for the toggle shortcut with system-reserved/conflict detection, and per-item shortcuts (owner
+    key -> combo, ids 1000+, cap 32, toggle wins conflicts) that reveal and activate one item;
+    inactive in reflow mode. Carbon registration is behind a `HotkeyRegistrar` seam.
+  - **Menu bar styling** (`MenuBarStyle`, `MenuBarStyleGeometry`, `MenuBarStyleOverlayController`;
+    Settings > Style): tint/gradient/opacity/shape/border/shadow drawn by one per-display overlay
+    window at `kCGMainMenuWindowLevel - 1`, mouse-transparent, excluded from icon capture. Honors
+    Reduce Transparency. Whether level 23 renders behind Tahoe's bar content is a hardware question.
+  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; General tab, default
+    Never): when a revealed hidden section would be clipped by the notch (reflow or activation), the
+    shown items nearest the anchor are swapped left of the section's leftmost item and put back
+    before every collapse (toggle, activation rehide, auto-rehide, Option-click, pause, reconcile,
+    and quit via `applicationShouldTerminate` -> `.terminateLater`). Never overlaps a placement batch.
+  - **Settings sidebar**: `NavigationSplitView` with a fixed 180pt sidebar (identity header at top)
+    and a titled detail pane; window 820x720. Tabs: General, Items, Presets, Triggers, Groups,
+    Widgets, Style. `SettingsView(model:initialTab:)` and `requestedTab` unchanged.
+  - **Export/login feedback**: export distinguishes cancel from write failure; Launch at login shows
+    requires-approval / not-registered notes with an "Open Login Items..." deep link.
+
 ## Removed (intentionally — don't re-add without asking)
 
 - **Search panel** + its ⌥⌘F hotkey — user found it confusing.
@@ -368,10 +436,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Do not claim timeout recovery is verified, or replace the wait with overlapping operations
   without isolating native move/capture ownership. The older "overtaken capture" note is corrected
   below. This is code-traced, not a reproduced live ScreenCaptureKit hang.
-- **[LOW, open 2026-09-10] Export errors and login approval need clearer feedback.** Export
-  returns `nil` for both cancellation and write failure, clearing the status line in either case.
-  Launch-at-login shows saved intent without exposing `.requiresApproval` or the existing System
-  Settings recovery action. Both are code-traced Settings gaps; neither is fixed in this pass.
+- **[RESOLVED 2026-09-13, adapter + rendering-tested] Export errors and login approval need clearer
+  feedback.** `LayoutTransferService.exportLayout` returns `ExportOutcome { saved, cancelled, failed }`
+  with injected panel/writer; the model shows the failure reason. `SettingsModel.loginItemStatus` +
+  `loginItemNotice` surface `.requiresApproval` / lost registration with an "Open Login Items..."
+  button behind a `LoginItemManaging` seam. Real `SMAppService` transitions remain hardware QA.
 
 - **[OPEN 2026-06-30] Activation click visibly moves the cursor ("the whole mouse moves"), and some
   items' menus don't open.** User-reported. The activation click (`SystemWindowServer.click`) warps
@@ -767,6 +836,29 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Needs hardware verification (can't be done from an agent — Xcode holds the app)
 
+- **Parity-tier native behavior (2026-09-13).** Everything below is hostless-tested only:
+  - Always Hidden: first creation of `BKFAlwaysHidden` lands left of `BKFHidden`; three-slot launch
+    repair on a real defaults file; two expanded dividers (memory, no flash of tier items on a plain
+    reveal); Option-click detection via `NSApp.currentEvent`; native relay drops relative to the tier
+    divider; the "stray item lands leftmost" premise.
+  - Live mode: exactly one check ~1.5s after an app launch/quit; pointer-idle gate feel; cursor
+    visibility during the resulting move; no double reconcile on display change.
+  - Triggers: IOKit power-source callbacks, CoreWLAN delegate (SSID is nil without Location
+    permission, so connection is inferred from station mode + RSSI), time-of-day at DST boundaries.
+  - Groups/widgets: status-item slot seeding right of the anchor, Command-drag persistence, menu
+    presentation via `performClick`, `shortcuts run` exit handling, `mailto:` handoff.
+  - Spacing: `defaults -currentHost read -globalDomain NSStatusItemSpacing` after Apply; effect
+    after relaunching a menu-bar app; whether ByHost or AnyHost is the domain AppKit reads.
+  - Styling: whether a level-23 overlay is visible behind Tahoe's transparent bar; interaction with
+    "Show menu bar background", Reduce Transparency, auto-hidden bar, fullscreen Spaces.
+  - Notch make-room: a drop whose reference is a third-party (possibly notch-clipped) window; partial
+    overlap tolerance at `auxiliaryTopRightArea.minX`; flicker/latency inside the 5s activation deadline.
+  - Shortcuts: real Carbon registration of 1+N slots; recorder first-responder capture (Command-W
+    must not close Settings while recording); item shortcut fires reveal -> click -> rehide.
+  - Restart/update: LaunchServices settle vs the single-instance guard; live GitHub check (the repo
+    has no releases yet, so it should read "No published releases").
+  - Onboarding/sidebar: glass sidebar rendering, non-collapsibility under drag, VoiceOver.
+
 - **Staged Settings interaction.** Off-screen tests exercise Apply/Discard/bulk controls, edited
   aliases across regrouping, preview overflow, and the full window's bounds. Pointer/keyboard focus
   transitions and VoiceOver navigation in an on-screen Settings window remain unverified. The
@@ -828,71 +920,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ### Features not yet built (from the plan, roughly prioritized)
 
-- **Settings window refinement (UX polish).** *(User feedback 2026-06-28: "looks like someone new
-  built it… refine it and make it a proper app." Low priority, loop item.)*
-  - **[DONE 2026-09-12, off-screen verified]** Staged Apply/Discard workflow, cached Menu Bar and
-    Hidden Bar/List previews, persistent footer, and visible cached rows during refresh. Settings
-    is 640x720; full-root tests include the identity header, tabs, unknown items, and error messages.
-  - **[DONE this pass] App-identity header.** `SettingsView` now leads with an icon (the real
-    `NSApp.applicationIconImage`) + app name + version banner above the tab strip — the concrete
-    "no app identity" gap. The version string is composed by a pure, tested `AppInfo.displayVersion`
-    (short + build → `"0.1.0 (1)"`, drops the parenthetical when build is missing/equal, `"—"`
-    fallback). Window grew 580→620 to fit the header.
-  - **[TODO, follow-up fires]** the rest is genuinely aesthetic and **can't be verified from this
-    rig** (no menu-bar/Settings visibility): a sidebar/`NavigationSplit` layout instead of the tab
-    strip, consistent section spacing/footnotes, an About area. These need either hardware QA or the
-    user's eye — don't ship blind restyling. Bartender/Ice are clean-room visual references only.
-- **Rich anchor right-click menu — IN PROGRESS (greenlit 2026-06-29).** The menu was Settings/Quit
-  only; the user wants App name + version, a status line, Pause, About, Check for Updates, Restart.
-  - **[DONE]** App name + version header (`CFBundleName`; version via the shared
-    `AppInfo.displayVersion` so it matches the Settings header — both read `"0.1.0 (1)"`), a live
-    **status line** (`Status: Paused / Ready / Working… / Collecting icons…`), an **About** item
-    (standard AppKit about panel), plus the existing Settings/Quit — all in
-    `CosmeticHideEngine.showAnchorMenu`. Status is backed by a pure, tested `AppStatus` enum in Core
-    (`derive(paused:moving:capturing:updateAvailable:)`, precedence paused > update > move > capture
-    > ready); the engine feeds it `reconcileInFlightCount`, `captureInFlightCount`, and `isPaused`.
-    > Note (2026-06-29): the menu's action items needed `menu.autoenablesItems = false` to fire at
-    > all — see the RESOLVED bug above; without it AppKit left every item disabled.
-  - **[DONE] Pause** — a checkable menu item. Pausing reveals the hidden section in place (un-tucks
-    the divider via `setHidden(collapsed: false)` + drives the state machine to `.shown`) and gates
-    the automated triggers — left-click toggle, hotkey, and `reconcileHiddenItems` (the move) — with
-    additive `!isPaused` guards, so while paused the bar behaves like a vanilla menu bar. Un-pausing
-    collapses to baseline and re-applies saved per-item intent. DESIGN: `isPaused` is **session-only**
-    (NOT persisted) — pause is an "I'm hunting for something right now" mode; a silently-paused app
-    after reboot would be a worse surprise, and it keeps the change off the launch path. The gates
-    are pure subtraction (the app does *less* while paused), so a bug can only mean "pause didn't
-    fully take", never layout corruption — and it never touches the synthesized-move path.
-  - **[TODO, follow-up fires]** **Restart** — relaunch the app (interacts with the single-instance
-    guard in `AppCoordinator.anotherInstanceIsRunning`; sequence the new process carefully). **Check
-    for Updates** — needs **Sparkle** wired (see below); `AppStatus.updateAvailable` already exists so
-    the status line and that item will share one source of truth. Until Sparkle lands, it's omitted
-    (not shown-disabled), since there's nothing to check.
-- **Per-item / global hotkeys** to toggle a *specific* item. (Deferred until the synthesized move
-  is hardware-verified — don't keep building on an unproven mechanism.)
-- **Triggers / automation** — battery / wifi / app-active / schedule → apply a preset.
-- **Presets / profiles** — saved arrangements, per-display or per-Space.
-- **Layout Mode: On-Demand vs Live** *(idea from Bartender's onboarding, 2026-06-28 — the clean
-  reframe of our cursor-warp problem).* Bartender makes the user choose up front: **On-Demand**
-  ("you're in control" — only moves items when you ask, never interrupts the mouse) vs **Live**
-  ("always organized" — auto-sorts on every add/remove, "may cause a temporary mouse interruption").
-  They don't *hide* the cursor jump; they make non-interruption the default and let power users opt
-  into auto-organize. BKF is already On-Demand-shaped ("only moves what the user explicitly
-  toggled"), so this validates our direction — adopt the *name* now (frame the current behavior as
-  On-Demand) and treat Live (auto-reconcile on menu-bar change) as the future opt-in. This also
-  gives the batch-cursor-guard work a home: it's the thing that makes a future Live mode tolerable.
-- **Always-Hidden tier** — a second section never shown in the bar (deferred; Tahoe broke nested
-  sectioning for Ice, so approach with care).
-- **Menu-bar item spacing** (global `NSStatusItemSpacing`) — opt-in, force-relaunches every
-  menu-bar app; ship only with a clear warning + reset.
-- **First-run onboarding** — a guided welcome flow (the Permissions *panel* in Settings is done;
-  what's left is a proactive first-launch walkthrough rather than the user finding Settings).
-  *Bartender's onboarding (2026-06-28 screenshots) is a good model:* a feature-overview grid, then
-  the Layout Mode choice (above), then a dedicated full-screen **Grant Permissions** step with crisp
-  per-permission benefit bullets ("Screen Recording → see items in the bar / live previews / capture
-  for search"; "Accessibility → move & rearrange / click to show menus / hide & show automatically").
-  We already have the live status + deep-links in Settings; onboarding is just surfacing them
-  proactively on first launch with that benefit copy.
-- **Sparkle auto-update**, **notarized DMG** distribution.
+- **Sparkle auto-update** and a **notarized DMG** (Developer ID signing). The manual GitHub check is
+  in place; a signed feed and installer are the remaining distribution work.
+- **Per-Space / per-display styles and presets.** Bartender applies styles per menu bar; BKF uses
+  one style and one arrangement for all displays.
+- **Search** stays removed at the user's request (see Removed).
+- **Settings polish that needs the user's eye:** section spacing/footnotes and an About area; the
+  sidebar shipped 2026-09-13 and the previous "tab strip" TODO is closed.
+- **Restart / Check for Updates** shipped 2026-09-12 (anchor menu); the earlier "Rich anchor menu"
+  in-progress notes are superseded by the Built entry above.
 
 ## Hard constraints / gotchas
 

@@ -1,12 +1,15 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-12. Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-13. Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
-Full parity is not established. The checklist separates shipped behavior, automated verification,
-and native behavior that still needs evidence. Passing geometry or fake-backed tests does not prove
-that macOS opened a particular third-party menu or rendered a cursor without flicker.
+Feature-surface parity with Bartender 6 is now implemented for every item on Bartender's public
+feature list except Quick Search (removed at the user's request), per-Space/per-display styles, and
+signed auto-update. Verified parity is not established: every 2026-09-12/13 feature is hostless-tested
+only. The checklist separates shipped behavior, automated verification, and native behavior that still
+needs evidence. Passing geometry or fake-backed tests does not prove that macOS opened a particular
+third-party menu, moved an item to the requested slot, or rendered a cursor without flicker.
 
 ## Core Workflows
 
@@ -18,7 +21,10 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
 | Hover reveal | Cache-only opens; optional captures revalidate after queue waits; ownership and non-key ordering tested | Native first-click delivery, focus, animation transit, display qualification, and freshness without intrusive capture |
-| Keyboard access | Configured global toggle and persistent keyboard-opened bar | Shortcut recorder/conflict feedback and accessible navigation/dismissal |
+| Keyboard access | Recorder for the toggle shortcut with system-reserved/conflict detection; per-item shortcuts reveal and activate one item (floating-bar mode) | Real Carbon registration of 1+N slots, recorder first-responder behavior, accessible navigation/dismissal |
+| Reveal gestures | Click, hotkey, opt-in hover, opt-in scroll/swipe (one effect per gesture, cooldown) | Native scroll-direction feel and monitor routing over the live bar |
+| Notch full access | Make-room swap planner + coordinator (default Never): tucks shown items nearest the anchor when a reveal is notch-clipped, restores before every collapse and before quit | Drop relative to a third-party window, partial-overlap tolerance, flicker/latency inside the activation deadline |
+| Layout mode | On-Demand default; Live mode re-applies saved placement after app launch/quit via a plan-only preview with settle/idle gates and failure backoff | Exactly-one-check timing, pointer visibility during the resulting move |
 | Display correctness | Placement re-reads controls; several coordinate fixes are tested | Explicit 2D display identity, negative-origin capture, stacked-display panel selection, and live external-display qualification |
 | Native-work resilience | Pause/superseding/session interruption cancel safely; submitted downs retain balancing ups; interrupted placement stays pending | Native lock-transition qualification, Space/fullscreen/mouse-idle policies, and genuine recovery from non-returning calls |
 
@@ -26,13 +32,16 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 
 | Capability | Current State | Remaining Work |
 |---|---|---|
-| Ordering | Mirror order persists in the existing store, without editing UI | Mirror ordering controls and separately verified native ordering |
+| Ordering | Items rows have Show-in-bar and Move Up/Down controls for the floating bar (presentation-only, immediate) | Native menu-bar ordering is not managed; only Shown/Hidden/Always Hidden placement is |
 | Multiple items from one owner | Coupled by the existing persisted owner key | A deliberate migration design before any independent identity scheme |
-| Presets/profiles | One layout can be exported/imported | Named arrangements before automatic triggers |
-| Triggers | Not implemented | Battery, Wi-Fi, app/schedule conditions after presets are stable |
-| Groups/Always Hidden | Not implemented as usable workflows | Tested models and native qualification without weakening protected-item guards |
-| Settings/onboarding | Staged Apply/Discard placement, cached Menu Bar and Hidden Bar/List previews, live permission status | Native focus/VoiceOver QA, export errors, login approval, and first-run guidance |
-| Updates/install | Local Apple Development build | Restart, signed update feed, Developer ID signing, notarization, and installation verification |
+| Presets/profiles | Named presets (save current, apply, update, rename, delete) in Settings and the anchor menu | Per-display/per-Space presets; native verification of a preset apply is the same as placement |
+| Triggers | Battery, charging, battery-below, low power, Wi-Fi, frontmost app, external display, time/weekday rules apply a preset and restore the baseline afterward | IOKit/CoreWLAN callbacks and DST boundaries on hardware |
+| Groups/Always Hidden | Groups behind a BKF-owned status item with a member menu; Always Hidden tier behind a lazily created third divider, Option-click reveals it | Slot seeding, tier-divider drops, two expanded dividers, stray-item premise |
+| Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
+| Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
+| Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
+| Settings/onboarding | Sidebar layout (820x720), staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
 ## Deliberate Differences
@@ -42,6 +51,9 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 - Hover was previously removed; its new opt-in implementation follows the user's explicit request.
 - Bartender Pro's additional shelf/media/calendar/file utilities are outside the menu-bar-manager
   scope unless requested separately.
+- One style and one arrangement for all displays; Bartender styles each menu bar separately.
+- Widgets run only allowlisted actions (URL, app launch, Shortcuts, toggle bar); no scripts.
+- Live mode uses BKF's plan-only preview and never moves while the bar, a menu, or a batch is active.
 
 ## Verification Gates
 
@@ -53,6 +65,25 @@ that macOS opened a particular third-party menu or rendered a cursor without fli
 - Never race a new native operation past an unfinished one merely to make a timeout appear fixed.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
+
+## Parity Verification
+
+Full build/test on 2026-09-13: 1132 tests across 80 suites, 1760 invocations, zero failures or skips.
+The built app passed strict code-signature verification. Each wave had an independent read-only review
+whose concrete findings were fixed before commit (background trigger applies deferring like launch
+placement; spacing written only on explicit change; Live-mode busy gate including a revealed section;
+failure backoff; stray always-hidden items mirrored as hidden; make-room restore on every collapse
+path including quit).
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Presets, triggers, groups, widgets, spacing, style, hotkeys, live policy, notch planner, draft models | `LayoutPresetTests`, `TriggerEvaluatorTests`, `ItemGroupTests`, `MenuBarWidgetTests`, `MenuBarSpacingTests`, `MenuBarStyle*Tests`, `HotkeyAssignmentsTests`, `LiveLayoutPolicyTests`, `NotchOverflowPlannerTests`, `ItemControlStoreTests` (tri-state) | Unit |
+| Monitors and controllers with injected sources, clocks, factories, registrars, defaults, runners | `TriggerMonitorTests`, `LiveLayoutMonitorTests`, `ScrollRevealMonitorTests`, `GroupStatusItemsControllerTests`, `WidgetStatusItemsControllerTests`, `MenuBarSpacingServiceTests`, `MenuBarStyleOverlayControllerTests`, `HotkeyServiceTests`, `NotchOverflowCoordinatorTests`, `RestartServiceTests`, `UpdateCheckServiceTests` | Adapter |
+| Engine wiring: lazy tier divider, option-click, live preview/backoff, notch make-room and restore ordering, quit restore | `CosmeticHideEngineTests`, `HiddenItemControllerPreviewTests`, `NotchOverflowEngineTests`, `PlacementIntegrationTests`, `StagedPlacementIntegrationTests` with `FakeWindowServer` | Hostless integration |
+| Every Settings pane and section, sidebar navigation, onboarding steps, real presses and field edits | `*SettingsTabTests`, `*SettingsSectionTests`, `SettingsSidebarTests`, `SettingsViewTests`, `OnboardingTests` | Hostless rendering + interaction |
+
+No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
+is the acceptance checklist before any of these is described as working on a real menu bar.
 
 ## Settings Verification
 
