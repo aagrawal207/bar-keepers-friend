@@ -498,6 +498,144 @@ struct HoverRevealIntegrationTests {
         #expect(!fixture.engine.canRevealOnHover)
         #expect(fixture.engine.stateMachine.visibility(of: .hidden) == .shown)
     }
+
+    // MARK: - Always Hidden tier
+
+    @Test func hoverAndShortcutOpensNeverIncludeTheAlwaysHiddenTier() async throws {
+        let secret = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: -1, ownerBundleID: "Secret App", frame: CGRect(x: 50, y: 0, width: 22, height: 22)
+        )
+        let hidden = MenuBarItemSnapshot(
+            windowID: 2, ownerPID: -1, ownerBundleID: "Hidden App", frame: CGRect(x: 700, y: 0, width: 22, height: 22)
+        )
+        let server = FakeWindowServer(items: [secret, hidden] + [
+            MenuBarItemSnapshot(windowID: 90, ownerPID: 1, title: "BKFAnchor", frame: CGRect(x: 1000, y: 0, width: 32, height: 22)),
+            MenuBarItemSnapshot(windowID: 91, ownerPID: 1, title: "BKFHidden", frame: CGRect(x: 984, y: 0, width: 16, height: 22)),
+            MenuBarItemSnapshot(windowID: 92, ownerPID: 1, title: "BKFAlwaysHidden", frame: CGRect(x: 600, y: 0, width: 8, height: 22))
+        ])
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let image = try #require(context.makeImage())
+        let recorder = AlwaysHiddenDividerRecorder()
+        var dividerWrites: [Bool] = []
+        let fixture = Fixture(
+            server: server,
+            captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            setDividerCollapsed: { dividerWrites.append($0) },
+            itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["Secret App"]),
+            alwaysHiddenDivider: recorder.hooks
+        )
+        defer { fixture.engine.uninstall() }
+        #expect(recorder.creates == 1)
+        #expect(fixture.bar.alwaysHiddenDividerWindowID == 92)
+        await fixture.bar.captureAndCache(anchorMinX: 100)
+        #expect(fixture.bar.cachedHiddenItems().map(\.id) == [2])
+        #expect(fixture.bar.cachedAlwaysHiddenItems().map(\.id) == [1])
+        dividerWrites.removeAll()
+        recorder.writes.removeAll()
+
+        fixture.advance(to: 0.2)
+        await (try #require(fixture.hover.pendingShowTask)).value
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.bar.presentation == .hover)
+        #expect(!fixture.bar.presentsAlwaysHidden)
+        var view = try #require(fixture.panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == [2])
+        #expect(view.alwaysHiddenItems.isEmpty)
+        fixture.bar.hide()
+
+        let presented = AsyncGate()
+        fixture.panel.onPresent = { Task { await presented.open() } }
+        fixture.engine.toggleFromShortcut()
+        await presented.wait()
+        #expect(fixture.bar.presentation == .keyboard)
+        #expect(!fixture.bar.presentsAlwaysHidden)
+        view = try #require(fixture.panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.alwaysHiddenItems.isEmpty)
+        fixture.bar.hide()
+
+        let optionPresented = AsyncGate()
+        fixture.panel.onPresent = { Task { await optionPresented.open() } }
+        fixture.engine.anchorLeftClick(optionHeld: true)
+        await optionPresented.wait()
+        #expect(fixture.bar.presentsAlwaysHidden)
+        view = try #require(fixture.panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == [2])
+        #expect(view.alwaysHiddenItems.map(\.id) == [1])
+        await fixture.engine.captureChain.value
+
+        #expect(dividerWrites.isEmpty)
+        #expect(recorder.writes.isEmpty)
+        #expect(server.clickedWindowIDs.isEmpty)
+        #expect(server.moveRequests.isEmpty)
+        #expect(fixture.engine.stateMachine.visibility(of: .alwaysHidden) == .collapsed)
+    }
+
+    @Test func optionClickOverAHoverOpenedBarWidensItAsAClickPresentation() async throws {
+        let secret = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: -1, ownerBundleID: "Secret App", frame: CGRect(x: 50, y: 0, width: 22, height: 22)
+        )
+        let hidden = MenuBarItemSnapshot(
+            windowID: 2, ownerPID: -1, ownerBundleID: "Hidden App", frame: CGRect(x: 700, y: 0, width: 22, height: 22)
+        )
+        let server = FakeWindowServer(items: [secret, hidden] + [
+            MenuBarItemSnapshot(windowID: 90, ownerPID: 1, title: "BKFAnchor", frame: CGRect(x: 1000, y: 0, width: 32, height: 22)),
+            MenuBarItemSnapshot(windowID: 91, ownerPID: 1, title: "BKFHidden", frame: CGRect(x: 984, y: 0, width: 16, height: 22)),
+            MenuBarItemSnapshot(windowID: 92, ownerPID: 1, title: "BKFAlwaysHidden", frame: CGRect(x: 600, y: 0, width: 8, height: 22))
+        ])
+        let context = try #require(CGContext(
+            data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        let image = try #require(context.makeImage())
+        let recorder = AlwaysHiddenDividerRecorder()
+        let fixture = Fixture(
+            server: server,
+            captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["Secret App"]),
+            alwaysHiddenDivider: recorder.hooks
+        )
+        defer { fixture.engine.uninstall() }
+        await fixture.bar.captureAndCache(anchorMinX: 100)
+        #expect(fixture.bar.cachedAlwaysHiddenItems().map(\.id) == [1])
+
+        fixture.advance(to: 0.2)
+        await (try #require(fixture.hover.pendingShowTask)).value
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.bar.presentation == .hover)
+        #expect(fixture.hover.ownsPanel)
+        #expect(fixture.panel.nonkeyPresentations == 1)
+        #expect(fixture.panel.keyPresentations == 0)
+
+        let widened = AsyncGate()
+        fixture.panel.onPresent = { Task { await widened.open() } }
+        fixture.engine.anchorLeftClick(optionHeld: true)
+        await widened.wait()
+        #expect(fixture.bar.isVisible)
+        #expect(fixture.bar.presentsAlwaysHidden)
+        #expect(fixture.bar.presentation == .click)
+        #expect(!fixture.hover.ownsPanel)
+        #expect(fixture.panel.keyPresentations == 1)
+        #expect(fixture.panel.nonkeyPresentations == 1)
+        let view = try #require(fixture.panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == [2])
+        #expect(view.alwaysHiddenItems.map(\.id) == [1])
+
+        // Leaving the anchor no longer closes it: the click presentation owns the panel now.
+        fixture.point = CGPoint(x: 600, y: 600)
+        fixture.advance(to: 5)
+        #expect(fixture.bar.isVisible)
+        fixture.engine.anchorLeftClick(optionHeld: true)
+        #expect(!fixture.bar.isVisible)
+        #expect(server.clickedWindowIDs.isEmpty)
+        #expect(server.moveRequests.isEmpty)
+    }
 }
 
 @MainActor
@@ -515,14 +653,20 @@ private final class Fixture {
     init(
         server: FakeWindowServer = FakeWindowServer(),
         captureIcons: @escaping ([MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] = { _ in [:] },
-        setDividerCollapsed: @escaping (Bool) -> Void = { _ in }
+        setDividerCollapsed: @escaping (Bool) -> Void = { _ in },
+        itemControls: ItemControlStore = ItemControlStore(),
+        alwaysHiddenDivider: AlwaysHiddenDividerHooks? = nil
     ) {
         _ = NSApplication.shared
+        preferences = Preferences(
+            autoRehide: false, itemControls: itemControls, dismissBarOnMouseExit: false, revealOnHover: true
+        )
         let panel = PresentationPanel(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
         self.panel = panel
         engine = CosmeticHideEngine(
             preferences: preferences, controlWindowIDs: { (90, 91) }, setDividerCollapsed: setDividerCollapsed,
-            anchorFrame: { CGRect(x: 100, y: 100, width: 32, height: 24) }, onPreferencesChanged: { _ in }
+            anchorFrame: { CGRect(x: 100, y: 100, width: 32, height: 24) }, alwaysHiddenDivider: alwaysHiddenDivider,
+            onPreferencesChanged: { _ in }
         )
         bar = FloatingBarController(
             windowServer: server, captureIcons: captureIcons, preferences: preferences, attribute: { $0 },

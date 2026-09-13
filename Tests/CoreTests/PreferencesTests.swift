@@ -115,7 +115,7 @@ import Testing
             "floatingBarStyle", "useAXActivation", "controlItemPositions", "enableGlobalHotkey",
             "toggleHotkey", "itemAliases", "itemControls", "dismissBarOnMouseExit", "revealOnHover",
             "revealOnScroll", "presets", "triggers", "triggerState", "itemGroups", "menuBarSpacing",
-            "hasCompletedOnboarding"
+            "hasCompletedOnboarding", "layoutMode", "itemHotkeys", "menuBarStyle", "widgets"
         ])
     }
 

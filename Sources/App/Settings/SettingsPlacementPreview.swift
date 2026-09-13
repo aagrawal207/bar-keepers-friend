@@ -5,6 +5,8 @@ import SwiftUI
 struct SettingsPlacementPreview: View {
     let shown: [FloatingBarItem]
     let hidden: [FloatingBarItem]
+    /// Rendered as a third box only when non-empty, so the two-box baseline stays untouched.
+    var alwaysHidden: [FloatingBarItem] = []
     let unknown: [FloatingBarItem]
     let style: FloatingBarStyle
     var useFloatingBar = true
@@ -62,6 +64,20 @@ struct SettingsPlacementPreview: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-preview-hidden")
+
+                if !alwaysHidden.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Always Hidden")
+                            .font(.caption.weight(.medium))
+                            .accessibilityAddTraits(.isHeader)
+                        Items(items: alwaysHidden, style: style, section: "Always Hidden", metrics: metrics)
+                            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-preview-always-hidden")
+                    .help("Always Hidden items stay off-screen until you Option-click the BKF icon.")
+                }
             }
 
             if !unknown.isEmpty {
@@ -90,7 +106,8 @@ struct SettingsPlacementPreview: View {
             }
 
             Text("Manageable items only, using cached glyphs or app icons. Not a live menu bar; spacing and order may differ."
-                 + (hasPendingChanges ? " After Apply includes saved placement requests." : ""))
+                 + (hasPendingChanges ? " After Apply includes saved placement requests." : "")
+                 + (alwaysHidden.isEmpty ? "" : " Always Hidden items appear only when you Option-click the BKF icon."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

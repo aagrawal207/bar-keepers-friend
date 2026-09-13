@@ -5,7 +5,7 @@ import SwiftUI
 // Placement edits stay local to the Items tab's model until explicitly applied.
 struct SettingsView: View {
     enum Tab: Hashable {
-        case general, items, presets, triggers, groups
+        case general, items, presets, triggers, groups, widgets, style
     }
 
     @Bindable var model: SettingsModel
@@ -38,6 +38,12 @@ struct SettingsView: View {
                 GroupsSettingsTab(model: model)
                     .tabItem { Label("Groups", systemImage: "square.grid.2x2") }
                     .tag(Tab.groups)
+                WidgetsSettingsTab(model: model)
+                    .tabItem { Label("Widgets", systemImage: "star.square.on.square") }
+                    .tag(Tab.widgets)
+                StyleSettingsTab(model: model)
+                    .tabItem { Label("Style", systemImage: "paintpalette") }
+                    .tag(Tab.style)
             }
             .padding(.top, 8)
         }
@@ -114,16 +120,9 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
-            Section("Shortcut") {
-                Toggle("Toggle the bar with a global shortcut", isOn: $model.preferences.enableGlobalHotkey)
-                if model.preferences.enableGlobalHotkey {
-                    LabeledContent("Toggle bar") {
-                        Text(HotkeyCarbon.displayString(for: model.preferences.toggleHotkey))
-                            .font(.body.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+            LayoutModeSettingsSection(model: model)
+
+            ShortcutsSettingsSection(model: model, failures: model.hotkeyRegistrationFailures)
 
             Section("Behavior") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
@@ -335,7 +334,7 @@ struct ItemsSettingsContent: View {
     private var placementPreview: some View {
         let preview = model.placementPreview
         return SettingsPlacementPreview(
-            shown: preview.shown, hidden: preview.hidden, unknown: preview.unknown,
+            shown: preview.shown, hidden: preview.hidden, alwaysHidden: preview.alwaysHidden, unknown: preview.unknown,
             style: model.preferences.floatingBarStyle,
             useFloatingBar: model.preferences.useFloatingBar,
             hasPendingChanges: model.hasPendingChanges,
@@ -349,6 +348,13 @@ struct ItemsSettingsContent: View {
             if !parts.hidden.isEmpty {
                 Section("Hidden (\(parts.hidden.count))") {
                     ForEach(parts.hidden) { item in
+                        ItemRow(model: model, item: item)
+                    }
+                }
+            }
+            if !parts.alwaysHidden.isEmpty {
+                Section("Always Hidden (\(parts.alwaysHidden.count))") {
+                    ForEach(parts.alwaysHidden) { item in
                         ItemRow(model: model, item: item)
                     }
                 }
@@ -370,10 +376,15 @@ struct ItemsSettingsContent: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Arrange Menu Bar Items")
                 .font(.headline)
-            Text("Choose Shown or Hidden, review the preview, then Apply Changes. Editing placement here does not move items.")
+            Text("Choose Shown, Hidden, or Always Hidden, review the preview, then Apply Changes. Editing placement here does not move items. Always Hidden items appear only when you Option-click the BKF icon.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Show in bar and the order arrows change only the floating bar and save immediately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings-items-bar-controls-help")
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
@@ -403,14 +414,14 @@ struct ItemsSettingsContent: View {
     private var bulkActions: some View {
         HStack(spacing: 8) {
             Button("Hide All") {
-                model.setHidden(true, forAll: items)
+                model.setPlacement(.hidden, forAll: items)
             }
-            .disabled(!model.canSetHidden(true, forAll: items))
+            .disabled(!model.canSetPlacement(.hidden, forAll: items))
             .accessibilityIdentifier("settings-placement-hide-all")
             Button("Show All") {
-                model.setHidden(false, forAll: items)
+                model.setPlacement(.shown, forAll: items)
             }
-            .disabled(!model.canSetHidden(false, forAll: items))
+            .disabled(!model.canSetPlacement(.shown, forAll: items))
             .accessibilityIdentifier("settings-placement-show-all")
         }
         .controlSize(.small)
@@ -527,13 +538,15 @@ private struct ItemRow: View {
         return current.displayName
     }
 
+    private var placement: ItemPlacement { model.placement(of: item) }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(nsImage: item.image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 18, height: 18)
-                .opacity(model.isHidden(item) ? 0.5 : 1)
+                .opacity(placement.isHidden ? 0.5 : 1)
 
             TextField(displayName, text: Binding(
                 get: { aliasEdit?.text ?? model.alias(for: item) },
@@ -568,19 +581,24 @@ private struct ItemRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("settings-item-pending-\(item.id)")
-            } else if item.observedHidden == nil {
+            } else if item.observedPlacement == nil {
                 Text("Unknown")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .help("No placement observation is available. The control shows saved intent or its default, not a confirmed position.")
             }
 
+            if placement.isHidden {
+                barControls
+            }
+
             Picker("", selection: Binding(
-                get: { model.isHidden(item) },
-                set: { model.setHidden($0, for: item) }
+                get: { placement },
+                set: { model.setPlacement($0, for: item) }
             )) {
-                Text("Shown").tag(false)
-                Text("Hidden").tag(true)
+                Text("Shown").tag(ItemPlacement.shown)
+                Text("Hidden").tag(ItemPlacement.hidden)
+                Text("Always Hidden").tag(ItemPlacement.alwaysHidden)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -588,13 +606,48 @@ private struct ItemRow: View {
             .disabled(model.placementInProgress || model.group(containing: item) != nil)
             .accessibilityLabel("Placement for \(displayName)")
             .accessibilityHint("Changes are staged until you choose Apply Changes.")
-            .help("Placement for \(displayName). Changes are staged until Apply Changes.")
+            .help("Placement for \(displayName). Changes are staged until Apply Changes. Always Hidden items show only on Option-click.")
             .accessibilityIdentifier("settings-item-placement-\(item.id)")
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
         // Regrouping can remove a row before its focus-loss callback commits the name.
         .onDisappear { commitAlias() }
+    }
+
+    /// Floating-bar presentation for tucked rows; these save immediately and never move an item.
+    private var barControls: some View {
+        HStack(spacing: 4) {
+            Toggle("Show in bar", isOn: Binding(
+                get: { model.isShownInBar(item) },
+                set: { model.setShownInBar($0, for: item) }
+            ))
+            .toggleStyle(.checkbox)
+            .controlSize(.small)
+            .fixedSize()
+            .help("Draw \(displayName) in the floating bar. Off keeps it hidden in the menu bar without a bar icon. Saves immediately.")
+            .accessibilityIdentifier("settings-item-bar-visible-\(item.id)")
+            Button {
+                model.moveInBar(item, .earlier)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .controlSize(.small)
+            .disabled(!model.canMoveInBar(item, .earlier))
+            .help("Move \(displayName) earlier in the floating bar (left in a strip, up in a list). Saves immediately.")
+            .accessibilityLabel("Move \(displayName) earlier in the bar")
+            .accessibilityIdentifier("settings-item-bar-earlier-\(item.id)")
+            Button {
+                model.moveInBar(item, .later)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .controlSize(.small)
+            .disabled(!model.canMoveInBar(item, .later))
+            .help("Move \(displayName) later in the floating bar (right in a strip, down in a list). Saves immediately.")
+            .accessibilityLabel("Move \(displayName) later in the bar")
+            .accessibilityIdentifier("settings-item-bar-later-\(item.id)")
+        }
     }
 
     private func commitAlias() {

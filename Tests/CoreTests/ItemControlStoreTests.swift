@@ -266,4 +266,178 @@ import Testing
         // The full set (what the Items list manages) still contains it, so it stays restorable.
         #expect(positional.contains { $0.windowID == secret.windowID })
     }
+
+    // MARK: - Always Hidden tier
+
+    @Test(arguments: ItemPlacement.allCases)
+    func placementSetsAreMutuallyExclusive(placement: ItemPlacement) {
+        var store = ItemControlStore()
+        let maccy = item("com.maccy.Maccy")
+        for previous in ItemPlacement.allCases {
+            store.setPlacement(previous, for: maccy)
+            store.setPlacement(placement, for: maccy)
+            #expect(store.placement(for: maccy) == placement)
+            #expect(store.placement(forKey: "com.maccy.Maccy") == placement)
+            let memberships = [
+                store.shownInMenuBar.contains("com.maccy.Maccy"),
+                store.hiddenInMenuBar.contains("com.maccy.Maccy"),
+                store.alwaysHiddenInMenuBar.contains("com.maccy.Maccy")
+            ]
+            #expect(memberships.filter { $0 }.count == 1)
+            #expect(store.hasPlacementIntent(maccy))
+            #expect(store.isHidden(maccy) == placement.isHidden)
+            #expect(store.isAlwaysHidden(maccy) == (placement == .alwaysHidden))
+        }
+    }
+
+    @Test func boolHideIntentMapsOntoTheOrdinaryHiddenTier() {
+        var store = ItemControlStore()
+        store.setPlacement(.alwaysHidden, forKey: "a")
+        #expect(store.isHidden(forKey: "a"))
+        store.setHidden(true, forKey: "a")
+        #expect(store.placement(forKey: "a") == .hidden)
+        #expect(store.alwaysHiddenInMenuBar.isEmpty)
+        store.setHidden(false, forKey: "a")
+        #expect(store.placement(forKey: "a") == .shown)
+        #expect(ItemPlacement(hidden: true) == .hidden)
+        #expect(ItemPlacement(hidden: false) == .shown)
+        #expect(ItemPlacement.allCases.map(\.section) == [.visible, .hidden, .alwaysHidden])
+        #expect(MenuBarSection.allCases.map(\.placement) == ItemPlacement.allCases)
+    }
+
+    @Test func placementIsNilWithoutIntentAndForKeylessItems() {
+        var store = ItemControlStore()
+        #expect(store.placement(forKey: "a") == nil)
+        #expect(store.placement(for: item(nil)) == nil)
+        store.setPlacement(.alwaysHidden, for: item(nil))
+        store.setPlacement(.alwaysHidden, for: item(""))
+        #expect(store == ItemControlStore())
+        #expect(!store.hasAnyPlacementIntent)
+        store.setPlacement(.alwaysHidden, forKey: "a")
+        #expect(store.hasAnyPlacementIntent)
+        #expect(store.hasPlacementIntent(forKey: "a"))
+    }
+
+    @Test func samePlacementIntentIgnoresPresentationControls() {
+        let base = ItemControlStore(hiddenInMenuBar: ["h"], shownInMenuBar: ["s"], alwaysHiddenInMenuBar: ["a"])
+        var presentation = base
+        presentation.setSuppressed(true, forKey: "h")
+        presentation.setOrderIndex(3, forKey: "a")
+        #expect(base.hasSamePlacementIntent(as: presentation))
+        #expect(base != presentation)
+        var moved = base
+        moved.setPlacement(.hidden, forKey: "a")
+        #expect(!base.hasSamePlacementIntent(as: moved))
+        var shownInstead = base
+        shownInstead.setPlacement(.shown, forKey: "h")
+        #expect(!base.hasSamePlacementIntent(as: shownInstead))
+    }
+
+    @Test func alwaysHiddenKeyIsPresentSortedAndRoundTrips() throws {
+        var store = ItemControlStore()
+        for k in ["com.c", "com.a", "com.b"] { store.setPlacement(.alwaysHidden, forKey: k) }
+        store.setHidden(true, forKey: "com.h")
+        let data = try JSONEncoder().encode(store)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["alwaysHiddenInMenuBar"] as? [String] == ["com.a", "com.b", "com.c"])
+        #expect(object["hiddenInMenuBar"] as? [String] == ["com.h"])
+        let decoded = try JSONDecoder().decode(ItemControlStore.self, from: data)
+        #expect(decoded == store)
+        #expect(decoded.alwaysHiddenInMenuBar == ["com.a", "com.b", "com.c"])
+        #expect(decoded.placement(forKey: "com.a") == .alwaysHidden)
+    }
+
+    @Test func unusedAlwaysHiddenTierKeepsTheLegacyEncodedShape() throws {
+        var store = ItemControlStore()
+        store.setHidden(true, forKey: "com.a")
+        store.setSuppressed(true, forKey: "com.b")
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(store)) as? [String: Any])
+        #expect(Set(object.keys) == ["hiddenInMenuBar", "shownInMenuBar", "suppressedFromBar", "barOrder"])
+    }
+
+    @Test func decodingAStoreWithoutTheAlwaysHiddenKeyOrWithItSucceeds() throws {
+        let legacy = #"{"hiddenInMenuBar":["com.a"],"shownInMenuBar":[],"suppressedFromBar":[],"barOrder":{}}"#
+        let decodedLegacy = try JSONDecoder().decode(ItemControlStore.self, from: Data(legacy.utf8))
+        #expect(decodedLegacy.alwaysHiddenInMenuBar.isEmpty)
+        #expect(decodedLegacy.placement(forKey: "com.a") == .hidden)
+
+        let modern = #"{"alwaysHiddenInMenuBar":["com.z"],"hiddenInMenuBar":["com.a"]}"#
+        let decodedModern = try JSONDecoder().decode(ItemControlStore.self, from: Data(modern.utf8))
+        #expect(decodedModern.placement(forKey: "com.z") == .alwaysHidden)
+        #expect(decodedModern.isHidden(forKey: "com.z"))
+        #expect(decodedModern.placement(forKey: "com.a") == .hidden)
+    }
+
+    @Test func alwaysHiddenEncodingIsByteStableRegardlessOfInsertionOrder() throws {
+        var a = ItemControlStore()
+        for k in ["com.c", "com.a", "com.b"] { a.setPlacement(.alwaysHidden, forKey: k) }
+        var b = ItemControlStore()
+        for k in ["com.b", "com.c", "com.a"] { b.setPlacement(.alwaysHidden, forKey: k) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        #expect(try encoder.encode(a) == encoder.encode(b))
+    }
+
+    @Test func partitionByPlacementKeepsTiersApartWhileHiddenPartitionMergesThem() {
+        var store = ItemControlStore()
+        store.setPlacement(.hidden, forKey: "b")
+        store.setPlacement(.alwaysHidden, forKey: "c")
+        store.setPlacement(.shown, forKey: "d")
+        let items = [item("a", x: 0, id: 1), item("b", x: 30, id: 2),
+                     item("c", x: 60, id: 3), item("d", x: 90, id: 4), item(nil, x: 120, id: 5)]
+        let tiers = ItemControlStore.partitionByPlacement(items, controls: store)
+        #expect(tiers.shown.map(\.windowID) == [1, 4, 5])
+        #expect(tiers.hidden.map(\.windowID) == [2])
+        #expect(tiers.alwaysHidden.map(\.windowID) == [3])
+        let parts = ItemControlStore.partitionByHidden(items, controls: store)
+        #expect(parts.hidden.map(\.windowID) == [2, 3])
+        #expect(parts.shown.map(\.windowID) == [1, 4, 5])
+    }
+
+    // MARK: - Bar order steps
+
+    @Test func orderedBarItemsKeepSuppressedRowsWhereVisibleBarItemsDropThem() {
+        var store = ItemControlStore()
+        store.setSuppressed(true, for: item("b"))
+        store.setOrderIndex(0, for: item("c"))
+        let positional = [item("a", x: 0, id: 1), item("b", x: 30, id: 2), item("c", x: 60, id: 3)]
+        #expect(ItemControlStore.orderedBarItems(from: positional, controls: store).map(\.ownerBundleID) == ["c", "a", "b"])
+        #expect(ItemControlStore.visibleBarItems(from: positional, controls: store).map(\.ownerBundleID) == ["c", "a"])
+    }
+
+    @Test func movingAnOwnerOneStepPinsTheWholeSectionDensely() {
+        var store = ItemControlStore()
+        let section = [item("a", x: 0, id: 1), item("b", x: 30, id: 2), item("c", x: 60, id: 3)]
+        #expect(!store.canMoveInBar(section[0], .earlier, among: section))
+        #expect(store.canMoveInBar(section[0], .later, among: section))
+        #expect(!store.canMoveInBar(section[2], .later, among: section))
+        #expect(!store.canMoveInBar(item("absent"), .later, among: section))
+        let blocked = store.moveInBar(section[0], .earlier, among: section)
+        #expect(!blocked)
+        #expect(store == ItemControlStore())
+
+        let firstMoved = store.moveInBar(section[0], .later, among: section)
+        #expect(firstMoved)
+        #expect(store.barOrder == ["b": 0, "a": 1, "c": 2])
+        #expect(ItemControlStore.visibleBarItems(from: section, controls: store).map(\.ownerBundleID) == ["b", "a", "c"])
+        let secondMoved = store.moveInBar(section[2], .earlier, among: section)
+        #expect(secondMoved)
+        #expect(ItemControlStore.visibleBarItems(from: section, controls: store).map(\.ownerBundleID) == ["b", "c", "a"])
+        #expect(!store.canMoveInBar(section[0], .later, among: section))
+        #expect(store.hiddenInMenuBar.isEmpty && store.shownInMenuBar.isEmpty && store.alwaysHiddenInMenuBar.isEmpty)
+    }
+
+    @Test func movingASiblingMovesItsOwnerSlotAndLeavesSuppressionAlone() {
+        var store = ItemControlStore()
+        store.setSuppressed(true, forKey: "dup")
+        let section = [item("solo", x: 0, id: 1), item("dup", x: 30, id: 2), item("dup", x: 60, id: 3), item("z", x: 90, id: 4)]
+        let siblingMoved = store.moveInBar(section[2], .earlier, among: section)
+        #expect(siblingMoved)
+        #expect(ItemControlStore.orderedBarItems(from: section, controls: store).map(\.windowID) == [2, 3, 1, 4])
+        #expect(ItemControlStore.visibleBarItems(from: section, controls: store).map(\.windowID) == [1, 4])
+        #expect(store.isSuppressed(forKey: "dup"))
+        let siblingMovedBack = store.moveInBar(section[1], .later, among: section)
+        #expect(siblingMovedBack)
+        #expect(ItemControlStore.orderedBarItems(from: section, controls: store).map(\.windowID) == [1, 2, 3, 4])
+    }
 }

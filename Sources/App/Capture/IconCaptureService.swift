@@ -49,7 +49,11 @@ final class IconCaptureService {
         let display = displayContaining(probe, in: content.displays) ?? content.displays[0]
         let displayBounds = CGDisplayBounds(display.displayID)
 
-        guard let full = await captureFullDisplay(display, displayBounds) else {
+        // Our own style overlay sits behind the bar; captured, its tint would defeat the luma keying.
+        let excluded = content.windows.filter {
+            $0.owningApplication?.processID == getpid() && $0.title == MenuBarStyleOverlayController.windowTitle
+        }
+        guard let full = await captureFullDisplay(display, displayBounds, excludingWindows: excluded) else {
             DebugLog.log("capture: full-display capture failed")
             return [:]
         }
@@ -99,8 +103,10 @@ final class IconCaptureService {
     /// (crops came back fully transparent/black). Capturing the full composited display keeps
     /// the real glyphs; any wallpaper fringe behind a translucent glyph is cosmetic, and a
     /// genuinely blank crop falls back to the app icon upstream.
-    private func captureFullDisplay(_ display: SCDisplay, _ displayBounds: CGRect) async -> CGImage? {
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+    private func captureFullDisplay(
+        _ display: SCDisplay, _ displayBounds: CGRect, excludingWindows: [SCWindow] = []
+    ) async -> CGImage? {
+        let filter = SCContentFilter(display: display, excludingWindows: excludingWindows)
         let config = SCStreamConfiguration()
         config.showsCursor = false
         // `display.width/height` are in POINTS. Scale to native pixels using the matching

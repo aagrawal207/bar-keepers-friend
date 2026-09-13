@@ -1230,6 +1230,182 @@ struct SettingsModelTests {
         #expect(reads == 1)
     }
 
+    // MARK: - Always Hidden tier
+
+    @Test func placementReportsThreeTiersFromObservationsIntentAndDrafts() async {
+        let items = [
+            makeItem("observed.shown", id: 1, observedPlacement: .shown),
+            makeItem("observed.hidden", id: 2, observedPlacement: .hidden),
+            makeItem("observed.always", id: 3, observedPlacement: .alwaysHidden),
+            makeItem("saved.always", id: 4),
+            makeItem("saved.hidden", id: 5),
+            makeItem("unconfigured", id: 6)
+        ]
+        let preferences = Preferences(itemControls: ItemControlStore(
+            hiddenInMenuBar: ["saved.hidden"], alwaysHiddenInMenuBar: ["saved.always", "observed.shown"]
+        ))
+        var writes = 0
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(),
+            itemsProvider: { items }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+
+        #expect(items.map { model.placement(of: $0) } == [.shown, .hidden, .alwaysHidden, .alwaysHidden, .hidden, .shown])
+        #expect(items.map { model.isHidden($0) } == [false, true, true, true, true, false])
+        let parts = model.partition(items)
+        #expect(parts.shown.map(\.id) == [1, 6])
+        #expect(parts.hidden.map(\.id) == [2, 5])
+        #expect(parts.alwaysHidden.map(\.id) == [3, 4])
+        #expect(items.map(\.observedHidden) == [false, true, true, nil, nil, nil])
+
+        model.placementInProgress = true
+        #expect(model.placement(of: items[0]) == .alwaysHidden)
+        #expect(model.placement(of: items[1]) == .hidden)
+        model.placementInProgress = false
+
+        model.setPlacement(.alwaysHidden, for: items[1])
+        #expect(model.placement(of: items[1]) == .alwaysHidden)
+        #expect(model.hasPendingChange(for: items[1]))
+        #expect(model.partition(items).alwaysHidden.map(\.id) == [2, 3, 4])
+        model.setPlacement(.hidden, for: items[1])
+        #expect(!model.hasPendingChange(for: items[1]))
+        #expect(!model.hasPendingChanges)
+        model.setHidden(true, for: items[2])
+        #expect(model.placement(of: items[2]) == .hidden)
+        #expect(model.hasPendingChange(for: items[2]))
+        #expect(writes == 0)
+        #expect(model.preferences == preferences)
+    }
+
+    @Test func stagingAlwaysHiddenPreviewsAThirdTierAndOnlyApplyPersistsIt() async {
+        let items = [makeItem("ACME", id: 1, observedPlacement: .shown), makeItem("Maccy", id: 2, observedPlacement: .hidden)]
+        var writes: [Preferences] = []
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { items }, onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+        #expect(model.placementPreview.alwaysHidden.isEmpty)
+
+        model.setPlacement(.alwaysHidden, for: items[0])
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.placementPreview.alwaysHidden.map(\.id) == [1])
+        #expect(model.placementPreview.shown.isEmpty)
+        #expect(model.placementPreview.hidden.map(\.id) == [2])
+        #expect(writes.isEmpty)
+        #expect(model.canSetPlacement(.hidden, forAll: items))
+        #expect(!model.canSetPlacement(.alwaysHidden, forAll: [items[0]]))
+
+        model.applyPlacementChanges()
+        #expect(writes.count == 1)
+        #expect(retries == 0)
+        #expect(model.preferences.itemControls.placement(forKey: "ACME") == .alwaysHidden)
+        #expect(!model.preferences.itemControls.hasPlacementIntent(forKey: "Maccy"))
+        #expect(!model.hasPendingChanges)
+        #expect(model.placement(of: items[0]) == .shown)
+        model.placementInProgress = true
+        #expect(model.placement(of: items[0]) == .alwaysHidden)
+        #expect(model.placementPreview.alwaysHidden.map(\.id) == [1])
+    }
+
+    @Test(arguments: [false, true])
+    func hideAllAndShowAllStillMeanTheOrdinaryTiers(hidden: Bool) async {
+        let items = [makeItem("ACME", id: 1, observedPlacement: .alwaysHidden), makeItem("Maccy", id: 2, observedPlacement: .shown)]
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { items }, onChange: { _ in }
+        )
+        await model.reloadItems()
+        #expect(model.canSetHidden(hidden, forAll: items))
+        model.setHidden(hidden, forAll: items)
+        #expect(items.map { model.placement(of: $0) } == [ItemPlacement(hidden: hidden), ItemPlacement(hidden: hidden)])
+        #expect(model.pendingChangeCount == (hidden ? 2 : 1))
+        #expect(model.hasPendingChange(for: items[0]))
+        #expect(model.hasPendingChange(for: items[1]) == hidden)
+    }
+
+    @Test func barPresentationControlsSaveImmediatelyWithoutStagingOrMovingItems() async {
+        let items = [
+            makeItem("first.hidden", id: 1, observedPlacement: .hidden),
+            makeItem("second.hidden", id: 2, observedPlacement: .hidden),
+            makeItem("only.always", id: 3, observedPlacement: .alwaysHidden),
+            makeItem("shown", id: 4, observedPlacement: .shown)
+        ]
+        var writes: [Preferences] = []
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(),
+            itemsProvider: { items }, onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+        #expect(items.map { model.isShownInBar($0) } == [true, true, true, true])
+        #expect(!model.canMoveInBar(items[0], .earlier))
+        #expect(model.canMoveInBar(items[0], .later))
+        #expect(model.canMoveInBar(items[1], .earlier))
+        #expect(!model.canMoveInBar(items[1], .later))
+        #expect(!model.canMoveInBar(items[2], .earlier))
+        #expect(!model.canMoveInBar(items[2], .later))
+        #expect(!model.canMoveInBar(items[3], .earlier))
+        #expect(!model.canMoveInBar(items[3], .later))
+
+        model.setShownInBar(false, for: items[0])
+        #expect(writes.count == 1)
+        #expect(!model.isShownInBar(items[0]))
+        #expect(model.preferences.itemControls.suppressedFromBar == ["first.hidden"])
+        model.setShownInBar(false, for: items[0])
+        #expect(writes.count == 1)
+        #expect(model.placementPreview.hidden.map(\.id) == [2])
+
+        model.moveInBar(items[0], .later)
+        #expect(writes.count == 2)
+        #expect(model.preferences.itemControls.barOrder == ["second.hidden": 0, "first.hidden": 1])
+        #expect(model.canMoveInBar(items[0], .earlier))
+        #expect(!model.canMoveInBar(items[0], .later))
+        model.moveInBar(items[0], .later)
+        #expect(writes.count == 2)
+        model.moveInBar(items[3], .earlier)
+        #expect(writes.count == 2)
+
+        model.setShownInBar(true, for: items[0])
+        #expect(writes.count == 3)
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 1])
+        #expect(!model.hasPendingChanges)
+        #expect(retries == 0)
+        #expect(model.preferences.itemControls.hiddenInMenuBar.isEmpty)
+        #expect(model.preferences.itemControls.shownInMenuBar.isEmpty)
+        #expect(model.preferences.itemControls.alwaysHiddenInMenuBar.isEmpty)
+        #expect(items.map { model.placement(of: $0) } == [.hidden, .hidden, .alwaysHidden, .shown])
+    }
+
+    @Test func draftsFollowTheAlwaysHiddenIntentChangesLikeTheOtherTiers() async {
+        let item = makeItem(observedPlacement: .shown)
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { [item] }, onChange: { _ in }
+        )
+        await model.reloadItems()
+        model.setPlacement(.hidden, for: item)
+        #expect(model.hasPendingChanges)
+        model.preferences.itemControls.setPlacement(.alwaysHidden, for: item.snapshot)
+        #expect(!model.hasPendingChanges)
+        #expect(model.draftDiscardedNotice != nil)
+        #expect(model.placement(of: item) == .shown)
+        model.placementInProgress = true
+        #expect(model.placement(of: item) == .alwaysHidden)
+    }
+
+    private func makeItem(
+        _ owner: String? = "ACME",
+        id: CGWindowID = 1,
+        observedPlacement: ItemPlacement?
+    ) -> FloatingBarItem {
+        FloatingBarItem(
+            snapshot: MenuBarItemSnapshot(windowID: id, ownerPID: 1, ownerBundleID: owner, frame: .zero),
+            image: NSImage(size: CGSize(width: 18, height: 18)),
+            observedPlacement: observedPlacement
+        )
+    }
+
     private func makeItem(
         _ owner: String? = "ACME",
         id: CGWindowID = 1,

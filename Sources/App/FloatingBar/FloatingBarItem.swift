@@ -13,7 +13,35 @@ struct FloatingBarItem: Identifiable {
     /// so a user-chosen nickname is what they see and search by.
     var alias: String? = nil
     /// Physical placement is transient; an unknown observation must not create saved intent.
-    var observedHidden: Bool? = nil
+    var observedPlacement: ItemPlacement? = nil
+
+    init(
+        snapshot: MenuBarItemSnapshot, image: NSImage, isDisabled: Bool = false,
+        alias: String? = nil, observedPlacement: ItemPlacement? = nil
+    ) {
+        self.snapshot = snapshot
+        self.image = image
+        self.isDisabled = isDisabled
+        self.alias = alias
+        self.observedPlacement = observedPlacement
+    }
+
+    /// Two-tier convenience; an observed Bool can only describe Hidden or Shown.
+    init(
+        snapshot: MenuBarItemSnapshot, image: NSImage, isDisabled: Bool = false,
+        alias: String? = nil, observedHidden: Bool?
+    ) {
+        self.init(
+            snapshot: snapshot, image: image, isDisabled: isDisabled, alias: alias,
+            observedPlacement: observedHidden.map(ItemPlacement.init(hidden:))
+        )
+    }
+
+    /// Bool view of `observedPlacement` for hidden-only callers; Always Hidden reads as hidden.
+    var observedHidden: Bool? {
+        get { observedPlacement?.isHidden }
+        set { observedPlacement = newValue.map(ItemPlacement.init(hidden:)) }
+    }
 
     var id: CGWindowID { snapshot.windowID }
 

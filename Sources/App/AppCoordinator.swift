@@ -29,6 +29,8 @@ final class AppCoordinator {
     private var onboardingController: OnboardingWindowController?
     /// True while a trigger rewrites intent, so placement defers instead of acting like a Settings edit.
     private var backgroundApplyInFlight = false
+    private var widgetStatusItems: WidgetStatusItemsController?
+    private let menuBarStyleOverlay = MenuBarStyleOverlayController()
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
     private var diagnosticsSignalSource: DispatchSourceSignal?
@@ -104,9 +106,19 @@ final class AppCoordinator {
             onHide: { [weak engine] in engine?.hideFloatingBarOnScroll() }
         )
         engine.scrollRevealMonitor = scroll
+        engine.liveLayoutMonitor = LiveLayoutMonitor.system(
+            isUserInteracting: { [weak engine] in engine?.isBusyForLiveLayout ?? true },
+            previewMoves: { [weak engine] in await engine?.previewPlacementMoves() },
+            requestReconcile: { [weak engine] in engine?.reconcileHiddenItems(userInitiated: false) }
+        )
+        engine.onScreenParametersChanged = { [weak self] in self?.menuBarStyleOverlay.screensChanged() }
         let groups = GroupStatusItemsController(activate: { [weak bar] id in bar?.activate(windowID: id) })
         groupStatusItems = groups
         bar.onCacheUpdated = { [weak self] in self?.refreshGroupStatusItems() }
+        let widgets = WidgetStatusItemsController(
+            runner: WidgetActionRunner(toggleBar: { [weak engine] in engine?.toggleFromShortcut() })
+        )
+        widgetStatusItems = widgets
         engine.onNeedsAccessibilityForMove = { AccessibilityPermission.requestAndOpenSettings() }
         engine.onPlacementStatusChanged = { [weak self] in self?.syncPlacementStatus() }
         engine.onPlacementCompleted = { [weak self] in
@@ -126,7 +138,15 @@ final class AppCoordinator {
 
         // Global hotkey: toggle the bar. Carbon-based, so no Accessibility prompt.
         hotkeys.onToggle = { [weak self] in self?.hideEngine?.toggleFromShortcut() }
+        hotkeys.onActivateItem = { [weak self] key in
+            Task { @MainActor [weak self] in
+                guard let bar = self?.floatingBar, let id = await bar.windowID(forOwnerKey: key) else { return }
+                bar.activate(windowID: id)
+            }
+        }
         hotkeys.apply(preferences: preferences)
+        widgets.update(widgets: preferences.widgets)
+        menuBarStyleOverlay.apply(style: preferences.menuBarStyle)
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
         // needs capture to show icons. Permission-free hide/show still works without it.
@@ -192,6 +212,9 @@ final class AppCoordinator {
         hideEngine?.apply(preferences: updated, userInitiated: !backgroundApplyInFlight)
         floatingBar?.preferences = updated
         hotkeys.apply(preferences: updated)
+        settingsWindowController?.model.hotkeyRegistrationFailures = hotkeys.lastRegistrationFailures
+        widgetStatusItems?.update(widgets: updated.widgets)
+        if updated.menuBarStyle != previous.menuBarStyle { menuBarStyleOverlay.apply(style: updated.menuBarStyle) }
         triggerMonitor.update(rules: updated.triggers)
         // A deleted or edited preset changes what an active rule means; rules alone would not re-evaluate.
         if updated.presets != previous.presets { triggerMonitor.refresh() }
@@ -292,6 +315,7 @@ final class AppCoordinator {
         hideEngine?.uninstall()
         hotkeys.teardown()
         triggerMonitor.stop()
+        menuBarStyleOverlay.removeAll()
         if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
         activationObserver = nil
     }
@@ -311,6 +335,7 @@ final class AppCoordinator {
                 self?.hideEngine?.resumePendingPlacement()
             }
             settingsWindowController?.model.spacingNeedsLogout = spacingNeedsLogout
+            settingsWindowController?.model.hotkeyRegistrationFailures = hotkeys.lastRegistrationFailures
         }
         syncPlacementStatus()
         settingsWindowController?.show(tab: tab)

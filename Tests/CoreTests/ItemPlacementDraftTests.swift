@@ -232,6 +232,78 @@ import BarKeepersFriendCore
         #expect(draft.applying(to: controls) == expected)
     }
 
+    // MARK: - Three tiers
+
+    @Test(arguments: ItemPlacement.allCases)
+    func stagingATierRecordsItAndMergesThroughSetPlacement(placement: ItemPlacement) {
+        var draft = ItemPlacementDraft()
+        let controls = ItemControlStore()
+        let observed: ItemPlacement? = ItemPlacement.allCases.first { $0 != placement }
+        draft.setPlacement(placement, for: [(item(), observed)], controls: controls)
+
+        #expect(draft.count == 1)
+        #expect(draft.placement(for: item(id: 7)) == placement)
+        #expect(draft.hidden(for: item(id: 7)) == placement.isHidden)
+        var expected = controls
+        expected.setPlacement(placement, forKey: "ACME")
+        #expect(draft.applying(to: controls) == expected)
+        #expect(draft.applying(to: controls).placement(forKey: "ACME") == placement)
+    }
+
+    @Test(arguments: ItemPlacement.allCases)
+    func returningToTheObservedTierClearsTheEdit(baseline: ItemPlacement) {
+        var draft = ItemPlacementDraft()
+        let controls = ItemControlStore()
+        for other in ItemPlacement.allCases where other != baseline {
+            draft.setPlacement(other, for: [(item(), baseline)], controls: controls)
+            #expect(draft.placement(for: item()) == other)
+            draft.setPlacement(baseline, for: [(item(), baseline)], controls: controls)
+            #expect(draft.isEmpty)
+        }
+        #expect(draft.applying(to: controls) == controls)
+    }
+
+    @Test func choosingTheObservedTierStillReplacesAnOpposingSavedTier() {
+        var draft = ItemPlacementDraft()
+        var controls = ItemControlStore()
+        controls.setPlacement(.alwaysHidden, forKey: "ACME")
+        draft.setPlacement(.hidden, for: [(item(), .hidden)], controls: controls)
+
+        #expect(draft.count == 1)
+        #expect(draft.placement(for: item()) == .hidden)
+        #expect(draft.applying(to: controls).placement(forKey: "ACME") == .hidden)
+        #expect(draft.applying(to: controls).alwaysHiddenInMenuBar.isEmpty)
+        draft.setPlacement(.alwaysHidden, for: [(item(), .hidden)], controls: controls)
+        #expect(draft.count == 1)
+        #expect(draft.applying(to: controls) == controls)
+    }
+
+    @Test func boolEntryPointsNeverStageOrObserveTheAlwaysHiddenTier() {
+        var draft = ItemPlacementDraft()
+        var controls = ItemControlStore()
+        controls.setPlacement(.alwaysHidden, forKey: "ACME")
+        draft.setHidden(true, for: [(item(), true)], controls: controls)
+
+        #expect(draft.count == 1)
+        #expect(draft.placement(for: item()) == .hidden)
+        #expect(draft.hidden(for: item()) == true)
+        #expect(draft.applying(to: controls).placement(forKey: "ACME") == .hidden)
+    }
+
+    @Test func mixedTiersAmongSiblingsHaveNoSharedBaseline() {
+        var draft = ItemPlacementDraft()
+        let controls = ItemControlStore()
+        let siblings: [(snapshot: MenuBarItemSnapshot, observedPlacement: ItemPlacement?)] = [
+            (item(id: 1), .hidden), (item(id: 2), .alwaysHidden)
+        ]
+        draft.setPlacement(.hidden, for: siblings, controls: controls)
+        #expect(draft.count == 1)
+        draft.setPlacement(.alwaysHidden, for: siblings, controls: controls)
+        #expect(draft.count == 1)
+        #expect(draft.placement(for: item(id: 2)) == .alwaysHidden)
+        #expect(draft.applying(to: controls).placement(forKey: "ACME") == .alwaysHidden)
+    }
+
     private func item(_ owner: String? = "ACME", id: CGWindowID = 1) -> MenuBarItemSnapshot {
         MenuBarItemSnapshot(windowID: id, ownerPID: 1, ownerBundleID: owner, frame: .zero)
     }

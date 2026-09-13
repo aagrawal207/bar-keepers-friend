@@ -531,6 +531,92 @@ struct SettingsViewTests {
         try #require(settingsTestAccessibility(view).first { $0.accessibilityIdentifier() == identifier })
     }
 
+    // MARK: - Always Hidden tier
+
+    @Test func rowsGroupIntoThreeTiersAndOnlyTuckedRowsOfferBarControls() async throws {
+        let items = [
+            settingsTestItem(1, observedPlacement: .hidden),
+            settingsTestItem(2, observedPlacement: .hidden),
+            settingsTestItem(3, observedPlacement: .alwaysHidden),
+            settingsTestItem(4, observedPlacement: .shown)
+        ]
+        var writes: [Preferences] = []
+        var retries = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { items },
+            onRetryPlacement: { retries += 1 }, onChange: { writes.append($0) }
+        )
+        await model.reloadItems()
+        // A tall host so the virtualized List realizes every section's rows.
+        let hosting = settingsTestHost(ItemsSettingsTab(model: model).content.frame(width: 640, height: 900))
+        let labels = settingsTestAccessibility(hosting.view).compactMap { $0.accessibilityLabel() }
+        #expect(labels.contains("Hidden (2)"))
+        #expect(labels.contains("Always Hidden (1)"))
+        #expect(labels.contains("Shown (1)"))
+        let identifiers = Set(settingsTestAccessibility(hosting.view).compactMap { $0.accessibilityIdentifier() })
+        for id in [1, 2, 3] {
+            #expect(identifiers.contains("settings-item-bar-visible-\(id)"))
+            #expect(identifiers.contains("settings-item-bar-earlier-\(id)"))
+            #expect(identifiers.contains("settings-item-bar-later-\(id)"))
+        }
+        #expect(!identifiers.contains("settings-item-bar-visible-4"))
+        #expect(!identifiers.contains("settings-item-bar-earlier-4"))
+        #expect(!identifiers.contains("settings-item-bar-later-4"))
+        #expect(identifiers.contains("settings-items-bar-controls-help"))
+        let enabled: (String) throws -> Bool = { try element($0, in: hosting.view).isAccessibilityEnabled() }
+        #expect(try !enabled("settings-item-bar-earlier-1"))
+        #expect(try enabled("settings-item-bar-later-1"))
+        #expect(try !enabled("settings-item-bar-later-2"))
+        #expect(try !enabled("settings-item-bar-earlier-3"))
+        #expect(try !enabled("settings-item-bar-later-3"))
+
+        #expect(try element("settings-item-bar-later-1", in: hosting.view).accessibilityPerformPress())
+        #expect(await waitForUpdate(hosting.view) { writes.count == 1 })
+        #expect(model.preferences.itemControls.barOrder == ["Item 2": 0, "Item 1": 1])
+        #expect(!model.hasPendingChanges)
+        #expect(await waitForUpdate(hosting.view) {
+            (try? element("settings-item-bar-earlier-1", in: hosting.view).isAccessibilityEnabled()) == true
+        })
+
+        #expect(try element("settings-item-bar-visible-1", in: hosting.view).accessibilityPerformPress())
+        #expect(await waitForUpdate(hosting.view) { writes.count == 2 })
+        #expect(model.preferences.itemControls.suppressedFromBar == ["Item 1"])
+        #expect(!model.hasPendingChanges)
+        #expect(model.preferences.itemControls.hiddenInMenuBar.isEmpty)
+        #expect(model.preferences.itemControls.alwaysHiddenInMenuBar.isEmpty)
+        #expect(retries == 0)
+        #expect(!hosting.testWindow.isVisible)
+    }
+
+    @Test func choosingAlwaysHiddenStagesTheRowAndPreviewsTheThirdBox() async throws {
+        let item = settingsTestItem(1, observedPlacement: .shown)
+        var writes = 0
+        let model = SettingsModel(
+            preferences: .default, loginItem: LoginItemService(), itemsProvider: { [item] }, onChange: { _ in writes += 1 }
+        )
+        await model.reloadItems()
+        let before = settingsTestHost(ItemsSettingsTab(model: model).content.frame(width: 640))
+        #expect(!settingsTestAccessibility(before.view).contains { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+        #expect(!settingsTestAccessibility(before.view).contains { $0.accessibilityIdentifier() == "settings-item-bar-visible-1" })
+
+        model.setPlacement(.alwaysHidden, for: item)
+        let hosting = settingsTestHost(ItemsSettingsTab(model: model).content.frame(width: 640, height: 900))
+        let elements = settingsTestAccessibility(hosting.view)
+        #expect(elements.contains { $0.accessibilityLabel() == "Always Hidden (1)" })
+        #expect(elements.contains { $0.accessibilityIdentifier() == "settings-item-pending-1" })
+        let box = try #require(elements.first { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+        let previewItem = try #require(settingsTestAccessibility(box).first { $0.accessibilityIdentifier() == "settings-preview-item-1" })
+        #expect(previewItem.accessibilityValue() as? String == "Always Hidden")
+        #expect(try element("settings-placement-apply", in: hosting.view).isAccessibilityEnabled())
+        #expect(elements.contains { $0.accessibilityIdentifier() == "settings-item-bar-visible-1" })
+        #expect(writes == 0)
+
+        #expect(try element("settings-placement-apply", in: hosting.view).accessibilityPerformPress())
+        #expect(await waitForUpdate(hosting.view) { writes == 1 && !model.hasPendingChanges })
+        #expect(model.preferences.itemControls.placement(forKey: "Item 1") == .alwaysHidden)
+        #expect(!hosting.testWindow.isVisible)
+    }
+
     private func waitForUpdate(_ view: NSView, until condition: () -> Bool) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(2))

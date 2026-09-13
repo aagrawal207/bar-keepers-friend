@@ -635,6 +635,155 @@ struct HiddenItemControllerTests {
         #expect(result.failed.isEmpty)
     }
 
+    // MARK: - Always Hidden tier
+
+    private let alwaysHiddenWindowID: CGWindowID = 92
+    private var alwaysHiddenDivider: MenuBarItemSnapshot {
+        item(alwaysHiddenWindowID, x: 600, width: 8, title: "BKFAlwaysHidden")
+    }
+
+    @Test func eachTierIsDroppedBesideItsOwnControlAndVerifiedAgainstIt() async throws {
+        let server = FakeWindowServer(items: [
+            item(1, x: 1130),   // shown -> always hidden
+            item(2, x: 900),    // hidden -> always hidden
+            item(3, x: 300),    // always hidden -> hidden
+            item(4, x: 250),    // always hidden -> shown
+            item(5, x: 800),    // hidden, stays
+        ] + controlItems + [alwaysHiddenDivider])
+        let controller = HiddenItemController(windowServer: server)
+        let controls = ItemControlStore(
+            hiddenInMenuBar: ["test.app.3", "test.app.5"], shownInMenuBar: ["test.app.4"],
+            alwaysHiddenInMenuBar: ["test.app.1", "test.app.2"]
+        )
+
+        let result = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID,
+            alwaysHiddenDividerWindowID: alwaysHiddenWindowID, controls: controls
+        )
+
+        #expect(result.planned == 4)
+        #expect(result.succeeded == 4)
+        #expect(result.allSucceeded)
+        #expect(server.moveRequests.map(\.windowID) == [1, 2, 3, 4])
+        #expect(server.moveRequests.map(\.targetWindowID) == [alwaysHiddenWindowID, alwaysHiddenWindowID, dividerWindowID, anchorWindowID])
+        #expect(server.moveRequests.map(\.targetX) == [592, 592, 968, 1032])
+        let tucked = try #require(server.items.first(where: { $0.windowID == 1 }))
+        let hidden = try #require(server.items.first(where: { $0.windowID == 3 }))
+        #expect(tucked.frame.maxX <= 600)
+        #expect(hidden.frame.maxX <= 976)
+        #expect(hidden.frame.minX >= 608)
+
+        let repeated = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID,
+            alwaysHiddenDividerWindowID: alwaysHiddenWindowID, controls: controls
+        )
+        #expect(repeated.planned == 0)
+        #expect(server.moveRequests.count == 4)
+    }
+
+    @Test(arguments: [false, true])
+    func alwaysHiddenReturnsThatStopShortOfItsDividerFail(overlapsDivider: Bool) async {
+        let landed = item(1, x: overlapsDivider ? 590 : 700)
+        let finalItems = [landed] + controlItems + [alwaysHiddenDivider]
+        let server = ScriptedWindowServer(items: [item(1, x: 1130)] + controlItems + [alwaysHiddenDivider])
+        server.onMove = { [unowned server] _, _, _ in
+            server.base = FakeWindowServer(items: finalItems)
+        }
+        let controller = HiddenItemController(windowServer: server)
+        let controls = ItemControlStore(alwaysHiddenInMenuBar: ["test.app.1"])
+
+        let result = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID,
+            alwaysHiddenDividerWindowID: alwaysHiddenWindowID, controls: controls
+        )
+
+        #expect(server.moveRequests.map(\.targetWindowID) == [alwaysHiddenWindowID])
+        #expect(result.planned == 1)
+        #expect(result.succeeded == 0)
+        #expect(result.failed.map(\.windowID) == [1])
+        #expect(!result.observationFailed)
+    }
+
+    @Test func aHiddenItemLeftOfTheAlwaysHiddenDividerIsMovedBetweenTheDividers() async throws {
+        let server = FakeWindowServer(items: [item(1, x: 300)] + controlItems + [alwaysHiddenDivider])
+        let controller = HiddenItemController(windowServer: server)
+        let controls = ItemControlStore(hiddenInMenuBar: ["test.app.1"])
+
+        let result = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID,
+            alwaysHiddenDividerWindowID: alwaysHiddenWindowID, controls: controls
+        )
+
+        #expect(result.succeeded == 1)
+        #expect(server.moveRequests.map(\.targetWindowID) == [dividerWindowID])
+        #expect(server.moveRequests.map(\.targetX) == [968])
+        let placed = try #require(server.items.first(where: { $0.windowID == 1 }))
+        #expect(placed.frame.minX >= 608 && placed.frame.maxX <= 976)
+
+        let withoutTier = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID, controls: controls
+        )
+        #expect(withoutTier.planned == 0)
+    }
+
+    @Test func withoutAnAlwaysHiddenDividerTheTierFallsBackToHidden() async throws {
+        let server = FakeWindowServer(items: [item(1, x: 1130)] + controlItems)
+        let controller = HiddenItemController(windowServer: server)
+        let controls = ItemControlStore(alwaysHiddenInMenuBar: ["test.app.1"])
+
+        let result = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID, controls: controls
+        )
+
+        #expect(result.planned == 1)
+        #expect(result.succeeded == 1)
+        #expect(result.allSucceeded)
+        #expect(server.moveRequests.map(\.targetWindowID) == [dividerWindowID])
+        #expect(server.moveRequests.map(\.targetX) == [968])
+        let placed = try #require(server.items.first(where: { $0.windowID == 1 }))
+        #expect(placed.frame.maxX <= 976)
+    }
+
+    @Test(arguments: ["missing", "rightOfHiddenDivider", "sameAsDivider"])
+    func aMissingOrMisplacedAlwaysHiddenDividerFailsObservation(problem: String) async {
+        var extras: [MenuBarItemSnapshot] = []
+        var tierID = alwaysHiddenWindowID
+        switch problem {
+        case "rightOfHiddenDivider": extras = [item(alwaysHiddenWindowID, x: 990, width: 8, title: "BKFAlwaysHidden")]
+        case "sameAsDivider": tierID = dividerWindowID
+        default: break
+        }
+        let server = FakeWindowServer(items: items + controlItems + extras)
+        var attributed = false
+        let controller = HiddenItemController(windowServer: server) { snapshots in
+            attributed = true
+            return snapshots
+        }
+
+        let result = await controller.reconcile(
+            anchorWindowID: anchorWindowID, dividerWindowID: dividerWindowID,
+            alwaysHiddenDividerWindowID: tierID, controls: controls
+        )
+
+        #expect(!attributed)
+        #expect(server.moveRequests.isEmpty)
+        #expect(result.observationFailed)
+        #expect(!result.allSucceeded)
+    }
+
+    @Test func alwaysHiddenControlDiscoveryUsesItsExactNameAndRejectsAmbiguity() {
+        let server = ScriptedWindowServer(items: items + controlItems)
+        let controller = HiddenItemController(windowServer: server)
+        #expect(controller.alwaysHiddenControlWindowID(displayXRange: 0...1500) == nil)
+        server.base = FakeWindowServer(items: items + controlItems + [alwaysHiddenDivider])
+        #expect(controller.alwaysHiddenControlWindowID(displayXRange: 0...1500) == alwaysHiddenWindowID)
+        #expect(controller.controlWindowIDs(displayXRange: 0...1500)?.divider == dividerWindowID)
+        server.base = FakeWindowServer(items: items + controlItems + [alwaysHiddenDivider, item(93, x: 500, width: 8, title: "BKFAlwaysHidden")])
+        #expect(controller.alwaysHiddenControlWindowID() == nil)
+        server.base.enumerationError = .invalidServerResponse("unavailable")
+        #expect(controller.alwaysHiddenControlWindowID() == nil)
+    }
+
 }
 
 private final class ScriptedWindowServer: WindowServer, @unchecked Sendable {

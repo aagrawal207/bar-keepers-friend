@@ -204,4 +204,40 @@ import Testing
         )
         #expect(!HiddenItemsResolver.isPlausibleMenuBarItem(lowItem, displayMenuBarTop: 982))
     }
+
+    // MARK: - Always Hidden tier
+
+    /// Always-hidden divider 600...608, hidden divider leading edge 1000.
+    private var tieredItems: [MenuBarItemSnapshot] {
+        [
+            item(id: 1, x: 100),                        // always hidden
+            item(id: 2, x: 576),                        // always hidden, flush against the divider
+            item(id: 3, x: 590),                        // straddles the always-hidden divider
+            item(id: 4, x: 608),                        // hidden, flush against the divider's trailing edge
+            item(id: 5, x: 800),                        // hidden
+            item(id: 6, x: 1100),                       // shown
+            item(id: 7, x: 400, title: "BKFAlwaysHidden"),
+        ]
+    }
+
+    @Test func hiddenSectionExcludesItemsLeftOfTheAlwaysHiddenDivider() {
+        let hidden = HiddenItemsResolver.hiddenItems(from: tieredItems, leftOfAnchorX: 1000, rightOfAlwaysHiddenX: 608)
+        #expect(hidden.map(\.windowID) == [4, 5])
+        let alwaysHidden = HiddenItemsResolver.hiddenItems(from: tieredItems, leftOfAnchorX: 600)
+        #expect(alwaysHidden.map(\.windowID) == [1, 2])
+        let merged = HiddenItemsResolver.hiddenItems(from: tieredItems, leftOfAnchorX: 1000)
+        #expect(merged.map(\.windowID) == [1, 2, 3, 4, 5])
+        #expect(HiddenItemsResolver.hiddenItems(from: tieredItems, leftOfAnchorX: 1000, rightOfAlwaysHiddenX: nil) == merged)
+    }
+
+    @Test func observedPlacementFollowsTheTrailingEdgeRule() {
+        let placements = tieredItems.filter { $0.windowID != 7 }.map {
+            HiddenItemsResolver.observedPlacement(of: $0, hiddenBoundaryX: 1000, alwaysHiddenBoundaryX: 600)
+        }
+        #expect(placements == [.alwaysHidden, .alwaysHidden, .hidden, .hidden, .hidden, .shown])
+        let twoTier = tieredItems.filter { $0.windowID != 7 }.map {
+            HiddenItemsResolver.observedPlacement(of: $0, hiddenBoundaryX: 1000, alwaysHiddenBoundaryX: nil)
+        }
+        #expect(twoTier == [.hidden, .hidden, .hidden, .hidden, .hidden, .shown])
+    }
 }

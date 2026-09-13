@@ -506,6 +506,161 @@ struct PlacementIntegrationTests {
         #expect(server.moveRequests.isEmpty)
         #expect(!engine.placementInProgress)
     }
+
+    // MARK: - Always Hidden tier
+
+    private var alwaysHiddenControl: MenuBarItemSnapshot {
+        MenuBarItemSnapshot(windowID: 92, ownerPID: 1, title: "BKFAlwaysHidden", frame: CGRect(x: 600, y: 0, width: 8, height: 22))
+    }
+
+    @Test func alwaysHiddenIntentCreatesTheDividerAndPlacesTheItemBesideIt() async throws {
+        let shownItem = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: "Test App", frame: CGRect(x: 1100, y: 0, width: 24, height: 22)
+        )
+        let server = FakeWindowServer(items: [shownItem] + controls + [alwaysHiddenControl])
+        let recorder = AlwaysHiddenDividerRecorder()
+        var dividerWrites: [Bool] = []
+        let engine = CosmeticHideEngine(
+            preferences: Preferences(useFloatingBar: false, itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["Test App"])),
+            controlWindowIDs: { (90, 91) }, setDividerCollapsed: { dividerWrites.append($0) },
+            alwaysHiddenDivider: recorder.hooks, onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        engine.hiddenItemController = HiddenItemController(windowServer: server)
+        engine.toggleHidden()
+        dividerWrites.removeAll()
+
+        engine.reconcileHiddenItems()
+        #expect(recorder.creates == 1)
+        await (try #require(engine.placementTask)).value
+
+        #expect(server.moveRequests.map(\.windowID) == [1])
+        #expect(server.moveRequests.first?.targetWindowID == 92)
+        #expect(server.moveRequests.first?.targetX == 592)
+        #expect(server.items.first?.frame.maxX == 592)
+        #expect(!engine.placementFailed)
+        #expect(!engine.placementPending)
+        #expect(dividerWrites == [false, true])
+        #expect(recorder.writes == [true, false, true])
+        #expect(engine.stateMachine.visibility(of: .alwaysHidden) == .collapsed)
+
+        engine.reconcileHiddenItems()
+        await (try #require(engine.placementTask)).value
+        #expect(server.moveRequests.count == 1)
+        #expect(recorder.creates == 1)
+    }
+
+    @Test func alwaysHiddenIntentWithoutAUsableDividerWindowDegradesToHidden() async throws {
+        let shownItem = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: "Test App", frame: CGRect(x: 1100, y: 0, width: 24, height: 22)
+        )
+        let server = FakeWindowServer(items: [shownItem] + controls)
+        let recorder = AlwaysHiddenDividerRecorder()
+        recorder.windowID = nil
+        let engine = CosmeticHideEngine(
+            preferences: Preferences(useFloatingBar: false, itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["Test App"])),
+            controlWindowIDs: { (90, 91) }, alwaysHiddenDivider: recorder.hooks, onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        engine.hiddenItemController = HiddenItemController(windowServer: server)
+
+        engine.reconcileHiddenItems()
+        await (try #require(engine.placementTask)).value
+
+        #expect(recorder.creates == 1)
+        #expect(server.moveRequests.map(\.targetWindowID) == [91])
+        #expect(server.moveRequests.first?.targetX == 976)
+        #expect(server.items.first?.frame.maxX == 976)
+        #expect(!engine.placementFailed)
+    }
+
+    @Test func aMissingAlwaysHiddenDividerWindowLeavesBothTiersRevealedAndPending() async throws {
+        let server = FakeWindowServer(items: [item] + controls)
+        let recorder = AlwaysHiddenDividerRecorder()
+        let engine = CosmeticHideEngine(
+            preferences: Preferences(useFloatingBar: false, itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["Test App"])),
+            controlWindowIDs: { (90, 91) }, alwaysHiddenDivider: recorder.hooks, onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        engine.hiddenItemController = HiddenItemController(windowServer: server)
+        engine.toggleHidden()
+
+        engine.reconcileHiddenItems()
+        await (try #require(engine.placementTask)).value
+
+        #expect(server.moveRequests.isEmpty)
+        #expect(engine.placementPending)
+        #expect(engine.placementFailed)
+        #expect(engine.stateMachine.visibility(of: .hidden) == .shown)
+        #expect(engine.stateMachine.visibility(of: .alwaysHidden) == .shown)
+        #expect(recorder.writes.last == false)
+        // Items left revealed by the failed observation must keep Live checks away.
+        #expect(!engine.placementInProgress)
+        #expect(engine.isBusyForLiveLayout)
+        #expect(engine.lastFailedControls == nil)
+    }
+
+    // MARK: - Live mode
+
+    @Test func liveModePreviewBacksOffAfterAFailedBatchUntilIntentChanges() async throws {
+        let first = MenuBarItemSnapshot(
+            windowID: 1, ownerPID: 1, ownerBundleID: "First App", frame: CGRect(x: 1100, y: 0, width: 24, height: 22)
+        )
+        let second = MenuBarItemSnapshot(
+            windowID: 2, ownerPID: 1, ownerBundleID: "Second App", frame: CGRect(x: 1150, y: 0, width: 24, height: 22)
+        )
+        let server = FakeWindowServer(items: [first, second] + controls)
+        server.moveError = .moveFailed(windowID: 1)
+        let firstIntent = Preferences(useFloatingBar: false, itemControls: ItemControlStore(hiddenInMenuBar: ["First App"]))
+        let engine = CosmeticHideEngine(
+            preferences: firstIntent, controlWindowIDs: { (90, 91) }, setDividerCollapsed: { _ in },
+            onPreferencesChanged: { _ in }
+        )
+        defer { engine.uninstall() }
+        let controller = HiddenItemController(windowServer: server)
+        engine.hiddenItemController = controller
+        engine.toggleHidden()
+        #expect(await engine.previewPlacementMoves() == 1)
+
+        engine.reconcileHiddenItems()
+        await (try #require(engine.placementTask)).value
+        #expect(engine.placementFailed)
+        #expect(engine.lastFailedControls == firstIntent.itemControls)
+        #expect(!engine.isBusyForLiveLayout)
+        // The planner still wants the move; Live mode alone must not keep retrying it.
+        #expect(await controller.previewMoves(anchorWindowID: 90, dividerWindowID: 91, controls: firstIntent.itemControls) == 1)
+        #expect(await engine.previewPlacementMoves() == 0)
+        #expect(await engine.previewPlacementMoves() == 0)
+        #expect(server.moveRequests.isEmpty)
+
+        // Presentation-only edits keep the backoff; only a new tier intent lifts it.
+        var presentationOnly = firstIntent
+        presentationOnly.itemControls.setSuppressed(true, forKey: "First App")
+        engine.apply(preferences: presentationOnly)
+        #expect(engine.placementTask?.isCancelled == false)
+        #expect(await engine.previewPlacementMoves() == 0)
+
+        let secondIntent = Preferences(
+            useFloatingBar: false, itemControls: ItemControlStore(hiddenInMenuBar: ["First App", "Second App"])
+        )
+        engine.apply(preferences: secondIntent)
+        #expect(engine.lastFailedControls == nil)
+        #expect(await engine.previewPlacementMoves() == 2)
+        await (try #require(engine.placementTask)).value
+        #expect(engine.placementFailed)
+        #expect(engine.lastFailedControls == secondIntent.itemControls)
+        #expect(await engine.previewPlacementMoves() == 0)
+
+        // An explicit retry that succeeds clears the backoff and the preview reflects live geometry.
+        server.moveError = nil
+        engine.reconcileHiddenItems(userInitiated: true)
+        await (try #require(engine.placementTask)).value
+        #expect(!engine.placementFailed)
+        #expect(engine.lastFailedControls == nil)
+        #expect(await engine.previewPlacementMoves() == 0)
+        try await server.move(item: server.items[0], toX: 1100, relativeTo: 90)
+        #expect(await engine.previewPlacementMoves() == 1)
+    }
 }
 
 private struct DrainingMoveServer: WindowServer {

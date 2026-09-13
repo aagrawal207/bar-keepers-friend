@@ -108,6 +108,70 @@ struct FloatingBarViewTests {
         #expect(image.colorAt(x: 5, y: 15)?.alphaComponent == 0)
     }
 
+    @Test(arguments: FloatingBarStyle.allCases)
+    func alwaysHiddenTierIsAppendedUnderACaptionWithoutChangingThePlainLayout(style: FloatingBarStyle) throws {
+        let metrics = FloatingBarLayout.Metrics.default
+        let image = NSImage(size: CGSize(width: metrics.iconSize, height: metrics.iconSize))
+        func items(_ range: Range<Int>) -> [FloatingBarItem] {
+            range.map { index in
+                FloatingBarItem(
+                    snapshot: MenuBarItemSnapshot(windowID: CGWindowID(index + 1), ownerPID: 1, ownerBundleID: "Item \(index)", frame: .zero),
+                    image: image
+                )
+            }
+        }
+        let plain = NSHostingController(rootView: FloatingBarView(items: items(0..<3), style: style, onActivate: { _ in }))
+        plain.view.layoutSubtreeIfNeeded()
+        let tiered = NSHostingController(rootView: FloatingBarView(
+            items: items(0..<3), alwaysHiddenItems: items(10..<12), style: style, onActivate: { _ in }
+        ))
+        tiered.view.layoutSubtreeIfNeeded()
+        let plainSize = plain.view.fittingSize
+        let tieredSize = tiered.view.fittingSize
+        let expectedPlain = FloatingBarLayout.panelSize(style: style, itemCount: 3, metrics: metrics)
+        #expect(plainSize == expectedPlain)
+        let tierRows: CGFloat = style == .horizontal ? 1 : 2
+        #expect(tieredSize.height > plainSize.height + tierRows * metrics.itemExtent)
+        #expect(tieredSize.width >= plainSize.width)
+        #expect(tiered.view.window == nil)
+
+        // The plain tier alone must still match the Core layout even when the tier list exists but is empty.
+        let emptyTier = NSHostingController(rootView: FloatingBarView(
+            items: items(0..<3), alwaysHiddenItems: [], style: style, onActivate: { _ in }
+        ))
+        emptyTier.view.layoutSubtreeIfNeeded()
+        #expect(emptyTier.view.fittingSize == expectedPlain)
+
+        let host = settingsTestHost(FloatingBarView(
+            items: items(0..<3), alwaysHiddenItems: items(10..<12), style: style, onActivate: { _ in }
+        ))
+        let elements = settingsTestAccessibility(host.view)
+        #expect(elements.contains { $0.accessibilityIdentifier() == "floating-bar-always-hidden-header" })
+        #expect(elements.contains { $0.accessibilityLabel() == FloatingBarView.alwaysHiddenCaption })
+        #expect(elements.filter { $0.accessibilityRole() == .button }.count == 5)
+        let plainHost = settingsTestHost(FloatingBarView(items: items(0..<3), style: style, onActivate: { _ in }))
+        #expect(!settingsTestAccessibility(plainHost.view).contains { $0.accessibilityIdentifier() == "floating-bar-always-hidden-header" })
+    }
+
+    @Test(arguments: FloatingBarStyle.allCases)
+    func aTierWithoutPlainHiddenItemsStillRendersContentNotTheEmptyState(style: FloatingBarStyle) {
+        let metrics = FloatingBarLayout.Metrics.default
+        let image = NSImage(size: CGSize(width: metrics.iconSize, height: metrics.iconSize))
+        let secret = FloatingBarItem(
+            snapshot: MenuBarItemSnapshot(windowID: 7, ownerPID: 1, ownerBundleID: "Secret", frame: .zero), image: image
+        )
+        let hosting = NSHostingController(rootView: FloatingBarView(
+            items: [], alwaysHiddenItems: [secret], style: style, onActivate: { _ in }
+        ))
+        hosting.view.layoutSubtreeIfNeeded()
+        let empty = NSHostingController(rootView: FloatingBarView(items: [], style: style, onActivate: { _ in }))
+        empty.view.layoutSubtreeIfNeeded()
+        #expect(hosting.view.fittingSize != empty.view.fittingSize)
+        #expect(hosting.view.fittingSize.height > metrics.itemExtent + metrics.padding * 2)
+        let host = settingsTestHost(FloatingBarView(items: [], alwaysHiddenItems: [secret], style: style, onActivate: { _ in }))
+        #expect(settingsTestAccessibility(host.view).filter { $0.accessibilityRole() == .button }.count == 1)
+    }
+
     private func highlightImage(
         style: FloatingBarStyle = .vertical, scheme: ColorScheme = .light,
         isHovered: Bool = false, isPressed: Bool = false, isEnabled: Bool = true

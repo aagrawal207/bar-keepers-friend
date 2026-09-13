@@ -166,11 +166,57 @@ struct SettingsPlacementPreviewTests {
         #expect(secondReference == nil)
         #expect(app.accessibilityAttributeValue(attribute) as? Bool == original)
     }
+
+    @Test(arguments: FloatingBarStyle.allCases, [ColorScheme.light, .dark])
+    func alwaysHiddenBoxAppearsOnlyWithItemsAndStaysBounded(style: FloatingBarStyle, scheme: ColorScheme) throws {
+        let plain = settingsTestHost(SettingsPlacementPreview(
+            shown: [settingsTestItem(1)], hidden: [settingsTestItem(2)], unknown: [], style: style
+        ).environment(\.colorScheme, scheme).frame(width: 608))
+        let plainElements = settingsTestAccessibility(plain.view)
+        #expect(!plainElements.contains { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+        #expect(!plainElements.map { settingsTestAccessibilityText($0) }.joined().contains("Option-click"))
+        let plainHeight = plain.view.fittingSize.height
+
+        for count in [1, 80] {
+            let tier = (0..<count).map { settingsTestItem(CGWindowID($0 + 3001), alias: String(repeating: "Long alias ", count: 20)) }
+            let hosting = settingsTestHost(SettingsPlacementPreview(
+                shown: [settingsTestItem(1)], hidden: [settingsTestItem(2)], alwaysHidden: tier, unknown: [],
+                style: style, hasPendingChanges: true
+            ).environment(\.colorScheme, scheme).frame(width: 608))
+            let elements = settingsTestAccessibility(hosting.view)
+            let box = try #require(elements.first { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+            let children = settingsTestAccessibility(box)
+            #expect(children.contains { $0.accessibilityIdentifier() == "settings-preview-item-3001" })
+            #expect(!children.contains { $0.accessibilityIdentifier() == "settings-preview-item-2" })
+            let tierItem = try #require(elements.first { $0.accessibilityIdentifier() == "settings-preview-item-3001" })
+            #expect(tierItem.accessibilityValue() as? String == "Always Hidden")
+            #expect(tierItem.accessibilityRole() != .button)
+            let hiddenBox = try #require(elements.first { $0.accessibilityIdentifier() == "settings-preview-hidden" })
+            #expect(!settingsTestAccessibility(hiddenBox).contains { $0.accessibilityIdentifier() == "settings-preview-item-3001" })
+            let caption = try #require(elements.first { $0.accessibilityIdentifier() == "settings-preview-caption" })
+            #expect(settingsTestAccessibilityText(caption).contains("Option-click"))
+            let size = hosting.view.fittingSize
+            #expect(size.height <= 230)
+            // A third column may add one wrapped row, never a second row of boxes.
+            #expect(size.height <= plainHeight + 60)
+            #expect(size.width <= 608)
+            let bitmap = try settingsTestBitmap(hosting.view)
+            #expect(settingsTestPixelCount(bitmap) { $0.redComponent > 0.9 && $0.greenComponent < 0.1 } > 100)
+        }
+    }
 }
 
 @MainActor
 func settingsTestItem(
     _ id: CGWindowID, alias: String? = nil, observedHidden: Bool? = nil, green: Bool = false
+) -> FloatingBarItem {
+    settingsTestItem(id, alias: alias, observedPlacement: observedHidden.map(ItemPlacement.init(hidden:)), green: green)
+}
+
+/// Tri-state variant; `observedPlacement` has no default so the two-tier overload stays unambiguous.
+@MainActor
+func settingsTestItem(
+    _ id: CGWindowID, alias: String? = nil, observedPlacement: ItemPlacement?, green: Bool = false
 ) -> FloatingBarItem {
     let image = NSImage(size: CGSize(width: 18, height: 18), flipped: false) { rect in
         NSColor(srgbRed: green ? 0 : 1, green: green ? 1 : 0, blue: 0, alpha: 1).setFill()
@@ -179,7 +225,7 @@ func settingsTestItem(
     }
     return FloatingBarItem(
         snapshot: MenuBarItemSnapshot(windowID: id, ownerPID: 1, ownerBundleID: "Item \(id)", frame: .zero),
-        image: image, alias: alias, observedHidden: observedHidden
+        image: image, alias: alias, observedPlacement: observedPlacement
     )
 }
 

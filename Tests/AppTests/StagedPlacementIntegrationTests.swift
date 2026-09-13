@@ -570,6 +570,77 @@ struct StagedPlacementIntegrationTests {
         #expect(!fixture.engine.captureInFlight)
     }
 
+    // MARK: - Always Hidden tier
+
+    @Test func applyingAnAlwaysHiddenChoiceCreatesTheDividerAndPlacesBesideItOnce() async throws {
+        let fixture = try Fixture(alwaysHiddenDivider: true)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        await model.reloadItems()
+        let shown = try #require(model.loadedItems.first { $0.id == 2 })
+        let hidden = try #require(model.loadedItems.first { $0.id == 1 })
+        #expect(model.loadedItems.allSatisfy { $0.observedPlacement != .alwaysHidden })
+        #expect(fixture.alwaysHidden.creates == 0)
+        #expect(fixture.alwaysHidden.writes.isEmpty)
+        #expect(!fixture.engine.alwaysHiddenDividerInstalled)
+        var expected = model.preferences
+        expected.itemControls.setPlacement(.alwaysHidden, for: shown.snapshot)
+
+        model.setPlacement(.alwaysHidden, for: shown)
+        #expect(model.placement(of: shown) == .alwaysHidden)
+        #expect(model.isHidden(shown))
+        #expect(model.partition(model.loadedItems).alwaysHidden.map(\.id) == [2])
+        #expect(model.placementPreview.alwaysHidden.map(\.id) == [2])
+        #expect(!model.placementPreview.hidden.contains { $0.id == 2 })
+        #expect(fixture.alwaysHidden.creates == 0)
+        #expect(fixture.work.preferenceWrites.isEmpty)
+        #expect(fixture.engine.placementTask == nil)
+
+        model.applyPlacementChanges()
+        let placement = try #require(fixture.engine.placementTask)
+        #expect(fixture.alwaysHidden.creates == 1)
+        #expect(fixture.engine.alwaysHiddenDividerInstalled)
+        #expect(fixture.work.preferenceWrites == [expected])
+        await placement.value
+
+        #expect(fixture.server.base.moveRequests.map(\.windowID) == [2])
+        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == [92])
+        #expect(fixture.server.base.moveRequests.map(\.targetX) == [592])
+        #expect(fixture.server.base.items.first { $0.windowID == 2 }?.frame.maxX == 592)
+        #expect(fixture.work.captureRequests == [[3, 1, 2]])
+        #expect(fixture.bar.cachedHiddenItems().map(\.id) == [3, 1])
+        #expect(fixture.bar.cachedAlwaysHiddenItems().map(\.id) == [2])
+        #expect(fixture.work.dividerWrites == [true, false, true])
+        #expect(fixture.alwaysHidden.writes == [true, false, true])
+        #expect(fixture.work.completions == 1)
+        #expect(model.preferences == expected)
+        #expect(model.preferences.itemControls.alwaysHiddenInMenuBar == ["Shown App"])
+        #expect(!model.preferences.itemControls.hiddenInMenuBar.contains("Shown App"))
+        #expect(model.loadedItems.first { $0.id == 2 }?.observedPlacement == .alwaysHidden)
+        #expect(model.placement(of: try #require(model.loadedItems.first { $0.id == 2 })) == .alwaysHidden)
+        #expect(model.placement(of: try #require(model.loadedItems.first { $0.id == 1 })) == .hidden)
+        #expect(model.partition(model.loadedItems).alwaysHidden.map(\.id) == [2])
+        #expect(model.placementPreview.alwaysHidden.map(\.id) == [2])
+        #expect(Set(model.placementPreview.hidden.map(\.id)) == [1, 3])
+        #expect(!model.hasPendingChanges)
+        #expect(!model.placementInProgress)
+        #expect(!model.placementFailed)
+        #expect(fixture.engine.stateMachine.visibility(of: .alwaysHidden) == .collapsed)
+
+        // Returning the item to plain Hidden moves it between the dividers, not back to Shown.
+        model.setPlacement(.hidden, for: try #require(model.loadedItems.first { $0.id == 2 }))
+        model.applyPlacementChanges()
+        await (try #require(fixture.engine.placementTask)).value
+        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == [92, 91])
+        #expect(fixture.server.base.moveRequests.last?.targetX == 976)
+        let restored = try #require(fixture.server.base.items.first { $0.windowID == 2 })
+        #expect(restored.frame.maxX == 976 && restored.frame.minX >= 608)
+        #expect(fixture.alwaysHidden.creates == 1)
+        #expect(model.preferences.itemControls.placement(forKey: "Shown App") == .hidden)
+        #expect(model.loadedItems.first { $0.id == 2 }?.observedPlacement == .hidden)
+        #expect(model.placement(of: hidden) == .hidden)
+    }
+
     @MainActor
     private struct Fixture {
         let server: CountedPlacementServer
@@ -577,15 +648,20 @@ struct StagedPlacementIntegrationTests {
         let bar: FloatingBarController
         let engine: CosmeticHideEngine
         let model: SettingsModel
+        let alwaysHidden: AlwaysHiddenDividerRecorder
 
         init(
             useFloatingBar: Bool = true, moveGate: (started: AsyncGate, release: AsyncGate)? = nil,
-            itemControls: ItemControlStore? = nil, additionalItems: [MenuBarItemSnapshot] = []
+            itemControls: ItemControlStore? = nil, additionalItems: [MenuBarItemSnapshot] = [],
+            alwaysHiddenDivider: Bool = false
         ) throws {
             let items: [(CGWindowID, String, CGFloat)] = [
                 (1, "Hidden App", 800), (2, "Shown App", 1100), (3, "Keep Hidden", 700),
                 (4, "Keep Shown", 1200), (5, "Unconfigured App", 1300)
             ]
+            let tierControl = alwaysHiddenDivider
+                ? [MenuBarItemSnapshot(windowID: 92, ownerPID: 1, title: "BKFAlwaysHidden", frame: CGRect(x: 600, y: 0, width: 8, height: 22))]
+                : []
             let server = CountedPlacementServer(items: items.map { id, owner, x in
                 MenuBarItemSnapshot(
                     windowID: id, ownerPID: 1, ownerBundleID: owner,
@@ -594,7 +670,8 @@ struct StagedPlacementIntegrationTests {
             } + additionalItems + [
                 MenuBarItemSnapshot(windowID: 90, ownerPID: 1, title: "BKFAnchor", frame: CGRect(x: 1000, y: 0, width: 32, height: 22)),
                 MenuBarItemSnapshot(windowID: 91, ownerPID: 1, title: "BKFHidden", frame: CGRect(x: 984, y: 0, width: 16, height: 22))
-            ], moveGate: moveGate)
+            ] + tierControl, moveGate: moveGate)
+            let alwaysHidden = AlwaysHiddenDividerRecorder()
             let preferences = Preferences(
                 autoRehide: false, useFloatingBar: useFloatingBar,
                 itemAliases: ItemAliasStore(aliases: ["Hidden App": "Renamed Icon"]),
@@ -632,6 +709,7 @@ struct StagedPlacementIntegrationTests {
             let engine = CosmeticHideEngine(
                 preferences: preferences, controlWindowIDs: { (90, 91) },
                 setDividerCollapsed: { work.dividerWrites.append($0) },
+                alwaysHiddenDivider: alwaysHidden.hooks,
                 onPreferencesChanged: { work.preferenceWrites.append($0) }
             )
             engine.floatingBar = bar
@@ -673,6 +751,7 @@ struct StagedPlacementIntegrationTests {
             self.bar = bar
             self.engine = engine
             self.model = model
+            self.alwaysHidden = alwaysHidden
         }
     }
 

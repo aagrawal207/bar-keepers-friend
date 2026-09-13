@@ -6,6 +6,8 @@ import SwiftUI
 /// the transparent Tahoe (Liquid Glass) menu bar.
 struct FloatingBarView: View {
     let items: [FloatingBarItem]
+    /// The always-hidden tier, appended under a caption; empty for a plain (non-Option) open.
+    var alwaysHiddenItems: [FloatingBarItem] = []
     let style: FloatingBarStyle
     /// True during the launch warm-up before the first capture completes, so an empty list
     /// reads as "preparing" (spinner) rather than the misleading "no hidden items" copy.
@@ -21,10 +23,13 @@ struct FloatingBarView: View {
     /// click-routing step; harmless no-op until then.
     var onActivate: (FloatingBarItem) -> Void
 
+    /// Accessibility label and caption text for the appended tier.
+    static let alwaysHiddenCaption = "Always hidden"
+
     /// Items split into lines of at most `itemsPerLine` (a row for horizontal, a column for
     /// vertical), preserving order. The grid is filled line-by-line so wrapping matches
     /// `FloatingBarLayout`'s grid (which the panel frame is sized from).
-    private var lines: [[FloatingBarItem]] {
+    private func lines(of items: [FloatingBarItem]) -> [[FloatingBarItem]] {
         let per = max(1, itemsPerLine)
         guard per < items.count else { return items.isEmpty ? [] : [items] }
         return stride(from: 0, to: items.count, by: per).map {
@@ -34,7 +39,7 @@ struct FloatingBarView: View {
 
     var body: some View {
         Group {
-            if items.isEmpty {
+            if items.isEmpty && alwaysHiddenItems.isEmpty {
                 if isPreparing { preparingState } else { emptyState }
             } else {
                 content
@@ -73,37 +78,64 @@ struct FloatingBarView: View {
 
     @ViewBuilder
     private var content: some View {
-        Group {
-            switch style {
-            case .horizontal:
-                // Each `lines` entry is a ROW; stack the rows vertically so a long strip wraps
-                // instead of running off the screen edge.
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 0) {
-                            ForEach(row) { item in
-                                iconButton(item)
-                            }
-                        }
-                    }
-                }
-                .padding(metrics.padding)
-            case .vertical:
-                // Each `lines` entry is a COLUMN; stack the columns horizontally so a tall list
-                // wraps into additional columns instead of running off the bottom.
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, column in
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(column) { item in
-                                verticalRow(item)
-                            }
-                        }
-                        .frame(width: metrics.itemExtent + metrics.rowLabelWidth)
-                    }
-                }
-                .padding(metrics.padding)
+        VStack(alignment: .leading, spacing: 0) {
+            if !items.isEmpty {
+                grid(items)
+            }
+            if !alwaysHiddenItems.isEmpty {
+                alwaysHiddenHeader
+                grid(alwaysHiddenItems)
             }
         }
+        .padding(metrics.padding)
+    }
+
+    /// One tier laid into the style's grid: rows for a strip, columns for a list.
+    @ViewBuilder
+    private func grid(_ items: [FloatingBarItem]) -> some View {
+        switch style {
+        case .horizontal:
+            // Each `lines` entry is a ROW; stack the rows vertically so a long strip wraps
+            // instead of running off the screen edge.
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines(of: items).enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 0) {
+                        ForEach(row) { item in
+                            iconButton(item)
+                        }
+                    }
+                }
+            }
+        case .vertical:
+            // Each `lines` entry is a COLUMN; stack the columns horizontally so a tall list
+            // wraps into additional columns instead of running off the bottom.
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(lines(of: items).enumerated()), id: \.offset) { _, column in
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(column) { item in
+                            verticalRow(item)
+                        }
+                    }
+                    .frame(width: metrics.itemExtent + metrics.rowLabelWidth)
+                }
+            }
+        }
+    }
+
+    /// Subtle separator so the appended tier reads as a distinct group, not more hidden items.
+    private var alwaysHiddenHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+            Text(Self.alwaysHiddenCaption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.alwaysHiddenCaption)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("floating-bar-always-hidden-header")
     }
 
     private func verticalRow(_ item: FloatingBarItem) -> some View {

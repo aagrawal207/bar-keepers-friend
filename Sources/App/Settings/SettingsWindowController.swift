@@ -50,8 +50,7 @@ final class SettingsWindowController {
 final class SettingsModel {
     var preferences: Preferences {
         didSet {
-            if oldValue.itemControls.hiddenInMenuBar != preferences.itemControls.hiddenInMenuBar
-                || oldValue.itemControls.shownInMenuBar != preferences.itemControls.shownInMenuBar {
+            if !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls) {
                 // A draft is relative to the arrangement that just changed underneath it.
                 if !placementDraft.isEmpty {
                     draftDiscardedNotice = "Your pending placement edits were discarded because the saved arrangement changed (a preset or trigger applied)."
@@ -150,6 +149,8 @@ final class SettingsModel {
     var requestedTab: SettingsView.Tab?
     /// Shown in the Items footer until the next edit, so a vanished draft is explained.
     var draftDiscardedNotice: String?
+    /// Owner keys (or the toggle identifier) whose Carbon registration was refused.
+    var hotkeyRegistrationFailures: [String] = []
 
     /// Placement reads intent with grouped owners forced Hidden, exactly as the engine does.
     private var effectiveControls: ItemControlStore {
@@ -187,45 +188,67 @@ final class SettingsModel {
     }
 
     /// Grouping and row controls must agree so a failed move keeps its opposite action available.
-    func partition(_ items: [FloatingBarItem]) -> (hidden: [FloatingBarItem], shown: [FloatingBarItem]) {
+    func partition(_ items: [FloatingBarItem]) -> (hidden: [FloatingBarItem], shown: [FloatingBarItem], alwaysHidden: [FloatingBarItem]) {
         var hidden: [FloatingBarItem] = []
         var shown: [FloatingBarItem] = []
+        var alwaysHidden: [FloatingBarItem] = []
         for item in items {
-            if isHidden(item) { hidden.append(item) } else { shown.append(item) }
+            switch placement(of: item) {
+            case .shown: shown.append(item)
+            case .hidden: hidden.append(item)
+            case .alwaysHidden: alwaysHidden.append(item)
+            }
         }
-        return (hidden, shown)
+        return (hidden, shown, alwaysHidden)
     }
 
     /// Pending placement can display intent, but an observed failure must remain actionable.
-    func isHidden(_ item: FloatingBarItem) -> Bool {
-        if let hidden = placementDraft.hidden(for: item.snapshot) { return hidden }
+    func placement(of item: FloatingBarItem) -> ItemPlacement {
+        if let staged = placementDraft.placement(for: item.snapshot) { return staged }
         let controls = effectiveControls
-        if placementInProgress && controls.hasPlacementIntent(item.snapshot) {
-            return controls.isHidden(item.snapshot)
+        if placementInProgress, let requested = controls.placement(for: item.snapshot) {
+            return requested
         }
-        return item.observedHidden ?? controls.isHidden(item.snapshot)
+        return item.observedPlacement ?? controls.placement(for: item.snapshot) ?? .shown
+    }
+
+    /// Two-tier view of `placement(of:)`; Always Hidden reads as hidden.
+    func isHidden(_ item: FloatingBarItem) -> Bool {
+        placement(of: item).isHidden
     }
 
     func hasPendingChange(for item: FloatingBarItem) -> Bool {
-        placementDraft.hidden(for: item.snapshot) != nil
+        placementDraft.placement(for: item.snapshot) != nil
     }
 
     func setHidden(_ hidden: Bool, for item: FloatingBarItem) {
-        setHidden(hidden, forAll: [item])
+        setPlacement(ItemPlacement(hidden: hidden), forAll: [item])
     }
 
     func setHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) {
-        guard !placementInProgress else { return }
-        draftDiscardedNotice = nil
-        placementDraft = draftSettingHidden(hidden, forAll: items)
+        setPlacement(ItemPlacement(hidden: hidden), forAll: items)
     }
 
     func canSetHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) -> Bool {
-        guard !placementInProgress else { return false }
-        return draftSettingHidden(hidden, forAll: items) != placementDraft
+        canSetPlacement(ItemPlacement(hidden: hidden), forAll: items)
     }
 
-    private func draftSettingHidden(_ hidden: Bool, forAll items: [FloatingBarItem]) -> ItemPlacementDraft {
+    func setPlacement(_ placement: ItemPlacement, for item: FloatingBarItem) {
+        setPlacement(placement, forAll: [item])
+    }
+
+    func setPlacement(_ placement: ItemPlacement, forAll items: [FloatingBarItem]) {
+        guard !placementInProgress else { return }
+        draftDiscardedNotice = nil
+        placementDraft = draftSettingPlacement(placement, forAll: items)
+    }
+
+    func canSetPlacement(_ placement: ItemPlacement, forAll items: [FloatingBarItem]) -> Bool {
+        guard !placementInProgress else { return false }
+        return draftSettingPlacement(placement, forAll: items) != placementDraft
+    }
+
+    private func draftSettingPlacement(_ placement: ItemPlacement, forAll items: [FloatingBarItem]) -> ItemPlacementDraft {
         // Grouped owners are placed by their group; staging them would save intent that only
         // takes effect after an ungroup.
         let items = items.filter { group(containing: $0) == nil }
@@ -236,11 +259,40 @@ final class SettingsModel {
             return keys.contains(key) && !itemIDs.contains($0.id)
         }
         var draft = placementDraft
-        draft.setHidden(
-            hidden, for: (items + siblings).map { ($0.snapshot, $0.observedHidden) },
+        draft.setPlacement(
+            placement, for: (items + siblings).map { ($0.snapshot, $0.observedPlacement) },
             controls: preferences.itemControls
         )
         return draft
+    }
+
+    // MARK: - Floating-bar presentation (saved immediately, never staged)
+
+    /// Whether the floating bar draws this item; suppression never affects menu-bar placement.
+    func isShownInBar(_ item: FloatingBarItem) -> Bool {
+        !preferences.itemControls.isSuppressed(item.snapshot)
+    }
+
+    func setShownInBar(_ shown: Bool, for item: FloatingBarItem) {
+        guard isShownInBar(item) != shown else { return }
+        preferences.itemControls.setSuppressed(!shown, for: item.snapshot)
+    }
+
+    /// Bar order is per tier: a row can only trade places with rows shown in the same section.
+    func canMoveInBar(_ item: FloatingBarItem, _ step: ItemControlStore.BarOrderStep) -> Bool {
+        guard placement(of: item) != .shown else { return false }
+        return preferences.itemControls.canMoveInBar(item.snapshot, step, among: barSection(of: item))
+    }
+
+    func moveInBar(_ item: FloatingBarItem, _ step: ItemControlStore.BarOrderStep) {
+        guard canMoveInBar(item, step) else { return }
+        // One nested mutation is one preferences write, matching the other presentation edits.
+        preferences.itemControls.moveInBar(item.snapshot, step, among: barSection(of: item))
+    }
+
+    private func barSection(of item: FloatingBarItem) -> [MenuBarItemSnapshot] {
+        let tier = placement(of: item)
+        return loadedItems.filter { placement(of: $0) == tier }.map(\.snapshot)
     }
 
     func applyPlacementChanges() {
@@ -266,26 +318,31 @@ final class SettingsModel {
         onRetryPlacement()
     }
 
-    var placementPreview: (shown: [FloatingBarItem], hidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
+    var placementPreview: (shown: [FloatingBarItem], hidden: [FloatingBarItem], alwaysHidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
         // Apply reconciles every saved owner, including owners not edited in this draft.
         let controls = placementDraft.applying(to: effectiveControls)
         let projectsIntent = hasPendingChanges || placementInProgress
         var shown: [FloatingBarItem] = []
         var hidden: [FloatingBarItem] = []
+        var alwaysHidden: [FloatingBarItem] = []
         var unknown: [FloatingBarItem] = []
         for var item in loadedItems {
             item.alias = preferences.itemAliases.alias(for: item.snapshot)
-            let projectedHidden: Bool? = projectsIntent && controls.hasPlacementIntent(item.snapshot)
-                ? controls.isHidden(item.snapshot) : item.observedHidden
-            switch projectedHidden {
-            case true?: hidden.append(item)
-            case false?: shown.append(item)
+            let projected: ItemPlacement? = projectsIntent && controls.hasPlacementIntent(item.snapshot)
+                ? controls.placement(for: item.snapshot) : item.observedPlacement
+            switch projected {
+            case .hidden?: hidden.append(item)
+            case .alwaysHidden?: alwaysHidden.append(item)
+            case .shown?: shown.append(item)
             case nil: unknown.append(item)
             }
         }
-        let byID = Dictionary(hidden.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let visible = ItemControlStore.visibleBarItems(from: hidden.map(\.snapshot), controls: controls)
-        return (shown, visible.compactMap { byID[$0.windowID] }, unknown)
+        func barOrdered(_ tier: [FloatingBarItem]) -> [FloatingBarItem] {
+            let byID = Dictionary(tier.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return ItemControlStore.visibleBarItems(from: tier.map(\.snapshot), controls: controls)
+                .compactMap { byID[$0.windowID] }
+        }
+        return (shown, barOrdered(hidden), barOrdered(alwaysHidden), unknown)
     }
 
     /// The user's display nickname for the item, edited via the name field. Empty clears it.

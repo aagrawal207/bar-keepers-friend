@@ -1,6 +1,14 @@
 import AppKit
 import BarKeepersFriendCore
 
+/// Test seam for the lazily created always-hidden divider, so tests never make a status item.
+/// Production leaves it nil and owns a real `NSStatusItem` instead.
+struct AlwaysHiddenDividerHooks {
+    var create: @MainActor () -> Void
+    var windowID: @MainActor () -> CGWindowID?
+    var setCollapsed: @MainActor (Bool) -> Void
+}
+
 /// The Phase 1 hide/show engine — the unbreakable baseline.
 ///
 /// It owns two of *our own* `NSStatusItem`s: an always-visible anchor and a hidden-section
@@ -8,6 +16,9 @@ import BarKeepersFriendCore
 /// pushed off the screen edge; revealing restores the natural length. This uses **no**
 /// private APIs and **no** permissions, so it keeps working regardless of what Apple
 /// changes in the private menu-bar internals.
+///
+/// A third status item, the always-hidden divider, is created only once some owner carries
+/// Always Hidden intent; until then the two-item baseline is untouched.
 ///
 /// All visibility *decisions* come from `HideShowStateMachine` in Core; this class only
 /// translates the resulting intents into `NSStatusItem.length` mutations.
@@ -28,6 +39,9 @@ final class CosmeticHideEngine {
     var floatingBar: FloatingBarController?
     var hoverRevealController: HoverRevealController?
     var scrollRevealMonitor: ScrollRevealMonitor?
+    var liveLayoutMonitor: LiveLayoutMonitor?
+    /// Lets the coordinator re-lay-out style overlays on the same debounced screen change.
+    var onScreenParametersChanged: (() -> Void)?
     private var anchorMenuIsOpen = false
 
     /// Performs the per-item Shown/Hidden control by physically moving items across the anchor
@@ -45,15 +59,21 @@ final class CosmeticHideEngine {
     private(set) var placementPending = false
     private(set) var placementTask: Task<Void, Never>?
     private var placementRequestID = 0
+    /// Intent whose batch had real move failures; Live mode backs off until it changes or succeeds.
+    private(set) var lastFailedControls: ItemControlStore?
     private let controlWindowIDsProvider: (() -> (anchor: CGWindowID, divider: CGWindowID)?)?
     private let setDividerCollapsed: ((Bool) -> Void)?
     private let anchorFrameProvider: (() -> CGRect?)?
+    private let alwaysHiddenDividerHooks: AlwaysHiddenDividerHooks?
     private var activationOwnsSection = false
     // Last requested divider state: a predecessor may finish before its successor restores it.
     private var dividerIsCollapsed = false
 
     private var anchorItem: NSStatusItem?
     private var hiddenDivider: NSStatusItem?
+    private var alwaysHiddenDivider: NSStatusItem?
+    /// Set once for the session; the item stays even if the tier empties, so its slot survives.
+    private(set) var alwaysHiddenDividerInstalled = false
 
     private(set) var stateMachine: HideShowStateMachine
     private var preferences: Preferences
@@ -172,7 +192,7 @@ final class CosmeticHideEngine {
             guard canStart() else {
                 // The predecessor may have left restoration to this epoch, even if it does no work.
                 if epoch == latestCaptureEpoch {
-                    setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+                    restoreDividersFromState()
                 }
                 DebugLog.log("capture: skipped optional refresh")
                 return
@@ -183,7 +203,9 @@ final class CosmeticHideEngine {
             // display stacked above/below the primary isn't enumerated as "all items below the bar".
             // Every capture path funnels through here, so this one assignment covers them all.
             floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
+            // Both tiers must be on-screen to capture; the always-hidden divider re-expands below.
             setHidden(collapsed: false)
+            setAlwaysHiddenCollapsed(false)
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled, !isPaused else { return }
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
@@ -193,15 +215,24 @@ final class CosmeticHideEngine {
             guard !Task.isCancelled, !isPaused, epoch == latestCaptureEpoch else { return }
             if forceCollapseAfter && !activationOwnsSection {
                 _ = stateMachine.apply(.hide(.hidden))
+                _ = stateMachine.apply(.hide(.alwaysHidden))
                 setHidden(collapsed: true)
+                setAlwaysHiddenCollapsed(true)
             } else {
-                // Restore the divider to whatever the state machine now says — preserves a
+                // Restore the dividers to whatever the state machine now says — preserves a
                 // reveal an activation established while we were capturing.
-                setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+                restoreDividersFromState()
             }
         }
         captureChain = task
         return task
+    }
+
+    /// Physical divider widths follow the state machine; the always-hidden write is a no-op
+    /// until that divider exists.
+    private func restoreDividersFromState() {
+        setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+        setAlwaysHiddenCollapsed(stateMachine.visibility(of: .alwaysHidden) == .collapsed)
     }
 
     private func cancelCaptureSequences() {
@@ -231,21 +262,28 @@ final class CosmeticHideEngine {
         controlWindowIDs: (() -> (anchor: CGWindowID, divider: CGWindowID)?)? = nil,
         setDividerCollapsed: ((Bool) -> Void)? = nil,
         anchorFrame: (() -> CGRect?)? = nil,
+        alwaysHiddenDivider: AlwaysHiddenDividerHooks? = nil,
         onPreferencesChanged: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
         self.controlWindowIDsProvider = controlWindowIDs
         self.setDividerCollapsed = setDividerCollapsed
         self.anchorFrameProvider = anchorFrame
+        self.alwaysHiddenDividerHooks = alwaysHiddenDivider
         self.onPreferencesChanged = onPreferencesChanged
         self.stateMachine = HideShowStateMachine(
-            sections: MenuBarSection.phase1,
-            autoRehideSections: preferences.autoRehide ? [.hidden] : [],
+            sections: MenuBarSection.allCases,
+            autoRehideSections: Self.autoRehideSections(for: preferences),
             // Launch showing everything: the divider stays at its natural width so the
             // anchor is visible and nothing is hidden until the user clicks. Expanding on
             // launch would overflow a notched menu bar and drop the items off-screen.
             initialVisibility: .shown
         )
+    }
+
+    /// Auto re-hide always re-collapses both tiers; an option-click reveal must not outlive it.
+    private static func autoRehideSections(for preferences: Preferences) -> Set<MenuBarSection> {
+        preferences.autoRehide ? [.hidden, .alwaysHidden] : []
     }
 
     // MARK: - Lifecycle
@@ -280,6 +318,8 @@ final class CosmeticHideEngine {
             button.action = #selector(dividerClicked(_:))
         }
         hiddenDivider = divider
+        // Created after the two baseline items so a first-ever divider lands left of them.
+        ensureAlwaysHiddenDividerIfNeeded()
 
         // Tell the floating bar which windows are ours, so they're excluded from mirroring.
         publishControlItemWindowIDs()
@@ -288,6 +328,9 @@ final class CosmeticHideEngine {
         // (which must be on-screen to receive a click).
         floatingBar?.revealHiddenItems = { [weak self] in
             await self?.revealForActivation()
+        }
+        floatingBar?.revealAllHiddenItems = { [weak self] in
+            await self?.revealForActivation(includeAlwaysHidden: true)
         }
         floatingBar?.rehideItems = { [weak self] in
             self?.rehideAfterActivation()
@@ -321,6 +364,7 @@ final class CosmeticHideEngine {
         observeScreenChanges()
         updateHoverMonitoring()
         updateScrollMonitoring()
+        updateLiveLayoutMonitoring()
     }
 
     /// The defaults key AppKit uses to persist a status item's horizontal slot, by autosave name.
@@ -328,25 +372,76 @@ final class CosmeticHideEngine {
         "NSStatusItem Preferred Position \(identifier.rawValue)"
     }
 
-    /// Rewrites the divider's saved slot when it has drifted to the right of the anchor, so the
-    /// hide mechanism keeps pushing items (not the anchor) off-screen. No-op when the order is
-    /// already correct or either slot hasn't been persisted yet (first launch — AppKit picks a
-    /// sane default order). Must run before the status items are created.
+    /// Rewrites saved slots that drifted out of order so expansion pushes items, not our own
+    /// controls, off-screen. Must run before the status items are created (AppKit reads slots then).
     private func repairControlItemOrderIfNeeded() {
         let defaults = UserDefaults.standard
         let anchorKey = Self.preferredPositionKey(.anchor)
         let dividerKey = Self.preferredPositionKey(.hiddenDivider)
+        let alwaysHiddenKey = Self.preferredPositionKey(.alwaysHiddenDivider)
         guard defaults.object(forKey: anchorKey) != nil,
               defaults.object(forKey: dividerKey) != nil else { return }
         let anchorPos = defaults.double(forKey: anchorKey)
         let dividerPos = defaults.double(forKey: dividerKey)
-        guard let fixed = ControlItemOrder.repairedDividerPosition(anchor: anchorPos, divider: dividerPos) else { return }
-        defaults.set(fixed, forKey: dividerKey)
-        DebugLog.log("control-item order was inverted (anchor=\(anchorPos) divider=\(dividerPos)); repaired divider -> \(fixed)")
+        let alwaysHiddenPos = defaults.object(forKey: alwaysHiddenKey) == nil ? nil : defaults.double(forKey: alwaysHiddenKey)
+        let repaired = ControlItemOrder.repairedPositions(
+            anchor: anchorPos, hiddenDivider: dividerPos, alwaysHiddenDivider: alwaysHiddenPos
+        )
+        if let fixed = repaired.hiddenDivider {
+            defaults.set(fixed, forKey: dividerKey)
+            DebugLog.log("control-item order was inverted (anchor=\(anchorPos) divider=\(dividerPos)); repaired divider -> \(fixed)")
+        }
+        if let fixed = repaired.alwaysHiddenDivider, let alwaysHiddenPos {
+            defaults.set(fixed, forKey: alwaysHiddenKey)
+            DebugLog.log("always-hidden divider slot was inverted (divider=\(repaired.hiddenDivider ?? dividerPos) alwaysHidden=\(alwaysHiddenPos)); repaired -> \(fixed)")
+        }
+    }
+
+    /// Mid-session creation: only the always-hidden slot is rewritten, since the live hidden
+    /// divider already has its position and AppKit owns re-persisting it.
+    private func repairAlwaysHiddenDividerSlotIfNeeded() {
+        let defaults = UserDefaults.standard
+        let anchorKey = Self.preferredPositionKey(.anchor)
+        let dividerKey = Self.preferredPositionKey(.hiddenDivider)
+        let alwaysHiddenKey = Self.preferredPositionKey(.alwaysHiddenDivider)
+        guard defaults.object(forKey: anchorKey) != nil,
+              defaults.object(forKey: dividerKey) != nil,
+              defaults.object(forKey: alwaysHiddenKey) != nil else { return }
+        let repaired = ControlItemOrder.repairedPositions(
+            anchor: defaults.double(forKey: anchorKey), hiddenDivider: defaults.double(forKey: dividerKey),
+            alwaysHiddenDivider: defaults.double(forKey: alwaysHiddenKey)
+        )
+        guard let fixed = repaired.alwaysHiddenDivider else { return }
+        defaults.set(fixed, forKey: alwaysHiddenKey)
+        DebugLog.log("always-hidden divider slot repaired before creation -> \(fixed)")
+    }
+
+    /// Creates the always-hidden divider the first time some owner carries Always Hidden intent.
+    /// Never removed within the session: a fresh item would lose its saved slot and reorder.
+    private func ensureAlwaysHiddenDividerIfNeeded() {
+        guard !alwaysHiddenDividerInstalled, !placementControls.alwaysHiddenInMenuBar.isEmpty else { return }
+        if let hooks = alwaysHiddenDividerHooks {
+            hooks.create()
+        } else {
+            // Only an installed engine owns status items; install() calls back in once it does.
+            guard anchorItem != nil else { return }
+            repairAlwaysHiddenDividerSlotIfNeeded()
+            let divider = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            divider.autosaveName = ControlItem.Identifier.alwaysHiddenDivider.rawValue
+            if let button = divider.button {
+                button.target = self
+                button.action = #selector(dividerClicked(_:))
+            }
+            alwaysHiddenDivider = divider
+        }
+        alwaysHiddenDividerInstalled = true
+        DebugLog.log("always-hidden divider created (intent=\(placementControls.alwaysHiddenInMenuBar.count))")
+        publishControlItemWindowIDs()
+        setAlwaysHiddenCollapsed(stateMachine.visibility(of: .alwaysHidden) == .collapsed)
     }
 
     /// Reports the app's own status-item window numbers to the floating bar so it never
-    /// mirrors the anchor or divider.
+    /// mirrors the anchor or dividers.
     ///
     /// `windowNumber` is an `Int` and can be 0, negative, or an out-of-range sentinel before
     /// the status-item window is realized; `CGWindowID` is a `UInt32`, so a force-conversion
@@ -354,7 +449,7 @@ final class CosmeticHideEngine {
     /// refreshed right before the bar is shown, by which point the windows definitely exist.
     private func publishControlItemWindowIDs() {
         var ids: Set<CGWindowID> = []
-        for window in [anchorItem?.button?.window, hiddenDivider?.button?.window] {
+        for window in [anchorItem?.button?.window, hiddenDivider?.button?.window, alwaysHiddenDivider?.button?.window] {
             if let number = window?.windowNumber,
                let id = WindowIDConversion.cgWindowID(fromWindowNumber: number) {
                 ids.insert(id)
@@ -364,6 +459,9 @@ final class CosmeticHideEngine {
             ids.formUnion([controls.anchor, controls.divider])
             floatingBar?.hiddenDividerWindowID = controls.divider
         }
+        let alwaysHiddenID = alwaysHiddenControlWindowID
+        if let alwaysHiddenID { ids.insert(alwaysHiddenID) }
+        floatingBar?.alwaysHiddenDividerWindowID = alwaysHiddenID
         floatingBar?.controlItemWindowIDs = ids
         // Non-capture readers, including Settings, also measure against the anchor's display.
         floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
@@ -390,17 +488,34 @@ final class CosmeticHideEngine {
         return (anchorID, dividerID)
     }
 
+    /// Nil until the tier's divider exists; falls back to the native name lookup like the pair above.
+    private var alwaysHiddenControlWindowID: CGWindowID? {
+        guard alwaysHiddenDividerInstalled else { return nil }
+        if let hooks = alwaysHiddenDividerHooks { return hooks.windowID() }
+        if let number = alwaysHiddenDivider?.button?.window?.windowNumber,
+           let id = WindowIDConversion.cgWindowID(fromWindowNumber: number) {
+            return id
+        }
+        return hiddenItemController?.alwaysHiddenControlWindowID(
+            displayXRange: anchorDisplayXRange, displayMenuBarTop: anchorDisplayMenuBarTop
+        )
+    }
+
     func uninstall() {
         hoverRevealController?.stop()
         scrollRevealMonitor?.stop()
+        liveLayoutMonitor?.stop()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
         cancelCaptureSequences()
         floatingBar?.hide()
         if let anchor = anchorItem { NSStatusBar.system.removeStatusItem(anchor) }
         if let divider = hiddenDivider { NSStatusBar.system.removeStatusItem(divider) }
+        if let divider = alwaysHiddenDivider { NSStatusBar.system.removeStatusItem(divider) }
         anchorItem = nil
         hiddenDivider = nil
+        alwaysHiddenDivider = nil
+        alwaysHiddenDividerInstalled = false
         placementPending = false
         updatePlacementStatus(applying: false)
     }
@@ -413,9 +528,11 @@ final class CosmeticHideEngine {
         let wasFloatingBar = self.preferences.useFloatingBar
         let previousControls = placementControls
         self.preferences = preferences
-        stateMachine.autoRehideSections = preferences.autoRehide ? [.hidden] : []
+        stateMachine.autoRehideSections = Self.autoRehideSections(for: preferences)
         updateHoverMonitoring()
         updateScrollMonitoring()
+        updateLiveLayoutMonitoring()
+        ensureAlwaysHiddenDividerIfNeeded()
 
         // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
         // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
@@ -433,12 +550,9 @@ final class CosmeticHideEngine {
             }
         }
 
-        // If the per-item Hidden intent changed (the user toggled Shown/Hidden in Settings),
-        // physically move the affected items to the correct side of the anchor and refresh the
-        // mirror. Only when it actually changed, so an unrelated settings edit doesn't drag icons.
-        let controls = placementControls
-        if controls.hiddenInMenuBar != previousControls.hiddenInMenuBar
-            || controls.shownInMenuBar != previousControls.shownInMenuBar {
+        // Only a changed tier intent moves items; an unrelated settings edit must not drag icons.
+        if !placementControls.hasSamePlacementIntent(as: previousControls) {
+            lastFailedControls = nil
             reconcileHiddenItems(userInitiated: userInitiated)
         }
     }
@@ -531,7 +645,7 @@ final class CosmeticHideEngine {
         let wasApplying = placementInProgress
         placementTask?.cancel()
         let controls = placementControls
-        guard !controls.hiddenInMenuBar.isEmpty || !controls.shownInMenuBar.isEmpty else {
+        guard controls.hasAnyPlacementIntent else {
             placementPending = false
             updatePlacementStatus(applying: false)
             guard wasApplying else { return }
@@ -547,12 +661,14 @@ final class CosmeticHideEngine {
                 }
                 guard !Task.isCancelled, !self.isPaused,
                       requestID == self.placementRequestID, epoch == self.latestCaptureEpoch else { return }
-                self.setHidden(collapsed: self.stateMachine.visibility(of: .hidden) == .collapsed)
+                self.restoreDividersFromState()
             }
             captureChain = restore
             placementTask = restore
             return
         }
+        // The tier's control must exist before the planner can target it.
+        ensureAlwaysHiddenDividerIfNeeded()
         placementPending = true
         guard !isPaused else {
             updatePlacementStatus(applying: false, message: "Changes will apply when Bar Keeper's Friend resumes.")
@@ -585,21 +701,24 @@ final class CosmeticHideEngine {
         autoRehideWorkItem = nil
         cancelPendingCacheRefreshes()
         updatePlacementStatus(applying: true)
-        DebugLog.log("placement: queued request=\(requestID) hidden=\(controls.hiddenInMenuBar.count) shown=\(controls.shownInMenuBar.count)")
+        DebugLog.log("placement: queued request=\(requestID) hidden=\(controls.hiddenInMenuBar.count) shown=\(controls.shownInMenuBar.count) alwaysHidden=\(controls.alwaysHiddenInMenuBar.count)")
 
         placementTask = runCaptureSequence(forceCollapseAfter: false) { [weak self] in
             guard let self, !Task.isCancelled, requestID == self.placementRequestID else { return }
             self.publishControlItemWindowIDs()
             controller.controlItemWindowIDs = self.floatingBar?.controlItemWindowIDs ?? []
             let result: HiddenItemController.ReconcileResult
+            let requestControls = self.placementControls
             if let controls = self.placementControlIDs {
-                DebugLog.log("placement: starting request=\(requestID) anchorWindow=\(controls.anchor) dividerWindow=\(controls.divider)")
+                let alwaysHiddenID = self.alwaysHiddenControlWindowID
+                DebugLog.log("placement: starting request=\(requestID) anchorWindow=\(controls.anchor) dividerWindow=\(controls.divider) alwaysHiddenWindow=\(alwaysHiddenID.map(String.init) ?? "none")")
                 self.reconcileInFlightCount += 1
                 defer { self.reconcileInFlightCount -= 1 }
                 result = await controller.reconcile(
                     anchorWindowID: controls.anchor,
                     dividerWindowID: controls.divider,
-                    controls: self.placementControls,
+                    alwaysHiddenDividerWindowID: alwaysHiddenID,
+                    controls: requestControls,
                     displayXRange: self.anchorDisplayXRange,
                     displayMenuBarTop: self.anchorDisplayMenuBarTop
                 )
@@ -617,6 +736,7 @@ final class CosmeticHideEngine {
             self.placementPending = result.observationFailed
             // Invalid control geometry must not let an expanded divider hide the anchor itself.
             _ = self.stateMachine.apply(result.observationFailed ? .show(.hidden) : .hide(.hidden))
+            _ = self.stateMachine.apply(result.observationFailed ? .show(.alwaysHidden) : .hide(.alwaysHidden))
             if !result.observationFailed, self.preferences.useFloatingBar, let bar = self.floatingBar {
                 let anchorX = self.anchorFrame?.minX ?? 1115
                 await bar.captureAndCache(anchorMinX: anchorX, allowFallback: false)
@@ -634,8 +754,10 @@ final class CosmeticHideEngine {
             if result.observationFailed {
                 self.updatePlacementStatus(applying: false, message: "Couldn't read a stable menu bar layout. Items have been left revealed; try again.", failed: true)
             } else if !result.failed.isEmpty {
+                self.lastFailedControls = requestControls
                 self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Retry to apply the saved placement again.", failed: true)
             } else {
+                self.lastFailedControls = nil
                 self.updatePlacementStatus(applying: false)
             }
         }
@@ -663,11 +785,19 @@ final class CosmeticHideEngine {
             showAnchorMenu()
             return
         }
+        anchorLeftClick(optionHeld: event?.modifierFlags.contains(.option) == true)
+    }
+
+    /// A plain click reveals the hidden tier only; Option also reveals the always-hidden tier
+    /// (in place, or appended to the floating bar). Paused: the section is already revealed.
+    func anchorLeftClick(optionHeld: Bool) {
         // While paused the section is revealed in place; a left-click does nothing (the right-click
         // menu, with the Pause toggle, is always available above).
         guard !isPaused else { return }
         if preferences.useFloatingBar, floatingBar != nil {
-            toggleFloatingBar()
+            toggleFloatingBar(includeAlwaysHidden: optionHeld)
+        } else if optionHeld {
+            toggleAllSections()
         } else {
             toggleHidden()
         }
@@ -789,6 +919,7 @@ final class CosmeticHideEngine {
         isPaused.toggle()
         updateHoverMonitoring()
         updateScrollMonitoring()
+        updateLiveLayoutMonitoring()
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
@@ -798,18 +929,19 @@ final class CosmeticHideEngine {
             cancelCaptureSequences()
             screenChangeWorkItem?.cancel()
             // Reveal in place: hide the mirror panel if open, drive the state machine to shown so no
-            // stray refresh re-collapses it, and un-tuck the divider so left-of-anchor items return.
+            // stray refresh re-collapses it, and un-tuck both dividers so every tucked item returns.
             floatingBar?.hide()
             _ = stateMachine.apply(.show(.hidden))
+            _ = stateMachine.apply(.show(.alwaysHidden))
             setHidden(collapsed: false)
+            setAlwaysHiddenCollapsed(false)
             updatePlacementStatus(applying: false, message: "Changes will apply when Bar Keeper's Friend resumes.")
         } else {
-            // Back to baseline: collapse the section again, then re-apply the saved per-item Hidden
-            // intent (a Settings toggle or display change made WHILE paused recorded intent but was
-            // not moved). reconcileHiddenItems now passes its `!isPaused` guard and no-ops cheaply
-            // when there's nothing hidden or the mover isn't wired.
+            // Back to baseline: collapse both tiers, then re-apply intent recorded while paused.
             _ = stateMachine.apply(.hide(.hidden))
+            _ = stateMachine.apply(.hide(.alwaysHidden))
             setHidden(collapsed: true)
+            setAlwaysHiddenCollapsed(true)
             if let bar = floatingBar, bar.needsCapture {
                 warmUpFloatingBarCache()
             }
@@ -826,8 +958,9 @@ final class CosmeticHideEngine {
     }
 
     /// Manual toggles present cached icons; keyboard opens disable the pre-entry dismissal backstop.
-    /// Hover uses a separate ownership policy and exit timer.
-    private func toggleFloatingBar(persistUntilToggled: Bool = false) {
+    /// Hover uses a separate ownership policy and exit timer. `includeAlwaysHidden` (Option-click)
+    /// appends the always-hidden tier; asking for it while a plain bar is open widens that bar.
+    private func toggleFloatingBar(persistUntilToggled: Bool = false, includeAlwaysHidden: Bool = false) {
         hoverRevealController?.relinquishForManualInteraction()
         guard !isPaused, let bar = floatingBar else { return }
         // Any deliberate user interaction with the bar cancels a pending auto-rehide. Otherwise a
@@ -839,19 +972,28 @@ final class CosmeticHideEngine {
         autoRehideWorkItem = nil
         // Presentation uses only cached icons, even when stale; freshness waits for idle refreshes.
         cancelPendingCacheRefreshes()
+        let presentation: FloatingBarController.Presentation = persistUntilToggled ? .keyboard : .click
+        // Only a real tier can widen an open bar; without one an Option-click toggles like a click.
+        let widensOpenBar = bar.isVisible && includeAlwaysHidden && !bar.presentsAlwaysHidden
+            && alwaysHiddenDividerInstalled && !bar.cachedAlwaysHiddenItems().isEmpty
+        // Widening is a deliberate click, even over a bar that hover opened.
+        if widensOpenBar { bar.adoptPresentation(presentation) }
         // A click during the one-time launch capture: don't eat it (that felt broken), and don't
         // touch the divider/state machine (the capture is mid-reveal and owns it — collapsing now
         // would yank the section out from under the screenshot). Just show the panel; it renders a
         // "Preparing…" spinner from the not-yet-populated cache, and the warm-up re-lays-it-out
         // with the real glyphs the moment capture lands, then collapses the divider itself.
         if captureInFlight {
-            if bar.isVisible {
+            if bar.isVisible, !widensOpenBar {
                 bar.hide()
             } else {
                 let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
                 Task { @MainActor in
                     guard !self.isPaused else { return }
-                    await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: persistUntilToggled ? .keyboard : .click)
+                    await bar.show(
+                        anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: presentation,
+                        includeAlwaysHidden: includeAlwaysHidden
+                    )
                 }
             }
             return
@@ -862,12 +1004,14 @@ final class CosmeticHideEngine {
         // tidy it back up (re-hide) rather than show a redundant panel.
         if stateMachine.visibility(of: .hidden) == .shown {
             _ = stateMachine.apply(.hide(.hidden))
+            _ = stateMachine.apply(.hide(.alwaysHidden))
             bar.hide()
             setHidden(collapsed: true)
+            setAlwaysHiddenCollapsed(true)
             resumePendingPlacement()
             return
         }
-        if bar.isVisible {
+        if bar.isVisible, !widensOpenBar {
             bar.hide()
             return
         }
@@ -878,7 +1022,10 @@ final class CosmeticHideEngine {
         let frame = anchorFrame ?? CGRect(x: (NSScreen.main?.frame.maxX ?? 1440) - 32, y: 0, width: 32, height: 24)
         Task { @MainActor in
             guard !self.isPaused else { return }
-            await bar.show(anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: persistUntilToggled ? .keyboard : .click)
+            await bar.show(
+                anchorMinX: frame.minX, anchorRightX: frame.maxX, presentation: presentation,
+                includeAlwaysHidden: includeAlwaysHidden
+            )
         }
     }
 
@@ -924,6 +1071,34 @@ final class CosmeticHideEngine {
         scrollRevealMonitor?.setEnabled(preferences.revealOnScroll && preferences.useFloatingBar && !isPaused)
     }
 
+    private func updateLiveLayoutMonitoring() {
+        liveLayoutMonitor?.setEnabled(preferences.layoutMode == .live && !isPaused)
+    }
+
+    /// Live checks must not cancel work in flight or disturb an open bar, menu, or revealed section
+    /// (a click reveal in reflow mode, or items left revealed after a failed observation).
+    var isBusyForLiveLayout: Bool {
+        isPaused || anchorMenuIsOpen || activationOwnsSection || placementInProgress || captureInFlight
+            || sectionInUse
+    }
+
+    /// Plan-only: how many items Live mode would move right now, without revealing or moving.
+    func previewPlacementMoves() async -> Int? {
+        guard !isPaused, let controller = hiddenItemController else { return nil }
+        let controls = placementControls
+        guard controls.hasAnyPlacementIntent else { return 0 }
+        // A batch that already failed is not retried by Live mode; only new intent or Retry may.
+        if placementFailed, let failed = lastFailedControls, controls.hasSamePlacementIntent(as: failed) { return 0 }
+        guard let ids = placementControlIDs else { return nil }
+        publishControlItemWindowIDs()
+        controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []
+        return await controller.previewMoves(
+            anchorWindowID: ids.anchor, dividerWindowID: ids.divider,
+            alwaysHiddenDividerWindowID: alwaysHiddenControlWindowID, controls: controls,
+            displayXRange: anchorDisplayXRange, displayMenuBarTop: anchorDisplayMenuBarTop
+        )
+    }
+
     /// A scroll gesture is deliberate like a click, so it takes ownership from hover and opens
     /// from the cache; hide closes whatever presentation is showing.
     func revealFloatingBarOnScroll() {
@@ -961,17 +1136,36 @@ final class CosmeticHideEngine {
         hoverRevealController?.relinquishForManualInteraction()
         let intents = stateMachine.apply(.toggle(.hidden))
         enact(intents)
+        // Collapsing the hidden tier ends any option-click reveal; a plain reveal never opens it.
+        if stateMachine.visibility(of: .hidden) == .collapsed {
+            enact(stateMachine.apply(.hide(.alwaysHidden)))
+        }
         scheduleAutoRehideIfNeeded()
         if stateMachine.visibility(of: .hidden) == .collapsed { resumePendingPlacement() }
     }
 
-    /// Reveals the hidden section so a real item can be clicked on-screen. Updates the state
-    /// machine to `.shown` and returns after a short settle delay.
-    func revealForActivation() async {
+    /// Option-click in reflow mode: reveals both tiers in place, or collapses both once shown.
+    func toggleAllSections() {
+        guard !isPaused else { return }
+        hoverRevealController?.relinquishForManualInteraction()
+        let bothShown = stateMachine.visibility(of: .hidden) == .shown
+            && stateMachine.visibility(of: .alwaysHidden) == .shown
+        let events: [HideShowStateMachine.Event] = bothShown
+            ? [.hide(.hidden), .hide(.alwaysHidden)]
+            : [.show(.hidden), .show(.alwaysHidden)]
+        for event in events { enact(stateMachine.apply(event)) }
+        scheduleAutoRehideIfNeeded()
+        if stateMachine.visibility(of: .hidden) == .collapsed { resumePendingPlacement() }
+    }
+
+    /// Reveals the hidden section (and, on request, the always-hidden one) so a real item can be
+    /// clicked on-screen. Updates the state machine to `.shown` and returns after a short settle.
+    func revealForActivation(includeAlwaysHidden: Bool = false) async {
         guard !isPaused, !Task.isCancelled else { return }
         hoverRevealController?.relinquishForManualInteraction()
         activationOwnsSection = true
         _ = stateMachine.apply(.show(.hidden))
+        if includeAlwaysHidden { _ = stateMachine.apply(.show(.alwaysHidden)) }
         if placementInProgress {
             placementRequestID += 1
             placementPending = true
@@ -982,6 +1176,7 @@ final class CosmeticHideEngine {
         await placementTask?.value
         guard !Task.isCancelled, !isPaused, activationOwnsSection else { return }
         setHidden(collapsed: false)
+        if includeAlwaysHidden { setAlwaysHiddenCollapsed(false) }
         try? await Task.sleep(for: .milliseconds(120))
     }
 
@@ -990,12 +1185,17 @@ final class CosmeticHideEngine {
     func rehideAfterActivation() {
         guard !isPaused, !Task.isCancelled else { return }
         enact(stateMachine.apply(.hide(.hidden)))
+        enact(stateMachine.apply(.hide(.alwaysHidden)))
         resumePendingPlacement()
     }
 
     private func enact(_ intents: [HideShowStateMachine.Intent]) {
-        for intent in intents where intent.section == .hidden {
-            setHidden(collapsed: intent.visibility == .collapsed)
+        for intent in intents {
+            switch intent.section {
+            case .hidden: setHidden(collapsed: intent.visibility == .collapsed)
+            case .alwaysHidden: setAlwaysHiddenCollapsed(intent.visibility == .collapsed)
+            case .visible: break
+            }
         }
     }
 
@@ -1010,6 +1210,22 @@ final class CosmeticHideEngine {
             return
         }
         guard let divider = hiddenDivider else { return }
+        if collapsed {
+            divider.length = ControlItemLength.expanded(forScreenWidth: menuBarScreenWidth)
+        } else {
+            divider.length = NSStatusItem.variableLength
+        }
+    }
+
+    /// Same mechanism for the always-hidden divider; a no-op until that divider exists, so a bar
+    /// that never uses the tier sees no extra writes.
+    private func setAlwaysHiddenCollapsed(_ collapsed: Bool) {
+        guard alwaysHiddenDividerInstalled else { return }
+        if let hooks = alwaysHiddenDividerHooks {
+            hooks.setCollapsed(collapsed)
+            return
+        }
+        guard let divider = alwaysHiddenDivider else { return }
         if collapsed {
             divider.length = ControlItemLength.expanded(forScreenWidth: menuBarScreenWidth)
         } else {
@@ -1063,7 +1279,7 @@ final class CosmeticHideEngine {
 
     private func applyDividerVisibility() {
         // Start collapsed (hidden section tucked away).
-        setHidden(collapsed: stateMachine.visibility(of: .hidden) == .collapsed)
+        restoreDividersFromState()
     }
 
     private func scheduleAutoRehideIfNeeded() {
@@ -1123,6 +1339,7 @@ final class CosmeticHideEngine {
 
     private func applyScreenParametersChange() {
         DebugLog.log("screenParametersChanged (debounced): anchorScreenWidth=\(menuBarScreenWidth) sectionInUse=\(sectionInUse)")
+        onScreenParametersChanged?()
         // The menu bar geometry changed (display added/removed, resolution change). If the
         // section is in active use (panel showing, or an activation revealed it for an open
         // menu), don't disturb it — collapsing or revealing now would slam an open menu shut or
@@ -1130,7 +1347,7 @@ final class CosmeticHideEngine {
         // when idle.
         guard !isPaused else { return }
         if sectionInUse {
-            placementPending = !placementControls.hiddenInMenuBar.isEmpty || !placementControls.shownInMenuBar.isEmpty
+            placementPending = placementControls.hasAnyPlacementIntent
             return
         }
         enact(stateMachine.apply(.screenParametersChanged))
@@ -1144,13 +1361,16 @@ final class CosmeticHideEngine {
         if stateMachine.visibility(of: .hidden) == .collapsed {
             setHidden(collapsed: true)
         }
+        if stateMachine.visibility(of: .alwaysHidden) == .collapsed {
+            setAlwaysHiddenCollapsed(true)
+        }
         guard preferences.useFloatingBar else { return }
         // The menu-bar display may have changed (e.g. the anchor jumped to a newly-attached
         // screen). The per-item Hidden intent was realized on the OLD display's items; re-apply it
         // so the items on the now-current display land on the right side of the anchor. No-op when
         // nothing is marked hidden. The planner is display-scoped (see `anchorDisplayXRange`), so
         // this only touches the active display's items, never the other display's mirror copies.
-        if !placementControls.hiddenInMenuBar.isEmpty || !placementControls.shownInMenuBar.isEmpty {
+        if placementControls.hasAnyPlacementIntent {
             reconcileHiddenItems()
         } else {
             refreshFloatingBarCache()

@@ -4,11 +4,8 @@ import Foundation
 ///
 /// ## What this controls
 ///
-/// The user picks, per item, whether it is **Hidden** or **Shown** in the real macOS menu bar.
-/// "Hidden" means the app physically moves that item to the left of our anchor (via the private
-/// window-server move — see `SystemWindowServer.move`), where the divider tucks it off-screen and
-/// the floating bar mirrors it; "Shown" moves it back to the right of the anchor. That intent is
-/// `hiddenInMenuBar`, and `HiddenLayoutPlanner` turns it into the concrete moves to apply.
+/// The user picks, per item, Shown, Hidden, or Always Hidden in the real macOS menu bar; the three
+/// placement sets hold that intent and `HiddenLayoutPlanner` turns it into physical moves.
 ///
 /// On top of that menu-bar placement, this store also owns how OUR OWN floating bar presents the
 /// items it mirrors:
@@ -28,15 +25,19 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
 
     /// Owner identities (see `key(for:)`) the user has chosen to HIDE in the real menu bar — the
     /// app moves these left of the anchor so the divider tucks them away. The primary control.
-    /// Exposed read-only; mutate via `setHidden`.
+    /// Exposed read-only; mutate via `setHidden`/`setPlacement`.
     public private(set) var hiddenInMenuBar: Set<String>
 
     /// Owner identities the user has EXPLICITLY chosen to keep Shown (right of the anchor). This is
     /// distinct from "not hidden": an item the user never touched is in NEITHER set, and the
     /// planner must leave it exactly where it is rather than yanking it to the shown side. We only
     /// ever move an item the user explicitly toggled — so hiding one item never rearranges the rest
-    /// of the menu bar. Exposed read-only; mutate via `setHidden`.
+    /// of the menu bar. Exposed read-only; mutate via `setHidden`/`setPlacement`.
     public private(set) var shownInMenuBar: Set<String>
+
+    /// Owner identities the user has chosen to keep off-screen even while the hidden section is
+    /// revealed (left of the always-hidden divider). Mutually exclusive with the two sets above.
+    public private(set) var alwaysHiddenInMenuBar: Set<String>
 
     /// Owner identities the user has chosen to suppress from the bar render.
     /// Exposed read-only; mutate via `setSuppressed`.
@@ -49,11 +50,13 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     public init(
         hiddenInMenuBar: Set<String> = [],
         shownInMenuBar: Set<String> = [],
+        alwaysHiddenInMenuBar: Set<String> = [],
         suppressedFromBar: Set<String> = [],
         barOrder: [String: Int] = [:]
     ) {
         self.hiddenInMenuBar = hiddenInMenuBar
         self.shownInMenuBar = shownInMenuBar
+        self.alwaysHiddenInMenuBar = alwaysHiddenInMenuBar
         self.suppressedFromBar = suppressedFromBar
         self.barOrder = barOrder
     }
@@ -62,6 +65,7 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     enum CodingKeys: String, CodingKey {
         case hiddenInMenuBar
         case shownInMenuBar
+        case alwaysHiddenInMenuBar
         case suppressedFromBar
         case barOrder
     }
@@ -70,11 +74,12 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hiddenInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenInMenuBar) ?? []
         shownInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .shownInMenuBar) ?? []
+        alwaysHiddenInMenuBar = try container.decodeIfPresent(Set<String>.self, forKey: .alwaysHiddenInMenuBar) ?? []
         suppressedFromBar = try container.decodeIfPresent(Set<String>.self, forKey: .suppressedFromBar) ?? []
         barOrder = try container.decodeIfPresent([String: Int].self, forKey: .barOrder) ?? [:]
     }
 
-    /// Encodes the three sets as SORTED arrays so an export is byte-stable across runs.
+    /// Encodes the sets as SORTED arrays so an export is byte-stable across runs.
     ///
     /// `Set`'s iteration order is seeded per-process, so the default Codable synthesis would emit
     /// each set's JSON array in a different order each launch — and `JSONEncoder.sortedKeys` sorts
@@ -86,6 +91,10 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(hiddenInMenuBar.sorted(), forKey: .hiddenInMenuBar)
         try container.encode(shownInMenuBar.sorted(), forKey: .shownInMenuBar)
+        // Omitted while unused so a bar that never uses the tier exports byte-identical JSON.
+        if !alwaysHiddenInMenuBar.isEmpty {
+            try container.encode(alwaysHiddenInMenuBar.sorted(), forKey: .alwaysHiddenInMenuBar)
+        }
         try container.encode(suppressedFromBar.sorted(), forKey: .suppressedFromBar)
         try container.encode(barOrder, forKey: .barOrder)
     }
@@ -99,19 +108,37 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         return bundleID
     }
 
-    // MARK: - Menu-bar hide intent (snapshot-keyed)
+    // MARK: - Menu-bar placement intent (snapshot-keyed)
 
-    /// Whether `snapshot` is marked Hidden in the real menu bar (moved left of the anchor).
-    /// An item with no derivable key can't be controlled, so it's never hidden.
+    /// Whether `snapshot` is marked Hidden or Always Hidden in the real menu bar (left of the
+    /// anchor). An item with no derivable key can't be controlled, so it's never hidden.
     public func isHidden(_ snapshot: MenuBarItemSnapshot) -> Bool {
         guard let key = Self.key(for: snapshot) else { return false }
         return isHidden(forKey: key)
+    }
+
+    /// Whether `snapshot` is marked Always Hidden (left of the always-hidden divider).
+    public func isAlwaysHidden(_ snapshot: MenuBarItemSnapshot) -> Bool {
+        guard let key = Self.key(for: snapshot) else { return false }
+        return isAlwaysHidden(forKey: key)
+    }
+
+    /// The saved placement for `snapshot`, or `nil` when the user never chose one.
+    public func placement(for snapshot: MenuBarItemSnapshot) -> ItemPlacement? {
+        guard let key = Self.key(for: snapshot) else { return nil }
+        return placement(forKey: key)
     }
 
     /// Marks `snapshot` Hidden (or Shown) in the real menu bar. No-op for a keyless item.
     public mutating func setHidden(_ on: Bool, for snapshot: MenuBarItemSnapshot) {
         guard let key = Self.key(for: snapshot) else { return }
         setHidden(on, forKey: key)
+    }
+
+    /// Records an explicit placement for `snapshot`. No-op for a keyless item.
+    public mutating func setPlacement(_ placement: ItemPlacement, for snapshot: MenuBarItemSnapshot) {
+        guard let key = Self.key(for: snapshot) else { return }
+        setPlacement(placement, forKey: key)
     }
 
     // MARK: - Suppression (snapshot-keyed)
@@ -146,8 +173,22 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
 
     // MARK: - Direct-key access (for a settings UI editing by owner identity)
 
+    /// True for both off-screen tiers, so hidden-only callers keep treating the tier as hidden.
     public func isHidden(forKey key: String) -> Bool {
-        hiddenInMenuBar.contains(key)
+        hiddenInMenuBar.contains(key) || alwaysHiddenInMenuBar.contains(key)
+    }
+
+    public func isAlwaysHidden(forKey key: String) -> Bool {
+        alwaysHiddenInMenuBar.contains(key)
+    }
+
+    /// The saved placement for `key`, or `nil` when the user never chose one. A key that a corrupt
+    /// file left in several sets resolves to the most hidden tier, matching `isHidden`.
+    public func placement(forKey key: String) -> ItemPlacement? {
+        if alwaysHiddenInMenuBar.contains(key) { return .alwaysHidden }
+        if hiddenInMenuBar.contains(key) { return .hidden }
+        if shownInMenuBar.contains(key) { return .shown }
+        return nil
     }
 
     /// Records an explicit Hidden/Shown intent for `key`. Setting one side clears the other, so an
@@ -156,25 +197,43 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
     /// to the right WITHOUT also disturbing every never-configured item. Items the user never
     /// toggled stay in neither set and are left exactly where they are.
     public mutating func setHidden(_ on: Bool, forKey key: String) {
-        if on {
-            hiddenInMenuBar.insert(key)
-            shownInMenuBar.remove(key)
-        } else {
-            hiddenInMenuBar.remove(key)
-            shownInMenuBar.insert(key)
+        setPlacement(ItemPlacement(hidden: on), forKey: key)
+    }
+
+    /// Records an explicit placement for `key`, keeping the three intent sets mutually exclusive.
+    public mutating func setPlacement(_ placement: ItemPlacement, forKey key: String) {
+        hiddenInMenuBar.remove(key)
+        shownInMenuBar.remove(key)
+        alwaysHiddenInMenuBar.remove(key)
+        switch placement {
+        case .shown: shownInMenuBar.insert(key)
+        case .hidden: hiddenInMenuBar.insert(key)
+        case .alwaysHidden: alwaysHiddenInMenuBar.insert(key)
         }
     }
 
-    /// Whether the user has recorded ANY explicit placement intent (Hidden or Shown) for `key`.
+    /// Whether the user has recorded ANY explicit placement intent for `key`.
     /// The planner only moves items with an intent; everything else is left where it sits.
     public func hasPlacementIntent(forKey key: String) -> Bool {
-        hiddenInMenuBar.contains(key) || shownInMenuBar.contains(key)
+        placement(forKey: key) != nil
     }
 
     /// Whether the user has recorded any explicit placement intent for `snapshot`.
     public func hasPlacementIntent(_ snapshot: MenuBarItemSnapshot) -> Bool {
         guard let key = Self.key(for: snapshot) else { return false }
         return hasPlacementIntent(forKey: key)
+    }
+
+    /// Whether any owner carries placement intent, so callers can skip an empty reconcile.
+    public var hasAnyPlacementIntent: Bool {
+        !hiddenInMenuBar.isEmpty || !shownInMenuBar.isEmpty || !alwaysHiddenInMenuBar.isEmpty
+    }
+
+    /// Compares only the placement sets; presentation edits must never schedule physical moves.
+    public func hasSamePlacementIntent(as other: ItemControlStore) -> Bool {
+        hiddenInMenuBar == other.hiddenInMenuBar
+            && shownInMenuBar == other.shownInMenuBar
+            && alwaysHiddenInMenuBar == other.alwaysHiddenInMenuBar
     }
 
     public func isSuppressed(forKey key: String) -> Bool {
@@ -203,8 +262,16 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         from positionalOrder: [MenuBarItemSnapshot],
         controls: ItemControlStore
     ) -> [MenuBarItemSnapshot] {
-        let kept = positionalOrder.enumerated().filter { !controls.isSuppressed($0.element) }
-        return kept.sorted { lhs, rhs in
+        orderedBarItems(from: positionalOrder, controls: controls).filter { !controls.isSuppressed($0) }
+    }
+
+    /// The bar's display order without the suppression filter, so a Settings list can reorder a
+    /// row the bar currently omits. Same stable composite-key sort as `visibleBarItems`.
+    public static func orderedBarItems(
+        from positionalOrder: [MenuBarItemSnapshot],
+        controls: ItemControlStore
+    ) -> [MenuBarItemSnapshot] {
+        positionalOrder.enumerated().sorted { lhs, rhs in
             let lo = controls.orderIndex(for: lhs.element)
             let ro = controls.orderIndex(for: rhs.element)
             switch (lo, ro) {
@@ -221,10 +288,50 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
         }.map(\.element)
     }
 
+    /// One step along the bar's display order; `.earlier` is left in a strip and up in a list.
+    public enum BarOrderStep: Sendable {
+        case earlier
+        case later
+    }
+
+    /// Whether `moveInBar` would change anything: the owner must be in `sectionItems` and have a
+    /// neighbor in the requested direction.
+    public func canMoveInBar(
+        _ snapshot: MenuBarItemSnapshot, _ step: BarOrderStep, among sectionItems: [MenuBarItemSnapshot]
+    ) -> Bool {
+        guard let key = Self.key(for: snapshot) else { return false }
+        let owners = Self.ownerOrder(of: sectionItems, controls: self)
+        guard let index = owners.firstIndex(of: key) else { return false }
+        return owners.indices.contains(index + (step == .earlier ? -1 : 1))
+    }
+
+    /// Swaps the owner's slot with its neighbor and pins every owner in `sectionItems` to a dense
+    /// explicit index, so one step is exactly one visible position. Returns false when nothing moved.
+    @discardableResult
+    public mutating func moveInBar(
+        _ snapshot: MenuBarItemSnapshot, _ step: BarOrderStep, among sectionItems: [MenuBarItemSnapshot]
+    ) -> Bool {
+        guard let key = Self.key(for: snapshot) else { return false }
+        var owners = Self.ownerOrder(of: sectionItems, controls: self)
+        guard let index = owners.firstIndex(of: key) else { return false }
+        let target = index + (step == .earlier ? -1 : 1)
+        guard owners.indices.contains(target) else { return false }
+        owners.swapAt(index, target)
+        for (position, owner) in owners.enumerated() { barOrder[owner] = position }
+        return true
+    }
+
+    /// Owner keys in bar display order, first appearance wins (siblings share one slot).
+    private static func ownerOrder(of items: [MenuBarItemSnapshot], controls: ItemControlStore) -> [String] {
+        var seen: Set<String> = []
+        return orderedBarItems(from: items, controls: controls)
+            .compactMap(key(for:))
+            .filter { seen.insert($0).inserted }
+    }
+
     /// Splits items into (hidden, shown) by the user's menu-bar hide intent, preserving each
-    /// group's incoming order. Used by the Settings Items list to show "Hidden (N)" and
-    /// "Shown (N)" sections instead of one interleaved list — easier to scan, and it makes a
-    /// mis-attributed item's grouping obvious at a glance. Pure, so the grouping is unit-tested.
+    /// group's incoming order. Always Hidden counts as hidden here; `partitionByPlacement` keeps
+    /// the tiers apart. Pure, so the grouping is unit-tested.
     public static func partitionByHidden(
         _ items: [MenuBarItemSnapshot],
         controls: ItemControlStore
@@ -235,5 +342,24 @@ public struct ItemControlStore: Equatable, Sendable, Codable {
             if controls.isHidden(item) { hidden.append(item) } else { shown.append(item) }
         }
         return (hidden, shown)
+    }
+
+    /// Splits items into the three placement tiers by saved intent (unconfigured counts as shown),
+    /// preserving each group's incoming order. Backs the Settings Items list's three sections.
+    public static func partitionByPlacement(
+        _ items: [MenuBarItemSnapshot],
+        controls: ItemControlStore
+    ) -> (shown: [MenuBarItemSnapshot], hidden: [MenuBarItemSnapshot], alwaysHidden: [MenuBarItemSnapshot]) {
+        var shown: [MenuBarItemSnapshot] = []
+        var hidden: [MenuBarItemSnapshot] = []
+        var alwaysHidden: [MenuBarItemSnapshot] = []
+        for item in items {
+            switch controls.placement(for: item) ?? .shown {
+            case .shown: shown.append(item)
+            case .hidden: hidden.append(item)
+            case .alwaysHidden: alwaysHidden.append(item)
+            }
+        }
+        return (shown, hidden, alwaysHidden)
     }
 }

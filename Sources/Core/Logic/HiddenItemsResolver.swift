@@ -25,10 +25,14 @@ public enum HiddenItemsResolver {
     /// apply the display-name denylist here: this runs on PRE-attribution snapshots, where on
     /// Tahoe the bogus blanket "Control Center" label would drop genuine third-party items.
     ///
+    /// `rightOfAlwaysHiddenX` (the always-hidden divider's trailing edge) keeps the tiers apart;
+    /// passing that divider's leading edge as the boundary yields the always-hidden section itself.
+    ///
     /// Results are ordered left-to-right by position, the order the user sees in the menu bar.
     public static func hiddenItems(
         from items: [MenuBarItemSnapshot],
         leftOfAnchorX anchorMinX: CGFloat,
+        rightOfAlwaysHiddenX alwaysHiddenMaxX: CGFloat? = nil,
         excludingControlItems controlItemWindowIDs: Set<CGWindowID> = [],
         displayMenuBarTop: CGFloat = 0
     ) -> [MenuBarItemSnapshot] {
@@ -45,7 +49,17 @@ public enum HiddenItemsResolver {
             // below; the move planner still applies the FULL denylist on attributed snapshots.
             .filter { !ImmovableItems.isImmovableOnRawSnapshot($0) }
             .filter { $0.frame.maxX <= anchorMinX }
+            .filter { item in alwaysHiddenMaxX.map { item.frame.minX >= $0 } ?? true }
             .sorted { $0.frame.minX < $1.frame.minX }
+    }
+
+    /// Observed tier by trailing edge, the same boundary rule `hiddenItems` uses. A display
+    /// classification, not the planner's stricter full-edge postcondition.
+    public static func observedPlacement(
+        of item: MenuBarItemSnapshot, hiddenBoundaryX: CGFloat, alwaysHiddenBoundaryX: CGFloat?
+    ) -> ItemPlacement {
+        if let alwaysHiddenBoundaryX, item.frame.maxX <= alwaysHiddenBoundaryX { return .alwaysHidden }
+        return item.frame.maxX <= hiddenBoundaryX ? .hidden : .shown
     }
 
     /// Rejects windows that sit at the status-window layer but aren't real menu bar glyphs:

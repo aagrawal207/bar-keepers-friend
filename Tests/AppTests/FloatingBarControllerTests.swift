@@ -1,5 +1,6 @@
 import AppKit
 import BarKeepersFriendCore
+import SwiftUI
 import Testing
 
 @Suite(.timeLimit(.minutes(1)))
@@ -1180,6 +1181,263 @@ struct FloatingBarControllerTests {
         #expect(server.base.clickedWindowIDs.isEmpty)
         #expect(axCalls == 0)
         #expect(rehideCalls == 1)
+    }
+
+    // MARK: - Always Hidden tier
+
+    @Test(arguments: [false, true])
+    func captureSplitsTuckedItemsAcrossTheAlwaysHiddenDivider(resolveTierByName: Bool) async throws {
+        let secret = snapshot(1, x: 100, owner: "test.secret")
+        let hidden = snapshot(2, x: 700, owner: "test.hidden")
+        let shown = snapshot(3, x: 1100, owner: "test.shown")
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let tier = snapshot(92, x: 600, width: 8, owner: "Control Center", title: ControlItem.Identifier.alwaysHiddenDivider.rawValue)
+        let server = MutableWindowServer(items: [secret, hidden, shown, divider, tier])
+        let image = try glyph(side: 8)
+        var capturedIDs: [[CGWindowID]] = []
+        let bar = FloatingBarController(
+            windowServer: server,
+            captureIcons: { items in
+                capturedIDs.append(items.map(\.windowID))
+                return Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) })
+            },
+            preferences: Preferences(itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["test.secret"])),
+            attribute: { $0 }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = resolveTierByName ? nil : tier.windowID
+        await bar.captureAndCache(anchorMinX: 1000)
+
+        #expect(capturedIDs == [[2, 1]])
+        #expect(bar.cachedHiddenItems().map(\.id) == [2])
+        #expect(bar.cachedAlwaysHiddenItems().map(\.id) == [1])
+        #expect(bar.hasCapturedOnce)
+        #expect(!bar.hasIncompleteGlyphs)
+        #expect(!bar.cachedMirrorIsStale(anchorMinX: 1000))
+        let items = try await bar.allManageableItems()
+        #expect(items.map(\.id) == [1, 2, 3])
+        #expect(items.map(\.observedPlacement) == [.alwaysHidden, .hidden, .shown])
+        #expect(items.map(\.observedHidden) == [true, true, false])
+
+        // Moving the tier divider left turns the secret item into a plain hidden one.
+        server.base = FakeWindowServer(items: [secret, hidden, shown, divider, snapshot(92, x: 50, width: 8, owner: "Control Center", title: tier.title)])
+        #expect(bar.cachedMirrorIsStale(anchorMinX: 1000))
+        let reclassified = try await bar.allManageableItems()
+        #expect(reclassified.map(\.observedPlacement) == [.hidden, .hidden, .shown])
+        await bar.captureAndCache(anchorMinX: 1000)
+        #expect(bar.cachedHiddenItems().map(\.id) == [1, 2])
+        #expect(bar.cachedAlwaysHiddenItems().isEmpty)
+        #expect(!bar.cachedMirrorIsStale(anchorMinX: 1000))
+    }
+
+    @Test func withoutATierDividerEverythingLeftOfTheHiddenDividerStaysPlainHidden() async throws {
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let server = FakeWindowServer(items: [snapshot(1, x: 100), snapshot(2, x: 700), divider])
+        let image = try glyph(side: 8)
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            preferences: .default, attribute: { $0 }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = 999
+        await bar.captureAndCache(anchorMinX: 1000)
+
+        #expect(bar.cachedHiddenItems().map(\.id) == [1, 2])
+        #expect(bar.cachedAlwaysHiddenItems().isEmpty)
+        let items = try await bar.allManageableItems()
+        #expect(items.map(\.observedPlacement) == [.hidden, .hidden])
+    }
+
+    @Test(arguments: FloatingBarStyle.allCases)
+    func showAppendsTheAlwaysHiddenTierOnlyWhenAskedAndRelayoutKeepsTheChoice(style: FloatingBarStyle) async throws {
+        let secret = snapshot(1, x: 100, owner: "test.secret")
+        let hidden = snapshot(2, x: 700, owner: "test.hidden")
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let tier = snapshot(92, x: 600, width: 8, owner: "Control Center", title: ControlItem.Identifier.alwaysHiddenDivider.rawValue)
+        let server = FakeWindowServer(items: [secret, hidden, divider, tier])
+        let image = try glyph(side: 8)
+        let panel = SilentPanel(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        var preferences = Preferences(
+            itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["test.secret"]), dismissBarOnMouseExit: false
+        )
+        preferences.floatingBarStyle = style
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            preferences: preferences, attribute: { $0 }, panelFactory: { panel }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = tier.windowID
+        await bar.captureAndCache(anchorMinX: 1000)
+        #expect(!bar.presentsAlwaysHidden)
+
+        await bar.show(anchorMinX: 1000, anchorRightX: 1032)
+        #expect(bar.isVisible)
+        #expect(!bar.presentsAlwaysHidden)
+        let plainFrame = try #require(panel.lastRequestedFrame)
+
+        await bar.show(anchorMinX: 1000, anchorRightX: 1032, includeAlwaysHidden: true)
+        #expect(bar.presentsAlwaysHidden)
+        let tieredFrame = try #require(panel.lastRequestedFrame)
+        #expect(tieredFrame.height > plainFrame.height)
+        #expect(tieredFrame.width >= plainFrame.width)
+
+        // A background capture re-lays the open bar out without dropping the tier.
+        await bar.captureAndCache(anchorMinX: 1000)
+        #expect(bar.isVisible)
+        #expect(bar.presentsAlwaysHidden)
+        #expect(panel.lastRequestedFrame?.size == tieredFrame.size)
+
+        bar.hide()
+        #expect(!bar.presentsAlwaysHidden)
+        await bar.show(anchorMinX: 1000, anchorRightX: 1032, presentation: .hover)
+        #expect(bar.isVisible)
+        #expect(!bar.presentsAlwaysHidden)
+        #expect(panel.lastRequestedFrame?.size == plainFrame.size)
+        bar.hide()
+        #expect(panel.presentations == 4)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func activatingAnItemPastTheTierDividerRevealsBothTiers(hasAllTiersReveal: Bool, secretHasIntent: Bool) async throws {
+        let secret = snapshot(1, x: 100, owner: "test.secret")
+        let hidden = snapshot(2, x: 700, owner: "test.hidden")
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let tier = snapshot(92, x: 600, width: 8, owner: "Control Center", title: ControlItem.Identifier.alwaysHiddenDivider.rawValue)
+        let server = FakeWindowServer(items: [secret, hidden, divider, tier])
+        let image = try glyph(side: 8)
+        var hiddenReveals = 0
+        var allReveals = 0
+        var autoRehideCalls = 0
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            preferences: Preferences(itemControls: ItemControlStore(alwaysHiddenInMenuBar: secretHasIntent ? ["test.secret"] : [])),
+            attribute: { $0 }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = tier.windowID
+        bar.revealHiddenItems = { hiddenReveals += 1 }
+        if hasAllTiersReveal { bar.revealAllHiddenItems = { allReveals += 1 } }
+        bar.scheduleAutoRehideAfterActivation = { autoRehideCalls += 1 }
+        await bar.captureAndCache(anchorMinX: 1000)
+        #expect(bar.cachedAlwaysHiddenItems().map(\.id) == (secretHasIntent ? [1] : []))
+        #expect(bar.cachedHiddenItems().map(\.id) == (secretHasIntent ? [2] : [1, 2]))
+
+        bar.activate(windowID: secret.windowID)
+        await (try #require(bar.currentActivationTask)).value
+        #expect(allReveals == (hasAllTiersReveal ? 1 : 0))
+        #expect(hiddenReveals == (hasAllTiersReveal ? 0 : 1))
+        #expect(server.clickedWindowIDs == [secret.windowID])
+
+        bar.activate(windowID: hidden.windowID)
+        await (try #require(bar.currentActivationTask)).value
+        #expect(allReveals == (hasAllTiersReveal ? 1 : 0))
+        #expect(hiddenReveals == (hasAllTiersReveal ? 1 : 2))
+        #expect(server.clickedWindowIDs == [secret.windowID, hidden.windowID])
+        #expect(autoRehideCalls == 2)
+    }
+
+    @Test(arguments: FloatingBarStyle.allCases)
+    func anItemWithoutIntentPastTheTierDividerIsMirroredAsPlainHidden(style: FloatingBarStyle) async throws {
+        let secret = snapshot(1, x: 100, owner: "test.secret")
+        let stray = snapshot(2, x: 200, owner: "test.stray")
+        let hidden = snapshot(3, x: 700, owner: "test.hidden")
+        let shown = snapshot(4, x: 1100, owner: "test.shown")
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let tier = snapshot(92, x: 600, width: 8, owner: "Control Center", title: ControlItem.Identifier.alwaysHiddenDivider.rawValue)
+        let server = FakeWindowServer(items: [secret, stray, hidden, shown, divider, tier])
+        let image = try glyph(side: 8)
+        let panel = SilentPanel(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        var preferences = Preferences(
+            itemControls: ItemControlStore(hiddenInMenuBar: ["test.hidden"], alwaysHiddenInMenuBar: ["test.secret"]),
+            dismissBarOnMouseExit: false
+        )
+        preferences.floatingBarStyle = style
+        var capturedIDs: [[CGWindowID]] = []
+        let bar = FloatingBarController(
+            windowServer: server,
+            captureIcons: { items in
+                capturedIDs.append(items.map(\.windowID))
+                return Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) })
+            },
+            preferences: preferences, attribute: { $0 }, panelFactory: { panel }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = tier.windowID
+        await bar.captureAndCache(anchorMinX: 1000)
+
+        // Both tier windows are captured once; only the intent-backed one stays in the tier group.
+        #expect(capturedIDs == [[3, 1, 2]])
+        #expect(bar.cachedHiddenItems().map(\.id) == [2, 3])
+        #expect(bar.cachedAlwaysHiddenItems().map(\.id) == [1])
+        #expect(!bar.hasIncompleteGlyphs)
+        #expect(!bar.cachedMirrorIsStale(anchorMinX: 1000))
+
+        await bar.show(anchorMinX: 1000, anchorRightX: 1032)
+        var view = try #require(panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == [2, 3])
+        #expect(view.alwaysHiddenItems.isEmpty)
+        await bar.show(anchorMinX: 1000, anchorRightX: 1032, includeAlwaysHidden: true)
+        view = try #require(panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+        #expect(view.items.map(\.id) == [2, 3])
+        #expect(view.alwaysHiddenItems.map(\.id) == [1])
+        bar.hide()
+
+        let items = try await bar.allManageableItems()
+        #expect(items.map(\.id) == [1, 2, 3, 4])
+        #expect(items.map(\.observedPlacement) == [.alwaysHidden, .hidden, .hidden, .shown])
+        let model = SettingsModel(
+            preferences: preferences, loginItem: LoginItemService(), itemsProvider: { items }, onChange: { _ in }
+        )
+        await model.reloadItems()
+        #expect(model.partition(model.loadedItems).hidden.map(\.id) == [2, 3])
+        #expect(model.partition(model.loadedItems).alwaysHidden.map(\.id) == [1])
+        #expect(model.placement(of: try #require(model.loadedItems.first { $0.id == 2 })) == .hidden)
+
+        var hiddenReveals = 0
+        var allReveals = 0
+        bar.revealHiddenItems = { hiddenReveals += 1 }
+        bar.revealAllHiddenItems = { allReveals += 1 }
+        bar.activate(windowID: stray.windowID)
+        await (try #require(bar.currentActivationTask)).value
+        #expect(allReveals == 1)
+        #expect(hiddenReveals == 0)
+        bar.activate(windowID: hidden.windowID)
+        await (try #require(bar.currentActivationTask)).value
+        #expect(allReveals == 1)
+        #expect(hiddenReveals == 1)
+        #expect(server.clickedWindowIDs == [stray.windowID, hidden.windowID])
+
+        // Granting the stray owner Always Hidden intent moves it into the tier group on the next capture.
+        preferences.itemControls.setPlacement(.alwaysHidden, forKey: "test.stray")
+        bar.preferences = preferences
+        #expect(!bar.cachedMirrorIsStale(anchorMinX: 1000))
+        await bar.captureAndCache(anchorMinX: 1000)
+        #expect(bar.cachedHiddenItems().map(\.id) == [3])
+        #expect(bar.cachedAlwaysHiddenItems().map(\.id) == [1, 2])
+        #expect(try await bar.allManageableItems().map(\.observedPlacement) == [.alwaysHidden, .alwaysHidden, .hidden, .shown])
+    }
+
+    @Test func groupedOwnersPastTheTierDividerReadAsHiddenLikePlacement() async throws {
+        let grouped = snapshot(1, x: 100, owner: "test.grouped")
+        let divider = snapshot(90, x: 976, width: 8, owner: "Control Center", title: ControlItem.Identifier.hiddenDivider.rawValue)
+        let tier = snapshot(92, x: 600, width: 8, owner: "Control Center", title: ControlItem.Identifier.alwaysHiddenDivider.rawValue)
+        let server = FakeWindowServer(items: [grouped, divider, tier])
+        let image = try glyph(side: 8)
+        let preferences = Preferences(
+            itemControls: ItemControlStore(alwaysHiddenInMenuBar: ["test.grouped"]),
+            itemGroups: [ItemGroup(name: "Tools", ownerKeys: ["test.grouped"])]
+        )
+        let bar = FloatingBarController(
+            windowServer: server, captureIcons: { items in Dictionary(uniqueKeysWithValues: items.map { ($0.windowID, image) }) },
+            preferences: preferences, attribute: { $0 }
+        )
+        bar.hiddenDividerWindowID = divider.windowID
+        bar.alwaysHiddenDividerWindowID = tier.windowID
+        await bar.captureAndCache(anchorMinX: 1000)
+
+        #expect(bar.cachedHiddenItems().map(\.id) == [1])
+        #expect(bar.cachedAlwaysHiddenItems().isEmpty)
+        #expect(try await bar.allManageableItems().map(\.observedPlacement) == [.hidden])
     }
 
     private func snapshot(

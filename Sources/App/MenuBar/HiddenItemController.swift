@@ -11,7 +11,7 @@ final class HiddenItemController {
     /// Identity attribution is suitable only for fixtures that already carry trusted owners.
     private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
 
-    /// Our own control-item window ids (anchor + divider), never moved. Refreshed by the engine.
+    /// Our own control-item window ids (anchor + dividers), never moved. Refreshed by the engine.
     var controlItemWindowIDs: Set<CGWindowID> = []
 
     init(
@@ -33,6 +33,36 @@ final class HiddenItemController {
         var allSucceeded: Bool { !cancelled && !observationFailed && failed.isEmpty }
     }
 
+    /// One read of the controls plus the candidates a reconcile or preview may plan over.
+    struct Observation {
+        var items: [MenuBarItemSnapshot]
+        var anchor: CGRect
+        var divider: CGRect
+        var alwaysHidden: CGRect?
+    }
+
+    /// What a reconcile would do now: attributed candidates, the geometry they were matched
+    /// against, and the planned moves. Produced without revealing or moving anything.
+    struct Plan {
+        var observation: Observation
+        var snapshots: [MenuBarItemSnapshot]
+        var moves: [HiddenLayoutPlanner.Move]
+    }
+
+    /// Identifies the control windows one pass works against; a nil tier id means two-tier planning.
+    struct ControlWindows: Equatable, Sendable {
+        var anchor: CGWindowID
+        var divider: CGWindowID
+        var alwaysHidden: CGWindowID?
+
+        /// Ids that must never be treated as candidates, including the caller's extra exclusions.
+        func excludedIDs(with extra: Set<CGWindowID>) -> Set<CGWindowID> {
+            var ids = extra.union([anchor, divider])
+            if let alwaysHidden { ids.insert(alwaysHidden) }
+            return ids
+        }
+    }
+
     /// Whether the app can physically move items right now (Accessibility granted). When false,
     /// the per-item Hidden control can't take effect, so the UI should route the user to grant it
     /// rather than silently doing nothing.
@@ -42,23 +72,153 @@ final class HiddenItemController {
         displayXRange: ClosedRange<CGFloat>? = nil, displayMenuBarTop: CGFloat = 0
     ) -> (anchor: CGWindowID, divider: CGWindowID)? {
         guard let snapshots = try? windowServer.menuBarItems() else { return nil }
-        let controls = snapshots.filter {
-            $0.windowID != 0 && $0.frame.height >= 18 && $0.frame.height <= 40
-                && abs($0.frame.minY - displayMenuBarTop) <= 40
-                && (displayXRange?.contains($0.frame.midX) ?? true)
-        }
+        let controls = nativeControls(in: snapshots, displayXRange: displayXRange, displayMenuBarTop: displayMenuBarTop)
         let anchors = controls.filter { $0.title == ControlItem.Identifier.anchor.rawValue }
         let dividers = controls.filter { $0.title == ControlItem.Identifier.hiddenDivider.rawValue }
         guard anchors.count == 1, dividers.count == 1 else { return nil }
         return (anchors[0].windowID, dividers[0].windowID)
     }
 
-    /// Hidden items belong entirely left of the divider; Shown items entirely right of the anchor.
+    /// The always-hidden divider by its unique native name; nil while the tier has no divider.
+    func alwaysHiddenControlWindowID(
+        displayXRange: ClosedRange<CGFloat>? = nil, displayMenuBarTop: CGFloat = 0
+    ) -> CGWindowID? {
+        guard let snapshots = try? windowServer.menuBarItems() else { return nil }
+        let controls = nativeControls(in: snapshots, displayXRange: displayXRange, displayMenuBarTop: displayMenuBarTop)
+        let dividers = controls.filter { $0.title == ControlItem.Identifier.alwaysHiddenDivider.rawValue }
+        guard dividers.count == 1 else { return nil }
+        return dividers[0].windowID
+    }
+
+    private func nativeControls(
+        in snapshots: [MenuBarItemSnapshot], displayXRange: ClosedRange<CGFloat>?, displayMenuBarTop: CGFloat
+    ) -> [MenuBarItemSnapshot] {
+        snapshots.filter {
+            $0.windowID != 0 && $0.frame.height >= 18 && $0.frame.height <= 40
+                && abs($0.frame.minY - displayMenuBarTop) <= 40
+                && (displayXRange?.contains($0.frame.midX) ?? true)
+        }
+    }
+
+    // MARK: - Shared observation and planning
+
+    /// Reads the controls and candidates once. `tolerateExpandedDividers` accepts a divider whose
+    /// midpoint is off-display because it is expanded; plan-only reads never reveal first.
+    func observe(
+        controls windows: ControlWindows,
+        excludedIDs: Set<CGWindowID>,
+        displayXRange: ClosedRange<CGFloat>?,
+        displayMenuBarTop: CGFloat,
+        tolerateExpandedDividers: Bool
+    ) throws -> Observation {
+        func isValidControlFrame(_ frame: CGRect, divider: Bool) -> Bool {
+            guard frame.minX.isFinite, frame.maxX.isFinite, frame.minY.isFinite, frame.maxY.isFinite,
+                  frame.width >= 0, frame.height > 0 else { return false }
+            guard let range = displayXRange else { return true }
+            guard divider, tolerateExpandedDividers else { return range.contains(frame.midX) }
+            // An expanded divider keeps its trailing edge beside the anchor or spans the display.
+            return range.contains(frame.maxX) || frame.width >= range.upperBound - range.lowerBound
+        }
+        let raw = try windowServer.menuBarItems()
+        // A revealed divider may have zero width, but must still precede the anchor on its row.
+        guard windows.anchor != windows.divider,
+              let anchor = raw.first(where: { $0.windowID == windows.anchor }),
+              let divider = raw.first(where: { $0.windowID == windows.divider }),
+              HiddenItemsResolver.isPlausibleMenuBarItem(anchor, displayMenuBarTop: displayMenuBarTop),
+              isValidControlFrame(anchor.frame, divider: false), isValidControlFrame(divider.frame, divider: true),
+              divider.frame.maxX <= anchor.frame.minX,
+              divider.frame.minY < anchor.frame.maxY,
+              anchor.frame.minY < divider.frame.maxY else {
+            throw WindowServerError.invalidServerResponse("missing or invalid placement controls")
+        }
+        var alwaysHidden: CGRect?
+        if let tierID = windows.alwaysHidden {
+            // The tier's divider must sit left of the hidden divider on the same row, or the
+            // hidden postcondition (between the dividers) can never be met.
+            guard tierID != windows.anchor, tierID != windows.divider,
+                  let tier = raw.first(where: { $0.windowID == tierID }),
+                  isValidControlFrame(tier.frame, divider: true),
+                  tier.frame.maxX <= divider.frame.minX,
+                  tier.frame.minY < anchor.frame.maxY,
+                  anchor.frame.minY < tier.frame.maxY else {
+                throw WindowServerError.invalidServerResponse("missing or invalid always-hidden divider")
+            }
+            alwaysHidden = tier.frame
+        }
+        let candidates = raw.filter {
+            !excludedIDs.contains($0.windowID)
+                && !HiddenItemsResolver.isOwnControlItem($0)
+                && HiddenItemsResolver.isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop)
+                && (displayXRange?.contains($0.frame.midX) ?? true)
+                && !ImmovableItems.isImmovableOnRawSnapshot($0)
+        }
+        return Observation(items: candidates, anchor: anchor.frame, divider: divider.frame, alwaysHidden: alwaysHidden)
+    }
+
+    /// Observes, attributes (discarding one attribution whose geometry shifted underneath it), and
+    /// plans. Throws `CancellationError` or `WindowServerError`; never reveals or moves.
+    func observeAndPlan(
+        controls windows: ControlWindows,
+        intent controls: ItemControlStore,
+        displayXRange: ClosedRange<CGFloat>?,
+        displayMenuBarTop: CGFloat,
+        tolerateExpandedDividers: Bool
+    ) async throws -> Plan {
+        let excludedIDs = windows.excludedIDs(with: controlItemWindowIDs)
+        func read() throws -> Observation {
+            try observe(
+                controls: windows, excludedIDs: excludedIDs, displayXRange: displayXRange,
+                displayMenuBarTop: displayMenuBarTop, tolerateExpandedDividers: tolerateExpandedDividers
+            )
+        }
+        var observation = try read()
+        var snapshots: [MenuBarItemSnapshot] = []
+        for attempt in 0..<2 {
+            try Task.checkCancellation()
+            let candidates = HiddenItemsResolver.deduplicateByMidXProximity(observation.items)
+            snapshots = await attribute(candidates)
+            try Task.checkCancellation()
+            let fresh = try read()
+            // AX ownership is tied to the enumerated positions, not to a later layout.
+            let oldFrames = Dictionary(observation.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
+            let freshFrames = Dictionary(fresh.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
+            let freshRepresentatives = HiddenItemsResolver.deduplicateByMidXProximity(fresh.items)
+            let unchanged = observation.anchor == fresh.anchor && observation.divider == fresh.divider
+                && observation.alwaysHidden == fresh.alwaysHidden
+                && oldFrames == freshFrames
+                && Set(candidates.map(\.windowID)) == Set(freshRepresentatives.map(\.windowID))
+            observation = fresh
+            if unchanged { break }
+            guard attempt == 0 else {
+                throw WindowServerError.invalidServerResponse("placement geometry changed during both attribution attempts")
+            }
+            DebugLog.log("HiddenItemController: discarding attribution after placement geometry changed")
+        }
+        let moves = HiddenLayoutPlanner.moves(
+            for: snapshots,
+            anchorMinX: observation.anchor.minX,
+            anchorMaxX: observation.anchor.maxX,
+            dividerMinX: observation.divider.minX,
+            controls: controls,
+            excludingWindowIDs: excludedIDs,
+            immovablePIDs: ImmovableProcessIDs.current(),
+            displayXRange: displayXRange,
+            displayMenuBarTop: displayMenuBarTop,
+            alwaysHiddenDividerFrame: observation.alwaysHidden
+        )
+        return Plan(observation: observation, snapshots: snapshots, moves: moves)
+    }
+
+    // MARK: - Reconcile
+
+    /// Hidden items belong entirely left of the divider (and right of the always-hidden divider);
+    /// Always Hidden items entirely left of that divider; Shown items entirely right of the anchor.
     /// Control window IDs, rather than cached edges, keep destinations valid as neighbors move.
     @discardableResult
     func reconcile(
         anchorWindowID: CGWindowID,
         dividerWindowID: CGWindowID,
+        alwaysHiddenDividerWindowID: CGWindowID? = nil,
         controls: ItemControlStore,
         displayXRange: ClosedRange<CGFloat>? = nil,
         displayMenuBarTop: CGFloat = 0
@@ -72,77 +232,27 @@ final class HiddenItemController {
             return result
         }
 
-        let excludedIDs = controlItemWindowIDs.union([anchorWindowID, dividerWindowID])
-        func observe() throws -> (items: [MenuBarItemSnapshot], anchor: CGRect, divider: CGRect) {
-            let raw = try windowServer.menuBarItems()
-            // A revealed divider may have zero width, but must still precede the anchor on its row.
-            guard anchorWindowID != dividerWindowID,
-                  let anchor = raw.first(where: { $0.windowID == anchorWindowID }),
-                  let divider = raw.first(where: { $0.windowID == dividerWindowID }),
-                  HiddenItemsResolver.isPlausibleMenuBarItem(anchor, displayMenuBarTop: displayMenuBarTop),
-                  [anchor.frame, divider.frame].allSatisfy({ frame in
-                      frame.minX.isFinite && frame.maxX.isFinite
-                          && frame.minY.isFinite && frame.maxY.isFinite
-                          && frame.width >= 0 && frame.height > 0
-                          && (displayXRange?.contains(frame.midX) ?? true)
-                  }),
-                  divider.frame.maxX <= anchor.frame.minX,
-                  divider.frame.minY < anchor.frame.maxY,
-                  anchor.frame.minY < divider.frame.maxY else {
-                throw WindowServerError.invalidServerResponse("missing or invalid placement controls")
-            }
-            let candidates = raw.filter {
-                !excludedIDs.contains($0.windowID)
-                    && !HiddenItemsResolver.isOwnControlItem($0)
-                    && HiddenItemsResolver.isPlausibleMenuBarItem($0, displayMenuBarTop: displayMenuBarTop)
-                    && (displayXRange?.contains($0.frame.midX) ?? true)
-                    && !ImmovableItems.isImmovableOnRawSnapshot($0)
-            }
-            return (candidates, anchor.frame, divider.frame)
+        let windows = ControlWindows(anchor: anchorWindowID, divider: dividerWindowID, alwaysHidden: alwaysHiddenDividerWindowID)
+        let excludedIDs = windows.excludedIDs(with: controlItemWindowIDs)
+        // Moves run after a reveal, so a divider still expanded is a real geometry problem here.
+        func observe() throws -> Observation {
+            try self.observe(
+                controls: windows, excludedIDs: excludedIDs, displayXRange: displayXRange,
+                displayMenuBarTop: displayMenuBarTop, tolerateExpandedDividers: false
+            )
         }
 
         do {
-            var observation = try observe()
-            var snapshots: [MenuBarItemSnapshot] = []
-            for attempt in 0..<2 {
-                try Task.checkCancellation()
-                let candidates = HiddenItemsResolver.deduplicateByMidXProximity(observation.items)
-                snapshots = await attribute(candidates)
-                guard !Task.isCancelled else {
-                    result.cancelled = true
-                    return result
-                }
-                let fresh = try observe()
-                // AX ownership is tied to the enumerated positions, not to a later layout.
-                let oldFrames = Dictionary(observation.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
-                let freshFrames = Dictionary(fresh.items.map { ($0.windowID, $0.frame) }, uniquingKeysWith: { first, _ in first })
-                let freshRepresentatives = HiddenItemsResolver.deduplicateByMidXProximity(fresh.items)
-                let unchanged = observation.anchor == fresh.anchor && observation.divider == fresh.divider
-                    && oldFrames == freshFrames
-                    && Set(candidates.map(\.windowID)) == Set(freshRepresentatives.map(\.windowID))
-                observation = fresh
-                if unchanged { break }
-                guard attempt == 0 else {
-                    throw WindowServerError.invalidServerResponse("placement geometry changed during both attribution attempts")
-                }
-                DebugLog.log("HiddenItemController: discarding attribution after placement geometry changed")
-            }
-            let plan = HiddenLayoutPlanner.moves(
-                for: snapshots,
-                anchorMinX: observation.anchor.minX,
-                anchorMaxX: observation.anchor.maxX,
-                dividerMinX: observation.divider.minX,
-                controls: controls,
-                excludingWindowIDs: excludedIDs,
-                immovablePIDs: ImmovableProcessIDs.current(),
-                displayXRange: displayXRange,
-                displayMenuBarTop: displayMenuBarTop
+            let plan = try await observeAndPlan(
+                controls: windows, intent: controls, displayXRange: displayXRange,
+                displayMenuBarTop: displayMenuBarTop, tolerateExpandedDividers: false
             )
-            result.planned = plan.count
-            DebugLog.log("reconcile: \(snapshots.count) items, plan=\(plan.count) moves; anchorMinX=\(observation.anchor.minX) dividerMinX=\(observation.divider.minX) hidden=\(controls.hiddenInMenuBar)")
+            let observation = plan.observation
+            result.planned = plan.moves.count
+            DebugLog.log("reconcile: \(plan.snapshots.count) items, plan=\(plan.moves.count) moves; anchorMinX=\(observation.anchor.minX) dividerMinX=\(observation.divider.minX) alwaysHiddenMinX=\(observation.alwaysHidden.map { "\($0.minX)" } ?? "none") hidden=\(controls.hiddenInMenuBar) alwaysHidden=\(controls.alwaysHiddenInMenuBar)")
 
             // Each candidate gets one sequential attempt; the native implementation owns retries.
-            for move in plan {
+            for move in plan.moves {
                 guard !Task.isCancelled else {
                     result.cancelled = true
                     break
@@ -154,21 +264,29 @@ final class HiddenItemController {
                     continue
                 }
                 let item = raw.attributed(bundleID: move.item.ownerBundleID, pid: move.item.ownerPID)
-                let hidden = controls.isHidden(item)
+                let placement = HiddenLayoutPlanner.effectivePlacement(
+                    controls.placement(for: item) ?? move.placement, hasAlwaysHiddenDivider: live.alwaysHidden != nil
+                )
                 if HiddenLayoutPlanner.isPlacementSatisfied(
-                    item: item, hidden: hidden, anchorMaxX: live.anchor.maxX, dividerMinX: live.divider.minX
+                    item: item, placement: placement, anchorMaxX: live.anchor.maxX, dividerMinX: live.divider.minX,
+                    alwaysHiddenDividerFrame: live.alwaysHidden
                 ) {
                     DebugLog.log("HiddenItemController: placement already satisfied for \(item.windowID)")
                     continue
                 }
-                let targetX = hidden
-                    ? live.divider.minX - HiddenLayoutPlanner.hiddenMargin
-                    : live.anchor.maxX + HiddenLayoutPlanner.shownMargin
+                let targetX = HiddenLayoutPlanner.targetX(
+                    for: placement, anchorMaxX: live.anchor.maxX, dividerMinX: live.divider.minX,
+                    alwaysHiddenDividerFrame: live.alwaysHidden
+                )
+                let reference: CGWindowID
+                switch placement {
+                case .shown: reference = anchorWindowID
+                case .hidden: reference = dividerWindowID
+                case .alwaysHidden: reference = alwaysHiddenDividerWindowID ?? dividerWindowID
+                }
                 do {
                     try Task.checkCancellation()
-                    try await windowServer.move(
-                        item: item, toX: targetX, relativeTo: hidden ? dividerWindowID : anchorWindowID
-                    )
+                    try await windowServer.move(item: item, toX: targetX, relativeTo: reference)
                 } catch is CancellationError {
                     result.cancelled = true
                     break
@@ -180,11 +298,12 @@ final class HiddenItemController {
                 let verified = try observe()
                 if let placed = verified.items.first(where: { $0.windowID == item.windowID }),
                    HiddenLayoutPlanner.isPlacementSatisfied(
-                       item: placed, hidden: hidden,
-                       anchorMaxX: verified.anchor.maxX, dividerMinX: verified.divider.minX
+                       item: placed, placement: placement,
+                       anchorMaxX: verified.anchor.maxX, dividerMinX: verified.divider.minX,
+                       alwaysHiddenDividerFrame: verified.alwaysHidden
                    ) {
                     result.succeeded += 1
-                    DebugLog.log("HiddenItemController: placement verified for \(item.windowID) (\(item.ownerBundleID ?? "?")) pid=\(item.ownerPID) -> x=\(targetX)")
+                    DebugLog.log("HiddenItemController: placement verified for \(item.windowID) (\(item.ownerBundleID ?? "?")) pid=\(item.ownerPID) -> \(placement.rawValue) x=\(targetX)")
                 } else {
                     result.failed.append(item)
                     DebugLog.log("HiddenItemController: move returned without satisfying placement for \(item.windowID)")

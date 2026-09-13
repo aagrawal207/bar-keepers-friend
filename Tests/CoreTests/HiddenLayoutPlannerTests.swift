@@ -310,4 +310,149 @@ import Testing
         let result = moves([realItem, notification], controls)
         #expect(result.map { $0.item.windowID } == [1]) // only the real glyph is planned
     }
+
+    // MARK: - Always Hidden tier
+
+    /// The always-hidden divider spans 600...608, well left of the hidden divider at 976.
+    private let alwaysHiddenFrame = CGRect(x: 600, y: 0, width: 8, height: 22)
+
+    private func tieredMoves(
+        _ items: [MenuBarItemSnapshot], _ controls: ItemControlStore, alwaysHidden: CGRect?
+    ) -> [HiddenLayoutPlanner.Move] {
+        HiddenLayoutPlanner.moves(
+            for: items, anchorMinX: anchorMinX, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
+            controls: controls, alwaysHiddenDividerFrame: alwaysHidden
+        )
+    }
+
+    @Test func alwaysHiddenIntentTargetsJustLeftOfTheAlwaysHiddenDivider() {
+        var controls = ItemControlStore()
+        let shownNow = item("com.a.app", x: 1100, id: 1)
+        let hiddenNow = item("com.b.app", x: 700, id: 2)   // between the dividers
+        controls.setPlacement(.alwaysHidden, for: shownNow)
+        controls.setPlacement(.alwaysHidden, for: hiddenNow)
+
+        let result = tieredMoves([shownNow, hiddenNow], controls, alwaysHidden: alwaysHiddenFrame)
+        #expect(result.map { $0.item.windowID } == [1, 2])
+        #expect(result.map(\.targetX) == [592, 592])
+        #expect(result.allSatisfy { $0.placement == .alwaysHidden })
+    }
+
+    @Test func hiddenIntentMustClearTheAlwaysHiddenDividersTrailingEdge() {
+        var controls = ItemControlStore()
+        let tucked = item("com.a.app", x: 300, id: 1)      // left of the always-hidden divider
+        let between = item("com.b.app", x: 700, id: 2)     // already hidden
+        controls.setPlacement(.hidden, for: tucked)
+        controls.setPlacement(.hidden, for: between)
+
+        let result = tieredMoves([tucked, between], controls, alwaysHidden: alwaysHiddenFrame)
+        #expect(result.map { $0.item.windowID } == [1])
+        #expect(result.first?.targetX == dividerMinX - 8)
+        #expect(result.first?.placement == .hidden)
+    }
+
+    @Test(arguments: ItemPlacement.allCases)
+    func itemsAlreadyInTheirTierAreNotMoved(placement: ItemPlacement) {
+        let x: CGFloat = placement == .shown ? 1100 : placement == .hidden ? 700 : 300
+        let placed = item("com.a.app", x: x)
+        var controls = ItemControlStore()
+        controls.setPlacement(placement, for: placed)
+        #expect(HiddenLayoutPlanner.isPlacementSatisfied(
+            item: placed, placement: placement, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
+            alwaysHiddenDividerFrame: alwaysHiddenFrame
+        ))
+        #expect(tieredMoves([placed], controls, alwaysHidden: alwaysHiddenFrame).isEmpty)
+    }
+
+    @Test(arguments: ItemPlacement.allCases)
+    func tierBoundariesAcceptExactEdgesButNotOnePointOverlap(placement: ItemPlacement) {
+        let boundaryX: CGFloat
+        let overlapDirection: CGFloat
+        switch placement {
+        case .shown: boundaryX = anchorMaxX; overlapDirection = -1
+        case .hidden: boundaryX = alwaysHiddenFrame.maxX; overlapDirection = -1
+        case .alwaysHidden: boundaryX = alwaysHiddenFrame.minX - 22; overlapDirection = 1
+        }
+        let placed = item("com.a.app", x: boundaryX)
+        let overlapping = item("com.a.app", x: boundaryX + overlapDirection)
+        var controls = ItemControlStore()
+        controls.setPlacement(placement, for: placed)
+
+        #expect(HiddenLayoutPlanner.isPlacementSatisfied(
+            item: placed, placement: placement, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
+            alwaysHiddenDividerFrame: alwaysHiddenFrame
+        ))
+        #expect(!HiddenLayoutPlanner.isPlacementSatisfied(
+            item: overlapping, placement: placement, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX,
+            alwaysHiddenDividerFrame: alwaysHiddenFrame
+        ))
+        #expect(tieredMoves([placed], controls, alwaysHidden: alwaysHiddenFrame).isEmpty)
+        #expect(tieredMoves([overlapping], controls, alwaysHidden: alwaysHiddenFrame).count == 1)
+    }
+
+    @Test func shownIntentLeavesTheAlwaysHiddenTierTowardTheAnchor() {
+        let tucked = item("com.a.app", x: 300, id: 1)
+        let controls = ItemControlStore(shownInMenuBar: ["com.a.app"])
+        let result = tieredMoves([tucked], controls, alwaysHidden: alwaysHiddenFrame)
+        #expect(result.map(\.targetX) == [anchorMaxX + 8])
+        #expect(result.first?.placement == .shown)
+    }
+
+    @Test func alwaysHiddenIntentDegradesToHiddenWithoutItsDivider() {
+        var controls = ItemControlStore()
+        let shownNow = item("com.a.app", x: 1100, id: 1)
+        let hiddenNow = item("com.b.app", x: 700, id: 2)
+        controls.setPlacement(.alwaysHidden, for: shownNow)
+        controls.setPlacement(.alwaysHidden, for: hiddenNow)
+
+        let result = tieredMoves([shownNow, hiddenNow], controls, alwaysHidden: nil)
+        #expect(result.map { $0.item.windowID } == [1])
+        #expect(result.first?.targetX == dividerMinX - 8)
+        #expect(result.first?.placement == .hidden)
+        #expect(HiddenLayoutPlanner.effectivePlacement(.alwaysHidden, hasAlwaysHiddenDivider: false) == .hidden)
+        #expect(HiddenLayoutPlanner.effectivePlacement(.alwaysHidden, hasAlwaysHiddenDivider: true) == .alwaysHidden)
+        #expect(HiddenLayoutPlanner.effectivePlacement(.shown, hasAlwaysHiddenDivider: false) == .shown)
+        #expect(HiddenLayoutPlanner.targetX(
+            for: .alwaysHidden, anchorMaxX: anchorMaxX, dividerMinX: dividerMinX, alwaysHiddenDividerFrame: nil
+        ) == dividerMinX - 8)
+    }
+
+    @Test func twoTierIntentPlansIdenticallyWithOrWithoutTheAlwaysHiddenDivider() {
+        var controls = ItemControlStore()
+        let a = item("com.a.app", x: 1100, id: 1)  // shown, wants hidden
+        let b = item("com.b.app", x: 1200, id: 2)  // shown, wants shown
+        let c = item("com.c.app", x: 700, id: 3)   // hidden, wants shown
+        let d = item("com.d.app", x: 650, id: 4)   // hidden, wants hidden
+        let e = item("com.e.app", x: 300, id: 5)   // unconfigured, left of the always-hidden divider
+        controls.setHidden(true, for: a)
+        controls.setHidden(false, for: b)
+        controls.setHidden(false, for: c)
+        controls.setHidden(true, for: d)
+
+        let legacy = moves([a, b, c, d, e], controls)
+        let tiered = tieredMoves([a, b, c, d, e], controls, alwaysHidden: alwaysHiddenFrame)
+        let explicitNil = tieredMoves([a, b, c, d, e], controls, alwaysHidden: nil)
+        #expect(legacy == tiered)
+        #expect(legacy == explicitNil)
+        #expect(legacy.map { $0.item.windowID } == [1, 3])
+        #expect(legacy.map(\.placement) == [.hidden, .shown])
+    }
+
+    @Test func anAlwaysHiddenDividerRightOfTheHiddenDividerProducesNoPlan() {
+        let misplaced = item("com.a.app", x: 1100)
+        let controls = ItemControlStore(alwaysHiddenInMenuBar: ["com.a.app"])
+        let inverted = CGRect(x: dividerMinX + 1, y: 0, width: 8, height: 22)
+        #expect(tieredMoves([misplaced], controls, alwaysHidden: inverted).isEmpty)
+        let malformed = CGRect(x: 600, y: 0, width: -8, height: 22)
+        #expect(tieredMoves([misplaced], controls, alwaysHidden: malformed.standardized).count == 1)
+        #expect(tieredMoves([misplaced], controls, alwaysHidden: alwaysHiddenFrame).count == 1)
+    }
+
+    @Test func unconfiguredItemsInTheAlwaysHiddenTierAreLeftAlone() {
+        let controls = ItemControlStore(hiddenInMenuBar: ["com.b.app"])
+        let tucked = item("com.a.app", x: 300, id: 1)
+        let wanted = item("com.b.app", x: 1100, id: 2)
+        let result = tieredMoves([tucked, wanted], controls, alwaysHidden: alwaysHiddenFrame)
+        #expect(result.map { $0.item.windowID } == [2])
+    }
 }
