@@ -20,7 +20,7 @@ struct LayoutModeSettingsSection: View {
     }
 
     var body: some View {
-        Section("Placement") {
+        Section("Layout mode") {
             Picker("Layout mode", selection: layoutMode) {
                 Text("On-Demand").tag(LayoutMode.onDemand)
                 Text("Live").tag(LayoutMode.live)

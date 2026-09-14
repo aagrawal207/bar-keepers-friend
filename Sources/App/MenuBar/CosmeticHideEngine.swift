@@ -74,6 +74,10 @@ final class CosmeticHideEngine {
     private let setDividerCollapsed: ((Bool) -> Void)?
     private let anchorFrameProvider: (() -> CGRect?)?
     private let alwaysHiddenDividerHooks: AlwaysHiddenDividerHooks?
+    /// Test seam for the anchor's artwork; production writes the real status button image.
+    private let setAnchorImage: ((NSImage) -> Void)?
+    /// The artwork currently applied to the anchor, for tests and diagnostics.
+    private(set) var anchorSymbol: AppIconChoice.MenuBarSymbol
     private var activationOwnsSection = false
     // Last requested divider state: a predecessor may finish before its successor restores it.
     private var dividerIsCollapsed = false
@@ -272,6 +276,7 @@ final class CosmeticHideEngine {
         setDividerCollapsed: ((Bool) -> Void)? = nil,
         anchorFrame: (() -> CGRect?)? = nil,
         alwaysHiddenDivider: AlwaysHiddenDividerHooks? = nil,
+        setAnchorImage: ((NSImage) -> Void)? = nil,
         onPreferencesChanged: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
@@ -279,6 +284,8 @@ final class CosmeticHideEngine {
         self.setDividerCollapsed = setDividerCollapsed
         self.anchorFrameProvider = anchorFrame
         self.alwaysHiddenDividerHooks = alwaysHiddenDivider
+        self.setAnchorImage = setAnchorImage
+        self.anchorSymbol = preferences.appIcon.menuBarSymbol
         self.onPreferencesChanged = onPreferencesChanged
         self.stateMachine = HideShowStateMachine(
             sections: MenuBarSection.allCases,
@@ -308,8 +315,7 @@ final class CosmeticHideEngine {
         let anchor = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         anchor.autosaveName = ControlItem.Identifier.anchor.rawValue
         if let button = anchor.button {
-            button.image = Self.anchorImage()
-            button.image?.isTemplate = true
+            button.image = AppIconRenderer.menuBarImage(preferences.appIcon.menuBarSymbol)
             button.target = self
             button.action = #selector(anchorClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -543,6 +549,7 @@ final class CosmeticHideEngine {
         updateScrollMonitoring()
         updateLiveLayoutMonitoring()
         ensureAlwaysHiddenDividerIfNeeded()
+        applyAnchorArtwork()
 
         // React to a useFloatingBar change at runtime. The launch warm-up (which pre-populates
         // the icon cache and flips `hasCapturedOnce`) only runs in install()'s floating-bar
@@ -977,12 +984,13 @@ final class CosmeticHideEngine {
         }
     }
 
-    /// Shows the standard AppKit About panel. The agent app has no menu bar of its own, so we
-    /// surface it from here. `orderFrontStandardAboutPanel` reads name/version/copyright from
-    /// Info.plist; activate first so the panel comes forward (an accessory app isn't frontmost).
+    /// Shows the standard AppKit About panel with the chosen artwork. The agent app has no menu bar
+    /// of its own, so we surface it from here; activate first so the panel comes forward.
     @objc private func menuShowAbout() {
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationIcon: AppIconRenderer.appImage(preferences.appIcon.appTheme)
+        ])
     }
 
     /// Manual toggles present cached icons; keyboard opens disable the pre-entry dismissal backstop.
@@ -1573,7 +1581,16 @@ final class CosmeticHideEngine {
 
     // MARK: - Images
 
-    private static func anchorImage() -> NSImage? {
-        NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Bar Keeper's Friend")
+    /// Only a changed symbol touches the status button; icon edits never recreate the item.
+    private func applyAnchorArtwork() {
+        let symbol = preferences.appIcon.menuBarSymbol
+        guard symbol != anchorSymbol else { return }
+        anchorSymbol = symbol
+        let image = AppIconRenderer.menuBarImage(symbol)
+        if let setAnchorImage {
+            setAnchorImage(image)
+        } else {
+            anchorItem?.button?.image = image
+        }
     }
 }

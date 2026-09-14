@@ -6,7 +6,7 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct SettingsSearchTests {
-    private static let pages: [SettingsView.Tab] = [.general, .items, .style, .presets, .triggers, .groups, .widgets]
+    private static let pages: [SettingsView.Tab] = SettingsView.Tab.allCases
 
     @Test(arguments: [ColorScheme.light, .dark])
     func nativeSearchAndStyleRowFitInsideTheSidebar(scheme: ColorScheme) async throws {
@@ -40,7 +40,7 @@ struct SettingsSearchTests {
         test.expectUnchanged()
     }
 
-    @Test(arguments: [("hover", SettingsView.Tab.general), ("opacity", .style)], [false, true])
+    @Test(arguments: [("hover", SettingsView.Tab.behavior), ("opacity", .style)], [false, true])
     func typingOnlyFiltersUntilAResultIsSelected(match: (String, SettingsView.Tab), throughTable: Bool) async throws {
         let (query, target) = match
         var preferences = Preferences.default
@@ -54,7 +54,7 @@ struct SettingsSearchTests {
         #expect(test.searchField?.stringValue == query)
         #expect(test.title == "Presets")
         #expect(test.find("settings-preset-content") != nil)
-        #expect(test.find("settings-layout-mode-picker") == nil)
+        #expect(test.find("settings-behavior-content") == nil)
         #expect(test.find("settings-style-enabled") == nil)
         #expect(test.find("settings-search-empty") == nil)
         test.expectUnchanged()
@@ -73,19 +73,16 @@ struct SettingsSearchTests {
             test.title == target.title && test.queryIsEmpty && test.rows == Self.pages
                 && test.find("settings-preset-content") == nil
         })
-        let marker = target == .general ? "settings-layout-mode-picker" : "settings-style-enabled"
+        let marker = target == .behavior ? "settings-behavior-content" : "settings-style-enabled"
         #expect(test.find(marker) != nil)
-        if target == .general {
-            // General's existing shortcut section loads Items once, but only after navigation.
-            try #require(await test.waitForUpdate { !test.model.itemsLoading })
-        }
-        test.expectUnchanged(reads: target == .general ? 1 : 0)
+        // Neither Behavior nor Style reads the menu bar; only Items and Shortcuts do.
+        test.expectUnchanged()
     }
 
     @Test func returnSelectsTheFirstRankedResultAndClearsTheField() async throws {
         let test = Harness()
         let editor = try await test.type("style")
-        try #require(await test.waitForUpdate { test.rows == [.style, .general] })
+        try #require(await test.waitForUpdate { test.rows == [.style, .behavior] })
         #expect(test.title == "Presets")
         test.expectUnchanged()
 
@@ -96,30 +93,31 @@ struct SettingsSearchTests {
         })
         #expect(test.find("settings-style-enabled") != nil)
         #expect(test.find("settings-preset-content") == nil)
-        #expect(test.find("settings-layout-mode-picker") == nil)
+        #expect(test.find("settings-behavior-content") == nil)
         test.expectUnchanged()
     }
 
     @Test func activatingTheCurrentPaneResultClearsSearchWithoutReloadingIt() async throws {
-        let test = Harness(initialTab: .general)
+        let test = Harness(initialTab: .shortcuts)
         try #require(await test.waitForUpdate { !test.model.itemsLoading })
-        try await test.type("hover")
-        try #require(await test.waitForUpdate { test.rows == [.general] })
-        let result = try test.element("settings-sidebar-general")
+        try await test.type("hotkey")
+        try #require(await test.waitForUpdate { test.rows == [.shortcuts] })
+        let result = try test.element("settings-sidebar-shortcuts")
         #expect(result.accessibilityRole() == .button)
-        #expect(test.title == "General")
+        #expect(test.title == "Shortcuts")
 
         #expect(result.accessibilityPerformPress())
 
         try #require(await test.waitForUpdate { test.queryIsEmpty && test.rows == Self.pages })
-        #expect(test.title == "General")
+        #expect(test.title == "Shortcuts")
+        // Re-activating the mounted pane must not remount it and read the menu bar a second time.
         test.expectUnchanged(reads: 1)
     }
 
     @Test func returnUsesTheLatestEditWithoutWaitingForSwiftUIToRender() async throws {
         let test = Harness()
         let editor = try await test.type("hover")
-        try #require(await test.waitForUpdate { test.rows == [.general] })
+        try #require(await test.waitForUpdate { test.rows == [.behavior] })
 
         editor.insertText("opacity", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
@@ -191,7 +189,7 @@ struct SettingsSearchTests {
     func externalTabRequestsClearSearchEvenForTheCurrentPane(target: SettingsView.Tab) async throws {
         let test = Harness()
         try await test.type("hover")
-        try #require(await test.waitForUpdate { test.rows == [.general] })
+        try #require(await test.waitForUpdate { test.rows == [.behavior] })
         #expect(test.title == "Presets")
         test.expectUnchanged()
 

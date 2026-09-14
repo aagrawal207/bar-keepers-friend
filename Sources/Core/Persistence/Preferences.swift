@@ -106,6 +106,9 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Whether a notch-clipped reveal may temporarily tuck shown items to make room (reflow/activation).
     public var notchOverflow: NotchOverflowMode
 
+    /// Menu bar symbol and app artwork theme; the installed Finder icon is never rewritten.
+    public var appIcon: AppIconChoice
+
     public init(
         autoRehide: Bool = true,
         autoRehideDelay: TimeInterval = 15,
@@ -131,7 +134,8 @@ public struct Preferences: Equatable, Sendable, Codable {
         itemHotkeys: [String: HotkeyCombo] = [:],
         menuBarStyle: MenuBarStyle = .none,
         widgets: [MenuBarWidget] = [],
-        notchOverflow: NotchOverflowMode = .never
+        notchOverflow: NotchOverflowMode = .never,
+        appIcon: AppIconChoice = .default
     ) {
         self.autoRehide = autoRehide
         self.autoRehideDelay = Self.normalizedAutoRehideDelay(autoRehideDelay)
@@ -158,6 +162,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.menuBarStyle = menuBarStyle.normalized()
         self.widgets = WidgetLibrary.normalized(widgets)
         self.notchOverflow = notchOverflow
+        self.appIcon = appIcon
     }
 
     public static let `default` = Preferences()
@@ -195,6 +200,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         case menuBarStyle
         case widgets
         case notchOverflow
+        case appIcon
     }
 
     /// Keeps every readable element so one corrupt entry cannot reset the whole store.
@@ -241,6 +247,7 @@ public struct Preferences: Equatable, Sendable, Codable {
         let rawWidgets = (try? container.decodeIfPresent([Lossy<MenuBarWidget>].self, forKey: .widgets)) ?? nil
         widgets = WidgetLibrary.normalized((rawWidgets ?? []).compactMap(\.value))
         notchOverflow = ((try? container.decodeIfPresent(NotchOverflowMode.self, forKey: .notchOverflow)) ?? nil) ?? .never
+        appIcon = ((try? container.decodeIfPresent(AppIconChoice.self, forKey: .appIcon)) ?? nil) ?? .default
     }
 }
 

@@ -148,6 +148,7 @@ final class AppCoordinator {
         hotkeys.apply(preferences: preferences)
         widgets.update(widgets: preferences.widgets)
         menuBarStyleOverlay.apply(style: preferences.menuBarStyle)
+        applyAppIcon(preferences.appIcon.appTheme)
 
         // Prompt for Screen Recording up front when the floating bar is enabled, since it
         // needs capture to show icons. Permission-free hide/show still works without it.
@@ -216,6 +217,7 @@ final class AppCoordinator {
         settingsWindowController?.model.hotkeyRegistrationFailures = hotkeys.lastRegistrationFailures
         widgetStatusItems?.update(widgets: updated.widgets)
         if updated.menuBarStyle != previous.menuBarStyle { menuBarStyleOverlay.apply(style: updated.menuBarStyle) }
+        if updated.appIcon.appTheme != previous.appIcon.appTheme { applyAppIcon(updated.appIcon.appTheme) }
         triggerMonitor.update(rules: updated.triggers)
         // A deleted or edited preset changes what an active rule means; rules alone would not re-evaluate.
         if updated.presets != previous.presets { triggerMonitor.refresh() }
@@ -225,6 +227,12 @@ final class AppCoordinator {
             spacingNeedsLogout = true
         }
         settingsWindowController?.model.spacingNeedsLogout = spacingNeedsLogout
+    }
+
+    /// Alerts and any AppKit panel that reads the app icon follow the theme; `nil` restores the
+    /// bundled icon. This never rewrites the signed bundle, so Finder keeps the shipped icon.
+    private func applyAppIcon(_ theme: AppIconChoice.AppTheme) {
+        NSApp.applicationIconImage = theme == .ocean ? nil : AppIconRenderer.appImage(theme)
     }
 
     private func checkForUpdates() {

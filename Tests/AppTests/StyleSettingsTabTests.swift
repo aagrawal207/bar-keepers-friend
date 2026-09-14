@@ -135,15 +135,24 @@ struct StyleSettingsTabTests {
     }
 
     @Test(arguments: [false, true], [ColorScheme.light, .dark])
-    func richestContentFitsTheSettingsWindow(gradient: Bool, scheme: ColorScheme) {
+    func richestContentFitsTheSettingsWindowWithoutScrolling(gradient: Bool, scheme: ColorScheme) throws {
         var style = MenuBarStyle(isEnabled: true, tint: red, opacity: 0.7, cornerRadius: 10, borderWidth: 3, shadowEnabled: true, shape: .pill)
         if gradient { style.gradientEnd = RGBA(red: 0, green: 0, blue: 1) }
-        let hosting = host(makeModel(style), scheme: scheme)
-        let size = hosting.view.fittingSize
-        #expect(size.width <= 640)
-        #expect(size.height <= 600, "fitting height was \(size.height)")
-        #expect(identifiers(in: hosting.view).contains("settings-style-preview"))
-        #expect(identifiers(in: hosting.view).contains("settings-style-gradient-end") == gradient)
+        // Measure in the real Settings window: the bottommost control must sit inside the detail area.
+        let hosting = settingsTestHost(
+            SettingsView(model: makeModel(style), initialTab: .style).environment(\.colorScheme, scheme)
+        )
+        hosting.render()
+        let detail = try element("settings-detail", in: hosting.view).accessibilityFrame()
+        let note = try element("settings-style-note", in: hosting.view).accessibilityFrame()
+        #expect(!note.isEmpty)
+        #expect(detail.contains(note), "the Style note is the last control; it must be visible without scrolling")
+        let ids = identifiers(in: hosting.view)
+        for identifier in Self.alwaysPresent + Self.enabledOnly + ["settings-icon-menu-bar", "settings-icon-app-theme"] {
+            #expect(ids.contains(identifier), "\(identifier) must be reachable in the richest Style pane")
+        }
+        #expect(!ids.contains("settings-spacing-enabled"), "spacing is a system-wide behavior setting, not artwork")
+        #expect(ids.contains("settings-style-gradient-end") == gradient)
     }
 
     // MARK: Writes

@@ -1,6 +1,6 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-14. Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-14 (Settings split + icons). Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
@@ -40,7 +40,8 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 | Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
 | Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings/onboarding | Sidebar layout (820x720), Settings search, Style directly below Items, staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Placement, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
 | Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
@@ -84,6 +85,40 @@ path including quit).
 
 No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
 is the acceptance checklist before any of these is described as working on a real menu bar.
+
+## Settings Split And Icon Verification
+
+On 2026-09-14 the user reported that General scrolled and asked for a choice of BKF icons. General
+was measured at ten sections; Behavior with the moved sections still overflowed by 300 to 550pt, and
+Style with spacing reached 1041pt in a 704pt detail area. The final arrangement keeps every pane's
+bottommost control inside the window: General (login, permissions, spacing, backup), Behavior
+(floating bar, re-hide, hover, scroll), Placement (layout mode, notch), Shortcuts, and Style
+(icons, styling, preview). Placement refreshes the permission probe itself, so its Accessibility
+warnings cannot go stale when General was never visited.
+
+Icons are a new `Preferences.appIcon` value decoded field by field. The menu-bar symbol is applied
+to the anchor only when it changes; the app theme reaches the Settings header, the About panel, and
+`NSApp.applicationIconImage` for alerts. The signed bundle is never modified, so the Finder icon
+stays as shipped and granted permissions survive. Ocean, the shipped artwork, never falls back to
+`NSApp.applicationIconImage`, which this feature itself sets.
+
+Full build/test: 1168 tests across 84 suites, 1886 invocations, zero failures or skips. Strict code
+signature verification passed. Two independent review passes found and closed: an Ocean fallback that
+would have echoed the active theme, stale Placement permission warnings, a Dock claim for an app with
+no Dock tile, search-term fusion, a tooltip on the wrong control, and duplicate VoiceOver labels.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Choose both icons in the real Settings UI; one write per edit, one anchor image, zero placement/capture work; unapplied Items draft and aliases intact; fresh store/model/engine reload the choice and no draft; re-selecting the current value writes nothing; leaving Ocean and returning restores it | `AppIconWorkflowTests` with real `PreferencesStore` in an isolated `UserDefaults` suite and the real engine | Functional workflow |
+| Export/import round trip; per-field leniency (unknown symbol keeps a valid theme); both-bad, string, and integer `appIcon` values; missing key on older files | `AppIconWorkflowTests` | Functional workflow |
+| Every symbol renders a visible template glyph; every theme renders the shared mark on transparent margins and differs from Ocean | `AppIconWorkflowTests`, bitmap rendering | Rendering |
+| Every pane's bottommost control visible in the real 820x720 window in its richest permission-independent state; panes other than Items/Shortcuts read no items just to render | `SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling` | Hostless rendering |
+| Search keywords follow the moved sections; moved terms no longer match General | `SettingsSidebarTests`, `SettingsSearchTests` | Unit + hostless interaction |
+
+`install()` does not run in hostless tests, so the install-time anchor image and the live status
+button are exercised only through the `setAnchorImage` seam. The pop-up's native menu items are not
+reachable off screen; the workflow drives the exact binding the picker holds. Live appearance of the
+chosen symbol in the menu bar and the About panel's rendering remain hardware QA.
 
 ## Settings Search Verification
 

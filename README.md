@@ -21,7 +21,7 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   items across the anchor, plus a global toggle shortcut
   (⌥⌘B). Uses private window-server behavior, so it's fenced behind a protocol seam with a
   self-validating retry loop. ✅ *(Moves were verified on-device; activation limitations remain below.)*
-- **Hover reveal** is opt-in under Settings > General, below Auto Re-hide. Hovering over BKF
+- **Hover reveal** is opt-in under Settings > Behavior, below Auto Re-hide. Hovering over BKF
   opens the floating bar; leaving closes only a hover-opened bar. Click and keyboard controls
   remain authoritative, and the setting defaults off. List opens use cached images without starting
   a capture/reveal pass; hover waits for an already-active capture to finish.
@@ -29,6 +29,9 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   Disabled items remain dimmed and non-interactive.
 - **Settings search** filters pages by name and setting keywords without changing your settings.
   Style sits directly below Items in the sidebar. This does not restore the removed menu-bar search.
+- **Settings layout:** General keeps machine-level settings (login, permissions, spacing, backup);
+  Behavior, Placement, and Shortcuts have their own pages. **Style > Icons** picks the menu bar
+  symbol and an app-icon theme for Settings, About, and alerts; the installed Finder icon is unchanged.
 - **Bartender 6 feature set (2026-09-13):** presets, triggers (battery, charging, low power, Wi-Fi,
   frontmost app, external display, time/weekday), groups, widgets, menu bar styling, item spacing,
   scroll/swipe reveal, an Always Hidden tier (Option-click reveals it), Live layout mode, a shortcut
@@ -126,7 +129,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 1161 tests in 82 suites (1847 invocations including parameterized cases).
+It currently contains 1168 tests in 84 suites (1886 invocations including parameterized cases).
 
 ## Credit
 

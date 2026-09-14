@@ -12,6 +12,7 @@ struct SettingsPlacementPreview: View {
     var useFloatingBar = true
     var hasPendingChanges = false
     var placementInProgress = false
+    var anchorSymbol: AppIconChoice.MenuBarSymbol = .lines
     var metrics: FloatingBarLayout.Metrics = .default
 
     private var phase: String {
@@ -37,7 +38,7 @@ struct SettingsPlacementPreview: View {
                         .font(.caption.weight(.medium))
                         .accessibilityAddTraits(.isHeader)
                     HStack(spacing: 0) {
-                        Label("BKF", systemImage: "line.3.horizontal.decrease.circle")
+                        Label("BKF", systemImage: anchorSymbol.systemName)
                             .font(.caption)
                             .padding(.leading, metrics.padding)
                             .padding(.trailing, 4)

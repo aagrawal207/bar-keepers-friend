@@ -6,21 +6,24 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct SettingsSidebarTests {
-    /// General has no container identifier of its own, so a stable control inside it stands in.
+    /// Each pane exposes one stable container identifier so navigation tests can tell them apart.
     private static let paneMarkers: [SettingsView.Tab: String] = [
-        .general: "settings-layout-mode-picker",
+        .general: "settings-general-content",
         .items: "settings-items-content",
+        .style: "settings-style-enabled",
+        .behavior: "settings-behavior-content",
+        .placement: "settings-placement-content",
+        .shortcuts: "settings-shortcuts-content",
         .presets: "settings-preset-content",
         .triggers: "settings-trigger-content",
         .groups: "settings-group-content",
-        .widgets: "settings-widget-content",
-        .style: "settings-style-enabled"
+        .widgets: "settings-widget-content"
     ]
 
     @Test func tabsExposeStableIdentifiersTitlesAndSymbols() {
-        #expect(SettingsView.Tab.allCases == [.general, .items, .style, .presets, .triggers, .groups, .widgets])
-        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "style", "presets", "triggers", "groups", "widgets"])
-        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Style", "Presets", "Triggers", "Groups", "Widgets"])
+        #expect(SettingsView.Tab.allCases == [.general, .items, .style, .behavior, .placement, .shortcuts, .presets, .triggers, .groups, .widgets])
+        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "style", "behavior", "placement", "shortcuts", "presets", "triggers", "groups", "widgets"])
+        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Style", "Behavior", "Placement", "Shortcuts", "Presets", "Triggers", "Groups", "Widgets"])
         for tab in SettingsView.Tab.allCases {
             #expect(tab.id == tab)
             #expect(NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil) != nil, "\(tab) needs a real SF Symbol")
@@ -38,15 +41,57 @@ struct SettingsSidebarTests {
     }
 
     @Test(arguments: [
-        ("hover", SettingsView.Tab.general), ("screen recording", .general), ("keyboard shortcut", .general),
-        ("Shortcuts", .general), ("Show hidden items in a floating bar", .general),
-        ("Dismiss the bar when the pointer leaves it", .general), ("Reset to system default", .general),
-        ("spacing", .general), ("apply changes", .items), ("always hidden", .items), ("aliases", .items),
+        ("screen recording", SettingsView.Tab.general), ("launch at login", .general), ("export", .general),
+        ("hover", .behavior), ("Show hidden items in a floating bar", .behavior),
+        ("Dismiss the bar when the pointer leaves it", .behavior), ("layout mode", .placement), ("notch", .placement),
+        ("keyboard shortcut", .shortcuts), ("Shortcuts", .shortcuts), ("hotkey", .shortcuts),
+        ("spacing", .general), ("Reset to system default", .general),
+        ("menu bar icon", .style), ("app icon", .style), ("sparkle", .style), ("sunset", .style),
+        ("apply changes", .items), ("always hidden", .items), ("aliases", .items),
         ("opacity", .style), ("gradient", .style), ("styles", .style), ("save layout", .presets),
         ("low power", .triggers), ("Wi-Fi", .triggers), ("membership", .groups), ("email", .widgets),
     ])
     func searchFindsSettingsWithinTheirPane(query: String, expected: SettingsView.Tab) {
         #expect(SettingsView.Tab.matching(query).contains(expected))
+    }
+
+    @Test(arguments: ["hover", "layout mode", "keyboard shortcut"])
+    func movedSettingsNoLongerPointAtGeneral(query: String) {
+        #expect(!SettingsView.Tab.matching(query).contains(.general), "\(query) left General and must not still match it")
+    }
+
+    /// Every pane's bottommost control must be visible in the real window; Behavior and Style both
+    /// overflowed while these sections were being rearranged, and the container check cannot see it.
+    /// Anchors are unconditional rows, so the result does not depend on this machine's permissions.
+    @Test(arguments: [
+        (SettingsView.Tab.general, "settings-backup-export"),
+        (.behavior, "settings-behavior-tip"),
+        (.placement, "settings-notch-display-note"),
+        (.style, "settings-style-note"),
+        (.shortcuts, "settings-shortcut-items-empty"),
+    ])
+    func bottommostControlIsVisibleWithoutScrolling(tab: SettingsView.Tab, lastControl: String) async throws {
+        var preferences = Preferences.default
+        // Richest permission-independent state: every unconditional note and control shown.
+        preferences.layoutMode = .live
+        preferences.notchOverflow = .whenNeeded
+        preferences.menuBarSpacing = MenuBarSpacing(enabled: true, spacing: 8, selectionPadding: 4)
+        preferences.menuBarStyle = MenuBarStyle(isEnabled: true, borderWidth: 2, shape: .rounded)
+        preferences.menuBarStyle.gradientEnd = RGBA(red: 0, green: 0, blue: 1)
+        let model = SettingsModel(preferences: preferences, loginItem: LoginItemService(), itemsProvider: { [] }, onChange: { _ in })
+        model.spacingNeedsLogout = true
+        let hosting = settingsTestHost(SettingsView(model: model, initialTab: tab))
+        #expect(await waitForUpdate(hosting.view) { self.paneIsShown(tab, in: hosting.view) })
+        if tab == .shortcuts {
+            // Shortcuts reads the (empty) menu bar first; its empty-state row is the true bottom.
+            #expect(await waitForUpdate(hosting.view) { !model.itemsLoading })
+        } else {
+            #expect(model.itemsLoading, "\(tab) must not read the menu bar just to render")
+        }
+        let detail = try element("settings-detail", in: hosting.view).accessibilityFrame()
+        let last = try element(lastControl, in: hosting.view).accessibilityFrame()
+        #expect(!last.isEmpty)
+        #expect(detail.contains(last), "\(tab) scrolls: \(lastControl) at \(last) is outside the detail \(detail)")
     }
 
     @Test(arguments: TriggerCondition.Kind.allCases)

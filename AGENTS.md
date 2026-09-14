@@ -43,6 +43,19 @@ Current focus (2026-09-14): the user explicitly requested Settings search and mo
 below Items. Search is Settings-only; the removed menu-bar Search panel and its global hotkey stay
 removed. The Apply Changes safety and persistence constraints still apply.
 
+Later on 2026-09-14 the user asked for General to be split up (it scrolled) and for a choice of BKF
+icons. Both shipped; see Built. The installed Finder icon is never rewritten: that would need
+re-signing the bundle, which would also invalidate granted TCC permissions.
+
+**Testing direction (2026-09-14, from the user):** prefer fewer functional workflow tests over many
+unit tests. A workflow test drives the real Settings UI, the real model, real persistence
+(`PreferencesStore` in an isolated `UserDefaults` suite), and the real engine/mover together, and
+mocks only OS boundaries that would otherwise move the user's cursor or rearrange the live menu bar
+(status-item buttons, the event relay, screen capture). Cover edge cases inside those workflows
+rather than as separate narrow tests. `AppIconWorkflowTests` and `NativeMoveTests` are the models
+to follow. Do not delete existing unit tests wholesale; migrate a narrow test only once a workflow
+test demonstrably covers its assertion.
+
 ## Loop charter (read first if you are an automated loop fire)
 
 A recurring task fires here every ~30 min ("build the next feature or fix a critical bug, keep
@@ -119,7 +132,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1161 tests, 82 suites**, 1847 invocations including
+- Test: same command with `test` (currently **1168 tests, 84 suites**, 1886 invocations including
   parameterized cases). Last full build/test: 2026-09-14, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
@@ -188,7 +201,7 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   and `PARITY.md` for the reproduction, tests, and remaining limits.
 - **Global toggle hotkey** — ⌥⌘B via Carbon `RegisterEventHotKey` (no Accessibility prompt).
   Keyboard-opened bar persists until re-toggled (doesn't auto-dismiss).
-- **Opt-in hover reveal (2026-09-11, pure + adapter-tested).** Settings > General > Behavior has
+- **Opt-in hover reveal (2026-09-11, pure + adapter-tested).** Settings > Behavior has
   "Reveal on hover" below Auto Re-hide. It defaults off, is independent of auto-rehide, and is
   unavailable outside floating-bar mode. A 200ms dwell opens the cached bar; leaving the anchor,
   panel, and connecting gap closes only a hover-owned panel after 400ms. Pointer polling runs at
@@ -277,6 +290,30 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   commands remain with the input method. Query history is disabled. This is not item-name filtering,
   a jump to an individual control, or the removed global Search feature. Style is directly below Items;
   the 180pt sidebar and 820x720 window still fit. See `PARITY.md` for tests and native QA limits.
+- **Settings split + BKF icon choice (2026-09-14, workflow-tested).** General had grown to ten
+  sections and scrolled; it now holds only machine-level settings (Launch at login, Permissions,
+  Menu bar spacing, Backup). New panes: **Behavior** (floating bar, re-hide, hover, scroll, tip),
+  **Placement** (Layout mode, Notch make-room; it refreshes the permission probe itself so its
+  Accessibility warnings are never stale), **Shortcuts** (the toggle recorder and per-item
+  shortcuts; the only pane besides Items that reads the menu bar). Sidebar order: General, Items,
+  Style, Behavior, Placement, Shortcuts, Presets, Triggers, Groups, Widgets. Every pane's
+  bottommost control is asserted visible in the real 820x720 window in its richest
+  permission-independent state (`SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling`);
+  Behavior and Style both overflowed during the rearrangement and that test is what caught it.
+  Style gained an **Icons** row: a menu-bar symbol pop-up (five SF Symbols, `AppIconChoice.MenuBarSymbol`)
+  and five app-artwork themes (`AppIconChoice.AppTheme`, Ocean is the shipped icon; others redraw the
+  same sparkle-and-pill mark on a different gradient at runtime via `AppIconRenderer`, mirroring
+  `Scripts/render_icon.swift`). Persisted as `Preferences.appIcon` with per-field lenient decoding, so
+  a future symbol name degrades only that field. The anchor image is applied through
+  `CosmeticHideEngine.applyAnchorArtwork` only when the symbol changes (test seam `setAnchorImage`);
+  the app image reaches the Settings header, the About panel (explicit `.applicationIcon` option),
+  and `NSApp.applicationIconImage` for alerts. **The installed Finder icon is never rewritten**; the
+  Settings note says so. Ocean's fallback never reads `NSApp.applicationIconImage` (this feature sets
+  it, so it would echo the current theme). `AppIconWorkflowTests` drives the real Settings controls,
+  real `PreferencesStore` in an isolated defaults suite, and the real engine: choose both icons,
+  verify one write per edit and one anchor image, zero placement/capture work, an unapplied Items
+  draft and aliases intact, then a fresh store/model/engine reads the choice back and no draft.
+  Native rendering of the pop-up's menu items and the anchor's live appearance are hardware QA.
 - **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
   menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
   sparkle, on a teal→blue squircle — the Bar Keepers Friend pun). Rendered by `Scripts/render_icon.swift`
@@ -337,14 +374,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     Settings > Style): tint/gradient/opacity/shape/border/shadow drawn by one per-display overlay
     window at `kCGMainMenuWindowLevel - 1`, mouse-transparent, excluded from icon capture. Honors
     Reduce Transparency. Whether level 23 renders behind Tahoe's bar content is a hardware question.
-  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; General tab, default
+  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; Placement tab, default
     Never): when a revealed hidden section would be clipped by the notch (reflow or activation), the
     shown items nearest the anchor are swapped left of the section's leftmost item and put back
     before every collapse (toggle, activation rehide, auto-rehide, Option-click, pause, reconcile,
     and quit via `applicationShouldTerminate` -> `.terminateLater`). Never overlaps a placement batch.
   - **Settings sidebar**: `NavigationSplitView` with a fixed 180pt sidebar (identity header at top)
-    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Presets, Triggers, Groups,
-    Widgets. `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
+    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Behavior, Placement,
+    Shortcuts, Presets, Triggers, Groups, Widgets (see "Settings split" above for the 2026-09-14
+    reorganization). `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
   - **Export/login feedback**: export distinguishes cancel from write failure; Launch at login shows
     requires-approval / not-registered notes with an "Open Login Items..." deep link.
 

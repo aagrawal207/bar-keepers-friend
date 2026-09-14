@@ -6,7 +6,7 @@ import SwiftUI
 struct SettingsView: View {
     /// Raw values are sidebar accessibility identifiers; the cases are the window controller's API.
     enum Tab: String, CaseIterable, Identifiable {
-        case general, items, style, presets, triggers, groups, widgets
+        case general, items, style, behavior, placement, shortcuts, presets, triggers, groups, widgets
 
         var id: Self { self }
 
@@ -14,11 +14,14 @@ struct SettingsView: View {
             switch self {
             case .general: "General"
             case .items: "Items"
+            case .style: "Style"
+            case .behavior: "Behavior"
+            case .placement: "Placement"
+            case .shortcuts: "Shortcuts"
             case .presets: "Presets"
             case .triggers: "Triggers"
             case .groups: "Groups"
             case .widgets: "Widgets"
-            case .style: "Style"
             }
         }
 
@@ -26,11 +29,14 @@ struct SettingsView: View {
             switch self {
             case .general: "gearshape"
             case .items: "menubar.rectangle"
+            case .style: "paintpalette"
+            case .behavior: "slider.horizontal.3"
+            case .placement: "arrow.left.and.right.square"
+            case .shortcuts: "keyboard"
             case .presets: "square.on.square"
             case .triggers: "bolt"
             case .groups: "square.grid.2x2"
             case .widgets: "star.square.on.square"
-            case .style: "paintpalette"
             }
         }
 
@@ -39,14 +45,9 @@ struct SettingsView: View {
             switch self {
             case .general:
                 """
-                Launch at login Permissions Accessibility Screen Recording Hidden items
-                Show hidden items in a floating bar Floating bar style Horizontal strip Vertical list
-                Dismiss the bar when the pointer leaves it Placement Layout mode On-Demand Live
-                Shortcuts Item shortcuts Toggle the bar with a global shortcut Toggle bar Record Clear
-                Behavior Automatically re-hide Re-hide after Reveal on hover Reveal on scroll or swipe
-                Notch Make room near the notch Never When needed Menu bar spacing
-                Reduce menu bar item spacing Selection padding Reset to system default
-                Backup Layout file Export Import startup keyboard hotkey mouse auto-rehide delay
+                Launch at login Permissions Accessibility Screen Recording
+                Menu bar spacing Reduce menu bar item spacing Selection padding Reset to system default
+                Backup Layout file Export Import startup
                 """
             case .items:
                 """
@@ -58,7 +59,26 @@ struct SettingsView: View {
                 """
                 Style the menu bar Tint color Gradient end color Opacity Shape Full Rounded Pill
                 Corner radius Border width Border color Shadow Preview Reset Style
-                styles styling appearance colour transparency background
+                Icons Menu bar icon App icon symbol theme appearance styles styling colour transparency background
+                """
+                    + " " + AppIconChoice.MenuBarSymbol.allCases.map(\.displayName).joined(separator: " ")
+                    + " " + AppIconChoice.AppTheme.allCases.map(\.displayName).joined(separator: " ")
+            case .behavior:
+                """
+                Hidden items Show hidden items in a floating bar Floating bar style Horizontal strip Vertical list
+                Dismiss the bar when the pointer leaves it
+                Behavior Automatically re-hide Re-hide after Reveal on hover Reveal on scroll or swipe
+                mouse auto-rehide delay
+                """
+            case .placement:
+                """
+                Layout mode On-Demand Live re-apply after apps launch or quit pointer idle
+                Notch Make room near the notch Never When needed tuck shown items
+                """
+            case .shortcuts:
+                """
+                Shortcuts Item shortcuts Toggle the bar with a global shortcut Toggle bar Record Clear
+                keyboard hotkey
                 """
             case .presets:
                 "Layout Presets New preset name Save Current Layout Rename Apply Update from Current Delete profiles arrangements"
@@ -102,7 +122,7 @@ struct SettingsView: View {
         // A constant visibility plus no toggle keeps the sidebar, the only pane switcher, on screen.
         NavigationSplitView(columnVisibility: .constant(.all)) {
             // toolbar(removing:) must sit inside the width modifier; outside it, the width is lost.
-            SettingsSidebar(selection: $selectedTab, searchText: $searchText)
+            SettingsSidebar(selection: $selectedTab, searchText: $searchText, appTheme: model.preferences.appIcon.appTheme)
                 .toolbar(removing: .sidebarToggle)
                 .navigationSplitViewColumnWidth(Self.sidebarWidth)
         } detail: {
@@ -136,11 +156,14 @@ struct SettingsView: View {
         switch selectedTab {
         case .general: GeneralSettingsTab(model: model)
         case .items: ItemsSettingsTab(model: model)
+        case .style: StyleSettingsTab(model: model)
+        case .behavior: BehaviorSettingsTab(model: model)
+        case .placement: PlacementSettingsTab(model: model)
+        case .shortcuts: ShortcutsSettingsTab(model: model)
         case .presets: PresetsSettingsTab(model: model)
         case .triggers: TriggersSettingsTab(model: model)
         case .groups: GroupsSettingsTab(model: model)
         case .widgets: WidgetsSettingsTab(model: model)
-        case .style: StyleSettingsTab(model: model)
         }
     }
 
@@ -163,6 +186,24 @@ private struct GeneralSettingsTab: View {
 
             PermissionsSection(model: model)
 
+            // System-wide and logout-gated like Launch at login, so it sits with the other machine settings.
+            SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)
+
+            BackupSettingsSection(model: model)
+        }
+        .formStyle(.grouped)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-general-content")
+    }
+}
+
+// MARK: - Behavior tab
+
+private struct BehaviorSettingsTab: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Form {
             Section("Hidden items") {
                 Toggle("Show hidden items in a floating bar", isOn: $model.preferences.useFloatingBar)
                 if model.preferences.useFloatingBar {
@@ -174,10 +215,6 @@ private struct GeneralSettingsTab: View {
                     Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
                 }
             }
-
-            LayoutModeSettingsSection(model: model)
-
-            ShortcutsSettingsSection(model: model, failures: model.hotkeyRegistrationFailures)
 
             Section("Behavior") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
@@ -206,26 +243,62 @@ private struct GeneralSettingsTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            NotchSettingsSection(model: model, mode: $model.preferences.notchOverflow)
-
-            SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)
-
-            BackupSettingsSection(model: model)
-
             Section {
-                // A plain full-width row, not a LabeledContent: a "Tip" label would claim the
-                // leading column and squeeze this sentence into a narrow trailing one, wrapping it
-                // into ragged lines. Spanning the row lets it sit on one line (or wrap cleanly to
-                // two if the window is narrow). fixedSize(vertical) lets it grow to whatever height
-                // the wrapped text needs instead of being clipped to one line.
+                // A label column would squeeze the tip; a full-width row can wrap without clipping.
                 Text("Tip: click the menu bar anchor to reveal hidden items, or right-click it to open settings.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings-behavior-tip")
             }
         }
         .formStyle(.grouped)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-behavior-content")
+    }
+}
+
+// MARK: - Placement tab
+
+/// Where items physically go: when saved placement is re-applied, and whether shown items make
+/// room near the notch. Distinct from Behavior (how the bar reveals) and Items (which items go where).
+private struct PlacementSettingsTab: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Form {
+            LayoutModeSettingsSection(model: model)
+
+            NotchSettingsSection(model: model, mode: $model.preferences.notchOverflow)
+        }
+        .formStyle(.grouped)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-placement-content")
+        // Both sections warn when Accessibility is missing; the probe lives in General's pane, so
+        // this pane refreshes it too or a stale "Not granted" warning would show here.
+        .onAppear { model.refreshPermissions() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                model.refreshPermissions()
+            }
+        }
+    }
+}
+
+// MARK: - Shortcuts tab
+
+private struct ShortcutsSettingsTab: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        Form {
+            ShortcutsSettingsSection(model: model, failures: model.hotkeyRegistrationFailures)
+        }
+        .formStyle(.grouped)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-shortcuts-content")
     }
 }
 
@@ -444,7 +517,8 @@ struct ItemsSettingsContent: View {
             style: model.preferences.floatingBarStyle,
             useFloatingBar: model.preferences.useFloatingBar,
             hasPendingChanges: model.hasPendingChanges,
-            placementInProgress: model.placementInProgress
+            placementInProgress: model.placementInProgress,
+            anchorSymbol: model.preferences.appIcon.menuBarSymbol
         )
     }
 

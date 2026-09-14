@@ -76,7 +76,6 @@ struct LayoutModeSettingsSectionTests {
         #expect(!isSelected(try radio("Live", in: view)))
 
         let content = text(in: view)
-        #expect(content.contains("Placement"))
         #expect(content.contains("Layout mode"))
         #expect(content.contains("On-Demand applies your saved Shown/Hidden placement at launch, when you Apply Changes, and when displays change."))
         #expect(content.contains("Live also re-applies it after apps launch or quit."))

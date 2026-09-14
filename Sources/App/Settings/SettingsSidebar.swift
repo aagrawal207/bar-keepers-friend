@@ -7,12 +7,13 @@ import SwiftUI
 struct SettingsSidebar: View {
     @Binding var selection: SettingsView.Tab
     @Binding var searchText: String
+    var appTheme: AppIconChoice.AppTheme = .ocean
 
     private var tabs: [SettingsView.Tab] { SettingsView.Tab.matching(searchText) }
 
     var body: some View {
         VStack(spacing: 0) {
-            AppIdentityHeader()
+            AppIdentityHeader(theme: appTheme)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-identity-header")
             SettingsSearchField(text: $searchText) {
@@ -121,12 +122,16 @@ private struct SettingsSearchField: NSViewRepresentable {
 /// Icon, name, and version at the top of the sidebar. Keeping the identity out of the detail
 /// column leaves that column's full height to the selected pane.
 private struct AppIdentityHeader: View {
+    let theme: AppIconChoice.AppTheme
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(nsImage: NSApp.applicationIconImage)
+            Image(nsImage: AppIconRenderer.appImage(theme, size: 96))
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 48, height: 48)
+                .accessibilityLabel("App icon, \(theme.displayName) theme")
+                .accessibilityIdentifier("settings-identity-icon")
             VStack(alignment: .leading, spacing: 1) {
                 Text(Self.appName)
                     .font(.headline)

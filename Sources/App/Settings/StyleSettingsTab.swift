@@ -61,12 +61,14 @@ struct StyleSettingsTab: View {
 
     var body: some View {
         Form {
+            AppIconSettingsSection(model: model)
+
             Section("Menu bar style") {
                 Toggle("Style the menu bar", isOn: committed.isEnabled)
                     .accessibilityIdentifier("settings-style-enabled")
 
                 if displayed.isEnabled {
-                    // Related controls share rows so the whole tab fits the window without scrolling.
+                    // Related controls share rows to keep the style section compact.
                     LabeledContent("Tint") {
                         HStack(spacing: 12) {
                             ColorPicker("Tint color", selection: colorBinding(\.tint), supportsOpacity: false)
@@ -138,7 +140,7 @@ struct StyleSettingsTab: View {
 
             Section("Preview") {
                 MenuBarStylePreview(style: displayed)
-                Text("Bar Keeper's Friend paints this style itself, behind the menu bar. It needs no permissions and does not change the menu bar's text or icons. If nothing changes on screen, turn off \"Show menu bar background\" in System Settings > Menu Bar.")
+                Text("Bar Keeper's Friend paints this style itself, behind the menu bar. It needs no permissions and does not change the menu bar's text or icons. If nothing changes on screen, turn off \"Show menu bar background\" in System Settings > Menu Bar. The app icon above changes in Settings, About, and alerts; the installed icon in Finder stays as shipped.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -155,6 +157,95 @@ struct StyleSettingsTab: View {
 
     static func points(_ value: Double) -> String {
         "\(Int(value.rounded())) pt"
+    }
+}
+
+/// BKF's own artwork. Each choice writes preferences once; nothing here reads or moves menu bar items.
+struct AppIconSettingsSection: View {
+    @Bindable var model: SettingsModel
+
+    private var choice: AppIconChoice { model.preferences.appIcon }
+
+    /// Re-selecting the current value must not persist and re-apply an unchanged icon.
+    private var menuBarSymbol: Binding<AppIconChoice.MenuBarSymbol> { Self.menuBarSymbolBinding(model) }
+
+    /// The picker's binding, shared with tests because a pop-up's menu items are not reachable off screen.
+    static func menuBarSymbolBinding(_ model: SettingsModel) -> Binding<AppIconChoice.MenuBarSymbol> {
+        Binding(
+            get: { model.preferences.appIcon.menuBarSymbol },
+            set: { symbol in
+                guard symbol != model.preferences.appIcon.menuBarSymbol else { return }
+                model.preferences.appIcon.menuBarSymbol = symbol
+            }
+        )
+    }
+
+    private func select(theme: AppIconChoice.AppTheme) {
+        guard theme != model.preferences.appIcon.appTheme else { return }
+        model.preferences.appIcon.appTheme = theme
+    }
+
+    var body: some View {
+        Section("Icons") {
+            // One row: the pop-up is narrow and five 28pt swatches fit beside it, which keeps the
+            // richest Style pane inside the window without scrolling.
+            LabeledContent("Menu bar icon") {
+                HStack(spacing: 16) {
+                    Picker("Menu bar icon", selection: menuBarSymbol) {
+                        ForEach(AppIconChoice.MenuBarSymbol.allCases) { symbol in
+                            Label(symbol.displayName, systemImage: symbol.systemName)
+                                .tag(symbol)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("Menu bar icon")
+                    .accessibilityIdentifier("settings-icon-menu-bar")
+                    Spacer(minLength: 8)
+                    // The swatch group carries the accessible name; this caption is visual only.
+                    Text("App icon")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    HStack(spacing: 8) {
+                        ForEach(AppIconChoice.AppTheme.allCases) { theme in
+                            AppThemeSwatch(theme: theme, isSelected: theme == choice.appTheme) {
+                                select(theme: theme)
+                            }
+                        }
+                    }
+                    .help("The app icon changes in Settings, About, and alerts. The installed icon in Finder stays as shipped.")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("App icon")
+                    .accessibilityIdentifier("settings-icon-app-theme")
+                }
+            }
+        }
+    }
+}
+
+private struct AppThemeSwatch: View {
+    let theme: AppIconChoice.AppTheme
+    let isSelected: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            Image(nsImage: AppIconRenderer.appImage(theme, size: 96))
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(theme.displayName)
+        .accessibilityLabel("\(theme.displayName) app icon")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("settings-icon-app-theme-\(theme.rawValue)")
     }
 }
 
