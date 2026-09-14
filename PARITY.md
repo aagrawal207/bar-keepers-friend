@@ -1,6 +1,6 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-13. Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-14. Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
@@ -40,14 +40,14 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 | Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
 | Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings/onboarding | Sidebar layout (820x720), staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Settings/onboarding | Sidebar layout (820x720), Settings search, Style directly below Items, staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
 | Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
 ## Deliberate Differences
 
 - macOS 26 only; no older-macOS compatibility layer.
-- Search and visible section dividers remain removed at the user's request.
+- Menu-bar search and visible section dividers remain removed. Settings-only navigation search is available.
 - Hover was previously removed; its new opt-in implementation follows the user's explicit request.
 - Bartender Pro's additional shelf/media/calendar/file utilities are outside the menu-bar-manager
   scope unless requested separately.
@@ -84,6 +84,37 @@ path including quit).
 
 No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
 is the acceptance checklist before any of these is described as working on a real menu bar.
+
+## Settings Search Verification
+
+On 2026-09-14 the user requested search within Settings and Style directly below Items. A native
+`NSSearchField` sits below the sidebar identity. It filters pages by their names and static setting
+keywords, including controls hidden behind disabled options. All query words must match; matching
+ignores case/accents and ranks page-name matches first. It does not filter individual menu-bar item
+names or scroll directly to a control. The normal order is General, Items, Style, Presets, Triggers,
+Groups, Widgets; tab identifiers are unchanged.
+
+Typing does not navigate or remount the current pane. Activating a result or pressing Return selects
+a page and clears the query; Return with blank text or no match does nothing. Escape, the native clear
+button, and external tab requests also clear it. Return/Escape defer to the input method during marked
+text composition. Search history is disabled, and query state is session-only.
+
+Full build/test: 1161 tests across 82 suites, 1847 invocations, zero failures or skips. Strict code
+signature verification passed. Independent review found no remaining issues after fixing activation
+of an already-selected result and adding input-method/event-ordering coverage.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Sidebar order/identifiers, page-name ranking, keywords, empty/no matches, case/accents/whitespace, trigger/widget action labels | `SettingsSidebarTests` | Unit |
+| Native field bounds and full-pane fit in light/dark; rendered Style-after-Items order | `SettingsSearchTests`, existing `SettingsSidebarTests` layout assertions | Hostless rendering |
+| Field-editor typing, native List selection, result activation, Return, clear/Escape, external tab requests, marked text and immediate submission | `SettingsSearchTests` | Hostless interaction |
+| Mounted Items, cached rows/images, mixed placement draft, unchanged preference-write/retry/item-provider counts while typing | `SettingsSearchTests` | Hostless integration |
+
+This adds 16 tests / 58 cases. No placement, capture, attribution, global shortcut, persistence key,
+telemetry, or background search work was added. Explicit page selection retains that page's existing
+lifecycle reads. Test windows never order on screen or post input. Live pointer feel, VoiceOver, and
+real input-method handoff remain native QA, not claims established by off-screen tests.
+Automated security scanners were unavailable; the diff received manual security review.
 
 ## Apply Reliability Verification
 

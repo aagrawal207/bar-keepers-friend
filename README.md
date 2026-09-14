@@ -27,6 +27,8 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
   a capture/reveal pass; hover waits for an already-active capture to finish.
 - **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
   Disabled items remain dimmed and non-interactive.
+- **Settings search** filters pages by name and setting keywords without changing your settings.
+  Style sits directly below Items in the sidebar. This does not restore the removed menu-bar search.
 - **Bartender 6 feature set (2026-09-13):** presets, triggers (battery, charging, low power, Wi-Fi,
   frontmost app, external display, time/weekday), groups, widgets, menu bar styling, item spacing,
   scroll/swipe reveal, an Always Hidden tier (Option-click reveals it), Live layout mode, a shortcut
@@ -124,7 +126,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 1145 tests in 81 suites (1789 invocations including parameterized cases).
+It currently contains 1161 tests in 82 suites (1847 invocations including parameterized cases).
 
 ## Credit
 

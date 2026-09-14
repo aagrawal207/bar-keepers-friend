@@ -6,7 +6,7 @@ import SwiftUI
 struct SettingsView: View {
     /// Raw values are sidebar accessibility identifiers; the cases are the window controller's API.
     enum Tab: String, CaseIterable, Identifiable {
-        case general, items, presets, triggers, groups, widgets, style
+        case general, items, style, presets, triggers, groups, widgets
 
         var id: Self { self }
 
@@ -33,6 +33,56 @@ struct SettingsView: View {
             case .style: "paintpalette"
             }
         }
+
+        // Include conditional controls without mounting panes or reading the menu bar to index them.
+        private var searchTerms: String {
+            switch self {
+            case .general:
+                """
+                Launch at login Permissions Accessibility Screen Recording Hidden items
+                Show hidden items in a floating bar Floating bar style Horizontal strip Vertical list
+                Dismiss the bar when the pointer leaves it Placement Layout mode On-Demand Live
+                Shortcuts Item shortcuts Toggle the bar with a global shortcut Toggle bar Record Clear
+                Behavior Automatically re-hide Re-hide after Reveal on hover Reveal on scroll or swipe
+                Notch Make room near the notch Never When needed Menu bar spacing
+                Reduce menu bar item spacing Selection padding Reset to system default
+                Backup Layout file Export Import startup keyboard hotkey mouse auto-rehide delay
+                """
+            case .items:
+                """
+                Arrange Menu Bar Items Hidden Shown Always Hidden Placement Display name Show in bar
+                Move earlier Move later Hide All Show All Apply Changes Discard Retry Retry Reading
+                Placement Preview After Apply Last Observed apps applications alias aliases nickname rename order
+                """
+            case .style:
+                """
+                Style the menu bar Tint color Gradient end color Opacity Shape Full Rounded Pill
+                Corner radius Border width Border color Shadow Preview Reset Style
+                styles styling appearance colour transparency background
+                """
+            case .presets:
+                "Layout Presets New preset name Save Current Layout Rename Apply Update from Current Delete profiles arrangements"
+            case .triggers:
+                TriggerCondition.Kind.allCases.map(\.displayName).joined(separator: " ")
+                    + " Add Rule Edit Rule Rule name Conditions Apply preset Add Condition Remove Condition Save Delete"
+                    + " automatic automation percentage wifi network connected not connection application bundle monitor screen weekdays schedule"
+            case .groups:
+                "Item Groups New group name Create Group Rename Delete members membership add move remove apps applications"
+            case .widgets:
+                WidgetAction.Kind.allCases.map(\.displayName).joined(separator: " ")
+                    + " Add Widget Edit Widget Name Symbol SF Symbol name Action Link Choose App Bundle identifier Shortcut name Save Delete"
+                    + " custom menu bar icon url http https mail email application shortcuts"
+            }
+        }
+
+        static func matching(_ query: String) -> [Self] {
+            let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+            func containsWords(_ text: String) -> Bool {
+                words.allSatisfy { text.localizedStandardContains($0) }
+            }
+            let matches = allCases.filter { containsWords("\($0.title) \($0.searchTerms)") }
+            return matches.filter { containsWords($0.title) } + matches.filter { !containsWords($0.title) }
+        }
     }
 
     static let windowSize = CGSize(width: 820, height: 720)
@@ -41,6 +91,7 @@ struct SettingsView: View {
 
     @Bindable var model: SettingsModel
     @State private var selectedTab: Tab
+    @State private var searchText = ""
 
     init(model: SettingsModel, initialTab: Tab = .general) {
         self.model = model
@@ -51,7 +102,7 @@ struct SettingsView: View {
         // A constant visibility plus no toggle keeps the sidebar, the only pane switcher, on screen.
         NavigationSplitView(columnVisibility: .constant(.all)) {
             // toolbar(removing:) must sit inside the width modifier; outside it, the width is lost.
-            SettingsSidebar(selection: $selectedTab)
+            SettingsSidebar(selection: $selectedTab, searchText: $searchText)
                 .toolbar(removing: .sidebarToggle)
                 .navigationSplitViewColumnWidth(Self.sidebarWidth)
         } detail: {
@@ -95,6 +146,7 @@ struct SettingsView: View {
 
     private func consumeRequestedTab() {
         guard let tab = model.requestedTab else { return }
+        searchText = ""
         selectedTab = tab
         model.requestedTab = nil
     }

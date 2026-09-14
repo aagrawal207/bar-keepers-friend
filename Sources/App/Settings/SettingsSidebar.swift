@@ -6,23 +6,47 @@ import SwiftUI
 /// It is the only way to switch panes, so the window never lets it collapse.
 struct SettingsSidebar: View {
     @Binding var selection: SettingsView.Tab
+    @Binding var searchText: String
+
+    private var tabs: [SettingsView.Tab] { SettingsView.Tab.matching(searchText) }
 
     var body: some View {
         VStack(spacing: 0) {
             AppIdentityHeader()
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-identity-header")
+            SettingsSearchField(text: $searchText) {
+                guard searchText.contains(where: { !$0.isWhitespace }), let tab = tabs.first else { return }
+                select(tab)
+            }
+            .frame(height: 24)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
             List(selection: listSelection) {
-                ForEach(SettingsView.Tab.allCases) { tab in
-                    Label(tab.title, systemImage: tab.systemImage)
-                        // VoiceOver and hostless tests switch panes by pressing a row, not only
-                        // through native table selection.
-                        .accessibilityAction { selection = tab }
-                        .accessibilityIdentifier("settings-sidebar-\(tab.rawValue)")
-                        .tag(tab)
+                ForEach(tabs) { tab in
+                    // Activating the current pane must work without a selection-change notification.
+                    Button { select(tab) } label: {
+                        Label(tab.title, systemImage: tab.systemImage)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("settings-sidebar-\(tab.rawValue)")
+                    .tag(tab)
                 }
             }
             .listStyle(.sidebar)
+            .overlay {
+                if tabs.isEmpty {
+                    Text("No matching settings")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(16)
+                        .accessibilityIdentifier("settings-search-empty")
+                }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-sidebar")
@@ -30,7 +54,67 @@ struct SettingsSidebar: View {
 
     /// Command-clicking the selected row deselects in a List; the detail must always show a pane.
     private var listSelection: Binding<SettingsView.Tab?> {
-        Binding(get: { selection }, set: { if let tab = $0 { selection = tab } })
+        Binding(get: { selection }, set: { if let tab = $0 { select(tab) } })
+    }
+
+    private func select(_ tab: SettingsView.Tab) {
+        searchText = ""
+        selection = tab
+    }
+}
+
+// SwiftUI searchable reserves window chrome; this native field stays within the sidebar's layout.
+private struct SettingsSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search Settings"
+        field.setAccessibilityLabel("Search Settings")
+        field.setAccessibilityIdentifier("settings-search")
+        field.controlSize = .small
+        field.maximumRecents = 0
+        field.sendsSearchStringImmediately = true
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.changed(_:))
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text {
+            field.stringValue = text
+            field.currentEditor()?.string = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    @MainActor
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var parent: SettingsSearchField
+
+        init(parent: SettingsSearchField) { self.parent = parent }
+
+        @objc func changed(_ field: NSSearchField) { parent.text = field.stringValue }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+            // Return and Escape belong to the input method while it is composing text.
+            guard !textView.hasMarkedText() else { return false }
+            switch command {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.text = textView.string
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.text = ""
+                return true
+            default:
+                return false
+            }
+        }
     }
 }
 

@@ -18,13 +18,51 @@ struct SettingsSidebarTests {
     ]
 
     @Test func tabsExposeStableIdentifiersTitlesAndSymbols() {
-        #expect(SettingsView.Tab.allCases == [.general, .items, .presets, .triggers, .groups, .widgets, .style])
-        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "presets", "triggers", "groups", "widgets", "style"])
-        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Presets", "Triggers", "Groups", "Widgets", "Style"])
+        #expect(SettingsView.Tab.allCases == [.general, .items, .style, .presets, .triggers, .groups, .widgets])
+        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "style", "presets", "triggers", "groups", "widgets"])
+        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Style", "Presets", "Triggers", "Groups", "Widgets"])
         for tab in SettingsView.Tab.allCases {
             #expect(tab.id == tab)
             #expect(NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil) != nil, "\(tab) needs a real SF Symbol")
         }
+    }
+
+    @Test(arguments: ["", " \n\t "])
+    func emptySearchShowsTheCompleteSidebarInOrder(query: String) {
+        #expect(SettingsView.Tab.matching(query) == SettingsView.Tab.allCases)
+    }
+
+    @Test(arguments: SettingsView.Tab.allCases)
+    func pageNamesRankTheirOwnPaneFirst(tab: SettingsView.Tab) {
+        #expect(SettingsView.Tab.matching(tab.title).first == tab)
+    }
+
+    @Test(arguments: [
+        ("hover", SettingsView.Tab.general), ("screen recording", .general), ("keyboard shortcut", .general),
+        ("Shortcuts", .general), ("Show hidden items in a floating bar", .general),
+        ("Dismiss the bar when the pointer leaves it", .general), ("Reset to system default", .general),
+        ("spacing", .general), ("apply changes", .items), ("always hidden", .items), ("aliases", .items),
+        ("opacity", .style), ("gradient", .style), ("styles", .style), ("save layout", .presets),
+        ("low power", .triggers), ("Wi-Fi", .triggers), ("membership", .groups), ("email", .widgets),
+    ])
+    func searchFindsSettingsWithinTheirPane(query: String, expected: SettingsView.Tab) {
+        #expect(SettingsView.Tab.matching(query).contains(expected))
+    }
+
+    @Test(arguments: TriggerCondition.Kind.allCases)
+    func everyTriggerConditionLabelIsSearchable(kind: TriggerCondition.Kind) {
+        #expect(SettingsView.Tab.matching(kind.displayName).contains(.triggers))
+    }
+
+    @Test(arguments: WidgetAction.Kind.allCases)
+    func everyWidgetActionLabelIsSearchable(kind: WidgetAction.Kind) {
+        #expect(SettingsView.Tab.matching(kind.displayName).contains(.widgets))
+    }
+
+    @Test func searchIgnoresCaseAccentsAndWhitespaceButRequiresEveryWord() {
+        #expect(SettingsView.Tab.matching("  OP\u{00C1}CITY\n border\t") == [.style])
+        #expect(SettingsView.Tab.matching("opacity charging").isEmpty)
+        #expect(SettingsView.Tab.matching("no-such-setting").isEmpty)
     }
 
     @Test(arguments: SettingsView.Tab.allCases, [ColorScheme.light, .dark])

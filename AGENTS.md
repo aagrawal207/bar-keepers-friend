@@ -35,9 +35,13 @@ notch make-room, Settings sidebar, export/login feedback). Every feature is host
 existing seams and defaults to today's behavior; the native QA list below is what still separates
 "feature shipped" from "feature verified". Do not describe any of them as hardware-verified.
 
-Current focus (2026-09-13): the user requested Items Apply Changes reliability only, not further
+Prior focus (2026-09-13): the user requested Items Apply Changes reliability only, not further
 parity expansion. The native grab/drop sequencing defect below is fixed and verified for Alfred and
 ACME on the built-in display. Other native layouts still need evidence; do not broaden this claim.
+
+Current focus (2026-09-14): the user explicitly requested Settings search and moving Style directly
+below Items. Search is Settings-only; the removed menu-bar Search panel and its global hotkey stay
+removed. The Apply Changes safety and persistence constraints still apply.
 
 ## Loop charter (read first if you are an automated loop fire)
 
@@ -66,7 +70,7 @@ this fire; top blocked items are X, Y — need hardware QA / user input") and **
 - **Do not change the attribution label or any persistence key.** The owner-label string is the key
   for Hidden/Shown intent (`ItemControlStore`) and aliases (`ItemAliasStore`); changing how a key is
   formed silently evaporates every user's saved config. This is the scariest landmine here.
-- **Do not re-add removed features** (search or visible section dividers) without an explicit
+- **Do not re-add removed features** (menu-bar search or visible section dividers) without an explicit
   request. Hover reveal has fresh user approval; see Current direction. Historical plans are not
   current requirements; AGENTS.md is the source of truth.
 - **Do not weaken, skip, or delete a test to get green.** A failing test is a finding, not an
@@ -115,8 +119,8 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1145 tests, 81 suites**, 1789 invocations including
-  parameterized cases). Last full build/test: 2026-09-13, macOS 26.6.2 / Xcode 26.6, zero failures
+- Test: same command with `test` (currently **1161 tests, 82 suites**, 1847 invocations including
+  parameterized cases). Last full build/test: 2026-09-14, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
@@ -264,6 +268,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **Hide All / Show All** stage all applicable owner choices in the same draft, including explicit
   choices for unknown placement. Buttons disable only when staging would be a no-op. One Apply
   submits the whole mixed-direction batch through the existing serialized reconciliation.
+- **Settings search (2026-09-14, matching + hostless interaction-tested).** A native search field
+  below the sidebar identity filters pages by their names and setting keywords, including disabled
+  controls. Matching ignores case/accents, requires every word, and ranks page-name matches first.
+  Typing keeps the current pane mounted and preserves Items drafts without extra item reads or writes.
+  Result buttons, including the current page, and Return navigate and clear the query; blank/unmatched
+  Return does nothing. Escape, the clear button, and external tab requests clear search. Marked-text
+  commands remain with the input method. Query history is disabled. This is not item-name filtering,
+  a jump to an individual control, or the removed global Search feature. Style is directly below Items;
+  the 180pt sidebar and 820x720 window still fit. See `PARITY.md` for tests and native QA limits.
 - **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
   menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
   sparkle, on a teal→blue squircle — the Bar Keepers Friend pun). Rendered by `Scripts/render_icon.swift`
@@ -330,14 +343,14 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     before every collapse (toggle, activation rehide, auto-rehide, Option-click, pause, reconcile,
     and quit via `applicationShouldTerminate` -> `.terminateLater`). Never overlaps a placement batch.
   - **Settings sidebar**: `NavigationSplitView` with a fixed 180pt sidebar (identity header at top)
-    and a titled detail pane; window 820x720. Tabs: General, Items, Presets, Triggers, Groups,
-    Widgets, Style. `SettingsView(model:initialTab:)` and `requestedTab` unchanged.
+    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Presets, Triggers, Groups,
+    Widgets. `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
   - **Export/login feedback**: export distinguishes cancel from write failure; Launch at login shows
     requires-approval / not-registered notes with an "Open Login Items..." deep link.
 
 ## Removed (intentionally — don't re-add without asking)
 
-- **Search panel** + its ⌥⌘F hotkey — user found it confusing.
+- **Menu-bar Search panel** + its ⌥⌘F hotkey — user found it confusing. Settings-only search is separate.
 - **"Show section dividers"** toggle — divider is now an invisible mechanism only.
 - **Previous reveal-on-hover implementation** - removed because the user did not want it and its
   off switch did not fully stop it. The replacement explicitly requested on 2026-09-11 is opt-in
@@ -951,7 +964,7 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   in place; a signed feed and installer are the remaining distribution work.
 - **Per-Space / per-display styles and presets.** Bartender applies styles per menu bar; BKF uses
   one style and one arrangement for all displays.
-- **Search** stays removed at the user's request (see Removed).
+- **Menu-bar search** stays removed at the user's request (see Removed); Settings search is built.
 - **Settings polish that needs the user's eye:** section spacing/footnotes and an About area; the
   sidebar shipped 2026-09-13 and the previous "tab strip" TODO is closed.
 - **Restart / Check for Updates** shipped 2026-09-12 (anchor menu); the earlier "Rich anchor menu"
