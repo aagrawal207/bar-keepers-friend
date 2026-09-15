@@ -75,12 +75,14 @@ final class SystemWindowServer: WindowServer, @unchecked Sendable {
             let pid = (info[kCGWindowOwnerPID as String] as? pid_t) ?? -1
             let ownerName = info[kCGWindowOwnerName as String] as? String
             let title = info[kCGWindowName as String] as? String
+            let isOnScreen = (info[kCGWindowIsOnscreen as String] as? Bool) ?? false
             return MenuBarItemSnapshot(
                 windowID: windowID,
                 ownerPID: pid,
                 ownerBundleID: ownerName, // best-effort; refined during click-routing step
                 title: title,
-                frame: frame
+                frame: frame,
+                isOnScreen: isOnScreen
             )
         }
         return snapshots

@@ -128,7 +128,10 @@ final class AppCoordinator {
         bar.onNeedsAccessibility = { AccessibilityPermission.requestAndOpenSettings() }
         bar.onDidHide = { [weak engine, weak hover] in
             hover?.relinquishForManualInteraction()
-            Task { @MainActor in engine?.resumePendingPlacement() }
+            Task { @MainActor in
+                engine?.resumePendingPlacement()
+                engine?.refreshFloatingBarCacheIfStale()
+            }
         }
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main

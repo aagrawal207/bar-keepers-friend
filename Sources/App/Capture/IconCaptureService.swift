@@ -18,8 +18,8 @@ import ScreenCaptureKit
 @MainActor
 final class IconCaptureService {
 
-    /// Whether Screen Recording appears granted. `CGPreflightScreenCaptureAccess` only
-    /// reflects launch-time state, so a run of empty captures is also treated as a lapse.
+    /// Whether Screen Recording appears granted. `CGPreflightScreenCaptureAccess` reflects the
+    /// TCC grant only; an empty capture says nothing about permission (see `MenuBarVisibility`).
     nonisolated var hasScreenRecordingAccess: Bool {
         CGPreflightScreenCaptureAccess()
     }
@@ -35,11 +35,11 @@ final class IconCaptureService {
     }
 
     /// Captures images for the given items by cropping a single full-display capture, returning
-    /// window id → image for those that succeeded. Only items currently on-screen
-    /// (`frame.minX >= 0`) can be captured.
+    /// window id → image for those that succeeded. Only items currently drawn on screen can be
+    /// captured; a hidden menu bar leaves every item enumerable but photographs its cover.
     func captureIcons(for items: [MenuBarItemSnapshot]) async -> [CGWindowID: CGImage] {
         guard !Task.isCancelled else { return [:] }
-        let onScreen = items.filter { $0.frame.minX >= 0 }
+        let onScreen = items.filter { $0.frame.minX >= 0 && $0.isOnScreen }
         guard !onScreen.isEmpty else { return [:] }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
               !content.displays.isEmpty else { return [:] }
@@ -48,6 +48,11 @@ final class IconCaptureService {
         let probe = onScreen.first.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) }
         let display = displayContaining(probe, in: content.displays) ?? content.displays[0]
         let displayBounds = CGDisplayBounds(display.displayID)
+        let dumpDiagnostics = ProcessInfo.processInfo.environment["BKF_DUMP_CROPS"] != nil
+        if dumpDiagnostics {
+            let displays = content.displays.map { "\($0.displayID)=\(Int($0.width))x\(Int($0.height))@\(CGDisplayBounds($0.displayID).origin)" }
+            DebugLog.log("capture: shareable displays [\(displays.joined(separator: ","))]; chosen \(display.displayID)")
+        }
 
         // Our own style overlay sits behind the bar; captured, its tint would defeat the luma keying.
         let excluded = content.windows.filter {
@@ -58,6 +63,7 @@ final class IconCaptureService {
             return [:]
         }
         guard !Task.isCancelled else { return [:] }
+        if dumpDiagnostics { dumpFullFrame(full) }
 
         // Derive the scale from the returned image rather than assuming 2x: external displays
         // can be 1x and some panels aren't exactly 2x. This keeps crops pixel-accurate.
@@ -76,7 +82,7 @@ final class IconCaptureService {
             ).integral
             let crop = cropPoints.intersection(imageBounds)
             guard !crop.isEmpty, let cropped = full.cropping(to: crop) else { continue }
-            if ProcessInfo.processInfo.environment["BKF_DUMP_CROPS"] != nil {
+            if dumpDiagnostics {
                 dumpRawCrop(cropped, windowID: item.windowID)
             }
             // Key out the wallpaper background and trim to the glyph. A nil result means the
@@ -150,6 +156,41 @@ final class IconCaptureService {
             return "(\(r/w),\(g/w),\(b/w))"
         }
         DebugLog.log("crop \(windowID) \(w)x\(h): row0=\(meanRow(0)) rowMid=\(meanRow(h/2)) rowLast=\(meanRow(h-1))")
+    }
+
+    /// Writes a quarter-size copy of the whole display capture plus per-band brightness, so a black
+    /// strip can be told apart from a black frame without seeing the screen. Gated behind BKF_DUMP_CROPS.
+    private func dumpFullFrame(_ image: CGImage) {
+        let logs = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs", isDirectory: true)
+        let w = image.width / 4, h = image.height / 4
+        guard w > 0, h > 0 else { return }
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.interpolationQuality = .low
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        if let small = ctx.makeImage(),
+           let data = NSBitmapImageRep(cgImage: small).representation(using: .png, properties: [:]) {
+            try? data.write(to: logs.appendingPathComponent("BKF-full.png"))
+        }
+        // Bitmap rows run top-down, so band 0 is the menu bar strip.
+        func meanLuma(rows: Range<Int>) -> Int {
+            var sum = 0, n = 0
+            for y in rows where y < h {
+                for x in 0..<w {
+                    let p = (y * w + x) * 4
+                    sum += (299 * Int(px[p]) + 587 * Int(px[p + 1]) + 114 * Int(px[p + 2])) / 1000
+                    n += 1
+                }
+            }
+            return n == 0 ? 0 : sum / n
+        }
+        let strip = meanLuma(rows: 0..<max(1, h / 40))
+        let upper = meanLuma(rows: h / 40..<h / 2)
+        let lower = meanLuma(rows: h / 2..<h)
+        DebugLog.log("capture: full frame \(image.width)x\(image.height) mean luma strip=\(strip) upper=\(upper) lower=\(lower)")
     }
 
     // MARK: - Background keying

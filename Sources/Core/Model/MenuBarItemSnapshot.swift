@@ -27,18 +27,24 @@ public struct MenuBarItemSnapshot: Equatable, Hashable, Sendable, Codable {
     /// The item's frame in global (screen) coordinates.
     public let frame: CGRect
 
+    /// `kCGWindowIsOnscreen`: false for an item pushed past its display's edge, and for every item
+    /// while the menu bar itself is hidden (a fullscreen Space, auto-hide). Frames stay valid then.
+    public let isOnScreen: Bool
+
     public init(
         windowID: CGWindowID,
         ownerPID: pid_t,
         ownerBundleID: String? = nil,
         title: String? = nil,
-        frame: CGRect
+        frame: CGRect,
+        isOnScreen: Bool = true
     ) {
         self.windowID = windowID
         self.ownerPID = ownerPID
         self.ownerBundleID = ownerBundleID
         self.title = title
         self.frame = frame
+        self.isOnScreen = isOnScreen
     }
 }
 
@@ -66,7 +72,8 @@ public extension MenuBarItemSnapshot {
             ownerPID: pid,
             ownerBundleID: bundleID ?? ownerBundleID,
             title: title,
-            frame: frame
+            frame: frame,
+            isOnScreen: isOnScreen
         )
     }
 }

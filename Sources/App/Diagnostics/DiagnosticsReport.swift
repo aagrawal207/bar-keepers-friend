@@ -8,6 +8,8 @@ import BarKeepersFriendCore
 struct DiagnosticsReport: Codable, Sendable {
     var generatedAt: String
     var anchorMinX: Double
+    /// "visible", "hidden" (fullscreen Space or auto-hide), or "unknown" (no anchor found).
+    var menuBarVisibility: String = "unknown"
     var items: [Item]
 
     struct Item: Codable, Sendable {
@@ -17,6 +19,9 @@ struct DiagnosticsReport: Codable, Sendable {
         var ownerPID: Int32
         var rawTitle: String?
         var frame: [Double]            // [x, y, w, h]
+        var isOnScreen: Bool
+        /// Whether the cache holds a captured glyph rather than an app-icon fallback.
+        var hasGlyph: Bool
         var isDisabled: Bool
         var axElement: AXInspector.ElementInfo?
     }

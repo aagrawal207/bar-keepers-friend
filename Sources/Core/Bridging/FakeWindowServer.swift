@@ -5,7 +5,8 @@ import Foundation
 /// list of item frames and lets tests script moves, clicks, and failure injection — so the
 /// entire higher stack runs deterministically without the real window server.
 public final class FakeWindowServer: WindowServer, @unchecked Sendable {
-    public private(set) var items: [MenuBarItemSnapshot]
+    /// Settable so a test can move, add, or hide items between reads.
+    public var items: [MenuBarItemSnapshot]
     public private(set) var clickedWindowIDs: [CGWindowID] = []
     public private(set) var moveRequests: [(windowID: CGWindowID, targetX: CGFloat, targetWindowID: CGWindowID)] = []
 
@@ -55,7 +56,8 @@ public final class FakeWindowServer: WindowServer, @unchecked Sendable {
             frame: CGRect(
                 x: beforeReference ? targetX - frame.width : targetX,
                 y: frame.minY, width: frame.width, height: frame.height
-            )
+            ),
+            isOnScreen: item.isOnScreen
         )
         items[index] = moved
     }

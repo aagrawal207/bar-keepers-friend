@@ -116,6 +116,12 @@ final class CosmeticHideEngine {
     /// How long to wait for a burst of screen-parameter notifications to settle before refreshing.
     private static let screenChangeDebounce: TimeInterval = 0.5
 
+    /// A Space switch or a closed bar is the first chance to replace fallbacks left by a pass that
+    /// could not photograph the strip. One debounced check each; a complete, current cache asks nothing.
+    private var staleCacheWorkItem: DispatchWorkItem?
+    /// Past the fullscreen exit animation, and long enough that a reopened bar cancels it first.
+    var staleCacheDebounce: TimeInterval = 1.5
+
     /// Serializes native reveal/capture ownership across suspension. Cached panel opens do not
     /// enqueue capture; event-driven refreshes must yield to presentation or activation.
     private(set) var captureChain: Task<Void, Never> = Task {}
@@ -216,9 +222,17 @@ final class CosmeticHideEngine {
             // display stacked above/below the primary isn't enumerated as "all items below the bar".
             // Every capture path funnels through here, so this one assignment covers them all.
             floatingBar?.displayMenuBarTop = anchorDisplayMenuBarTop
-            // Both tiers must be on-screen to capture; the always-hidden divider re-expands below.
-            setHidden(collapsed: false)
-            setAlwaysHiddenCollapsed(false)
+            floatingBar?.displayXRange = anchorDisplayXRange
+            if floatingBar?.menuBarVisibility() == .hidden {
+                // Nothing is drawn: a reveal would only flash the items if the bar slid in mid-pass,
+                // and a screenshot would photograph the cover. Membership still refreshes.
+                DebugLog.log("capture: menu bar hidden; skipping reveal")
+            } else {
+                // Both tiers must be on-screen to capture; the always-hidden divider re-expands below.
+                setHidden(collapsed: false)
+                setAlwaysHiddenCollapsed(false)
+            }
+            // The settle also covers a launch expansion still in flight when no reveal was needed.
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled, !isPaused else { return }
             // Run the capture inline (NOT in a nested Task — hopping main-actor tasks here
@@ -523,6 +537,8 @@ final class CosmeticHideEngine {
         makeRoomTask?.cancel()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
+        staleCacheWorkItem?.cancel()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         cancelCaptureSequences()
         floatingBar?.hide()
         if let anchor = anchorItem { NSStatusBar.system.removeStatusItem(anchor) }
@@ -644,7 +660,25 @@ final class CosmeticHideEngine {
     /// Timer cancellation alone cannot stop a retry that already enqueued its capture task.
     private func cancelPendingCacheRefreshes() {
         cacheRefreshGeneration += 1
+        staleCacheWorkItem?.cancel()
         cancelWarmUpRetries()
+    }
+
+    /// Called when the bar closes or the active Space changes. Only an incomplete or out-of-date
+    /// mirror requests work, so a settled cache never flashes the items again.
+    func refreshFloatingBarCacheIfStale() {
+        staleCacheWorkItem?.cancel()
+        guard !isPaused, preferences.useFloatingBar, floatingBar != nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.isPaused, self.preferences.useFloatingBar, let bar = self.floatingBar,
+                  !self.sectionInUse else { return }
+            let anchorX = self.anchorFrame?.minX ?? 1115
+            guard bar.needsCapture || bar.cachedMirrorIsStale(anchorMinX: anchorX) else { return }
+            DebugLog.log("capture: mirror incomplete or stale after close/Space change; refreshing")
+            self.refreshFloatingBarCache()
+        }
+        staleCacheWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + staleCacheDebounce, execute: work)
     }
 
     /// Cache completeness and retry re-arming do not invalidate event-driven refresh requests.
@@ -1510,6 +1544,17 @@ final class CosmeticHideEngine {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        // Entering a fullscreen Space hides the menu bar; leaving it is when a deferred capture can succeed.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceChanged),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func activeSpaceChanged() {
+        refreshFloatingBarCacheIfStale()
     }
 
     /// Notification entry point: debounce a burst into one settled refresh (see

@@ -16,6 +16,7 @@ final class FloatingBarController {
     private let attribute: ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot]
     private let activateWithAX: (CGWindowID, pid_t, CGRect) async throws -> Bool
     private let panelFactory: (() -> NSPanel)?
+    private let immovablePIDs: () -> Set<pid_t>
 
     /// Window ids of the app's own control items, excluded from the mirrored list.
     var controlItemWindowIDs: Set<CGWindowID> = []
@@ -92,6 +93,8 @@ final class FloatingBarController {
     /// the primary the menu bar lives at a large/negative global y; without this the enumeration
     /// would reject every item there and the bar would show nothing. Set by the engine each pass.
     var displayMenuBarTop: CGFloat = 0
+    /// The anchor display's horizontal extent, for telling a hidden menu bar from a displaced anchor.
+    var displayXRange: ClosedRange<CGFloat>?
 
     /// Window ids for which we hold a REAL captured glyph (not an app-icon fallback). Keeps the
     /// cache monotonic: once an item has a clean glyph we never downgrade it to an app icon on a
@@ -163,7 +166,8 @@ final class FloatingBarController {
         preferences: Preferences,
         attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] = { await AXAttributionProvider.attribute($0) },
         activateWithAX: @escaping (CGWindowID, pid_t, CGRect) async throws -> Bool = AXActivator.activate,
-        panelFactory: (() -> NSPanel)? = nil
+        panelFactory: (() -> NSPanel)? = nil,
+        immovablePIDs: @escaping () -> Set<pid_t> = ImmovableProcessIDs.current
     ) {
         self.windowServer = windowServer
         self.captureIcons = captureIcons
@@ -171,7 +175,11 @@ final class FloatingBarController {
         self.attribute = attribute
         self.activateWithAX = activateWithAX
         self.panelFactory = panelFactory
+        self.immovablePIDs = immovablePIDs
     }
+
+    /// Window ids the bar would render right now, in order. For tests and diagnostics.
+    var mirroredWindowIDs: [CGWindowID] { barItems().map(\.snapshot.windowID) }
 
     /// Toggles the floating bar. Returns the new visibility.
     @discardableResult
@@ -195,7 +203,8 @@ final class FloatingBarController {
     /// the bar — rather than shown as a color app icon mixed in among the monochrome glyphs.
     /// That omission is what makes the first load look clean instead of "messed up": a straggler
     /// that just needs another beat to composite shows up correctly a moment later instead of
-    /// flashing the wrong (app-icon) image first.
+    /// flashing the wrong (app-icon) image first. An earlier pass's fallback is never evicted by
+    /// a later `false` pass; only a real glyph replaces it.
     func captureAndCache(anchorMinX: CGFloat, allowFallback: Bool = true) async {
         guard let snapshots = try? menuBarSnapshots() else { return }
         lastAnchorMinX = anchorMinX.isFinite ? anchorMinX : nil
@@ -209,14 +218,7 @@ final class FloatingBarController {
             // Genuinely nothing hidden: clear the cache so a stale glyph from a previous layout
             // doesn't linger, and record that a pass completed (so the panel shows the real
             // "no hidden items" state rather than "Preparing…").
-            cachedHiddenOrder = []
-            cachedAlwaysHiddenOrder = []
-            cachedTierWindowIDs = []
-            iconCache.removeAll()
-            capturedGlyphIDs.removeAll()
-            unactivatableWindowIDs.removeAll()
-            hasCapturedOnce = true
-            onCacheUpdated?()
+            clearMirror()
             return
         }
         // Collapse co-located windows that back the same visible icon (Tahoe returns a
@@ -226,9 +228,19 @@ final class FloatingBarController {
         let tierIDs = Set(dedupedAlwaysHidden.map(\.windowID))
         // Attribute real app names via Accessibility (kCGWindowName is "Item-0" on Tahoe).
         // Runs off the main thread so it can't stall the run loop (and block bar clicks).
-        guard let attributed = try? await attributePreservingOwners(
+        guard let everyAttributed = try? await attributePreservingOwners(
             deduped + dedupedAlwaysHidden, observedAt: observedAt, validate: validate
         ) else { return }
+        // Control Center's own modules (the privacy indicator among them) are never managed here, so
+        // the mirror never duplicates one the system still draws. Only a RESOLVED owner is trusted:
+        // an unresolved item still carries Tahoe's blanket Control Center pid and stays reachable.
+        let excludedPIDs = immovablePIDs()
+        let attributed = everyAttributed.filter { !isResolvedImmovable($0, excludedPIDs: excludedPIDs) }
+        guard !attributed.isEmpty else {
+            clearMirror()
+            DebugLog.log("floatingbar: \(hidden.count) hidden -> all excluded as system-owned; cache cleared")
+            return
+        }
 
         // Mirror the REAL menu bar glyph (Bartender-style) by capturing it while on-screen.
         // The capture can race the section's reveal: if the screenshot lands before the glyphs
@@ -242,11 +254,15 @@ final class FloatingBarController {
         // the loop once a straggler stops making progress, so a single hard-to-composite item no
         // longer drags the whole first load out to the full retry budget (~1.8s). The straggler is
         // picked up by the next (calmer) warm-up/refresh pass instead.
-        let capturable = attributed.filter { $0.frame.minX >= 0 }
+        let capturable = attributed.filter { $0.frame.minX >= 0 && $0.isOnScreen }
         var images: [CGWindowID: CGImage] = [:]
         var lastGot = -1
         var stalledAttempts = 0
+        if capturable.isEmpty, menuBarVisibility(in: snapshots) == .hidden {
+            DebugLog.log("floatingbar: menu bar hidden (fullscreen Space or auto-hide); membership only, no capture")
+        }
         for attempt in 1...Self.maxCaptureAttempts {
+            guard !capturable.isEmpty else { break }
             guard (try? validate()) != nil else { return }
             let current = applyingKnownOwners(to: attributed, observedAt: observedAt)
             guard !current.isEmpty else { return }
@@ -340,6 +356,7 @@ final class FloatingBarController {
         lastAnchorMinX = anchorMinX.isFinite ? anchorMinX : nil
         lastAnchorRightX = anchorRightX
         lastIncludeAlwaysHidden = includeAlwaysHidden
+        pruneMirrorToCurrentPositions(anchorMinX: anchorMinX)
         // The BAR renders the filtered set (any suppressed-from-bar items dropped, explicit order
         // applied). buildItemsFromCache() is the full mirrored set behind that filter.
         let items = barItems()
@@ -518,6 +535,7 @@ final class FloatingBarController {
             items: []
         )
         guard let snapshots = try? menuBarSnapshots() else { return report }
+        report.menuBarVisibility = String(describing: menuBarVisibility(in: snapshots))
         let observedAt = observationEpoch
         let tucked = tuckedItems(in: snapshots, hiddenBoundaryX: hiddenDividerMinX(in: snapshots) ?? lastAnchorMinX ?? 0)
         let deduped = HiddenItemsResolver.deduplicateByMidXProximity(tucked.hidden)
@@ -542,6 +560,8 @@ final class FloatingBarController {
                 ownerPID: snapshot.ownerPID,
                 rawTitle: snapshot.title,
                 frame: [snapshot.frame.minX, snapshot.frame.minY, snapshot.frame.width, snapshot.frame.height].map(Double.init),
+                isOnScreen: snapshot.isOnScreen,
+                hasGlyph: capturedGlyphIDs.contains(snapshot.windowID),
                 isDisabled: unactivatableWindowIDs.contains(snapshot.windowID),
                 axElement: axInfo[snapshot.windowID]
             )
@@ -590,6 +610,67 @@ final class FloatingBarController {
     }
 
     // MARK: - Internals
+
+    private func clearMirror() {
+        cachedHiddenOrder = []
+        cachedAlwaysHiddenOrder = []
+        cachedTierWindowIDs = []
+        iconCache.removeAll()
+        capturedGlyphIDs.removeAll()
+        unactivatableWindowIDs.removeAll()
+        hasCapturedOnce = true
+        onCacheUpdated?()
+    }
+
+    /// A resolved owner is one Accessibility named; Tahoe's blanket label never resolves (see
+    /// `attributePreservingOwners`), so raw snapshots can never match a system pid here.
+    private func isResolvedImmovable(_ item: MenuBarItemSnapshot, excludedPIDs: Set<pid_t>) -> Bool {
+        guard let owner = windowOwners[item.windowID]?.owner else { return false }
+        return excludedPIDs.contains(owner.pid)
+    }
+
+    /// An open shows what is tucked NOW: an item the system moved back beside the anchor since the
+    /// last pass leaves the mirror, and the order follows the bar. Nothing is added or captured;
+    /// a newcomer waits for the next pass, and a failed read keeps the cache as it is.
+    private func pruneMirrorToCurrentPositions(anchorMinX: CGFloat) {
+        guard let snapshots = try? menuBarSnapshots() else { return }
+        let boundaryX = hiddenDividerMinX(in: snapshots) ?? anchorMinX
+        guard boundaryX.isFinite else { return }
+        let tucked = tuckedItems(in: snapshots, hiddenBoundaryX: boundaryX)
+        let liveTier = Set(tucked.alwaysHidden.map(\.windowID))
+        // A stray without tier intent is mirrored as plain hidden while parked past the tier divider.
+        let liveTucked = liveTier.union(tucked.hidden.map(\.windowID))
+        let positions = Dictionary(snapshots.map { ($0.windowID, $0.frame.minX) }, uniquingKeysWith: { a, _ in a })
+        func ordered(_ order: [MenuBarItemSnapshot], keeping live: Set<CGWindowID>) -> [MenuBarItemSnapshot] {
+            order.filter { live.contains($0.windowID) }
+                .sorted { (positions[$0.windowID] ?? $0.frame.minX) < (positions[$1.windowID] ?? $1.frame.minX) }
+        }
+        let hiddenOrder = ordered(cachedHiddenOrder, keeping: liveTucked)
+        let tierOrder = ordered(cachedAlwaysHiddenOrder, keeping: liveTier)
+        guard hiddenOrder != cachedHiddenOrder || tierOrder != cachedAlwaysHiddenOrder else { return }
+        DebugLog.log("floatingbar: mirror pruned to current positions: \(cachedHiddenOrder.count + cachedAlwaysHiddenOrder.count) -> \(hiddenOrder.count + tierOrder.count)")
+        cachedHiddenOrder = hiddenOrder
+        cachedAlwaysHiddenOrder = tierOrder
+    }
+
+    /// One enumeration, no reveal or capture; `unknown` when the anchor cannot be found.
+    func menuBarVisibility() -> MenuBarVisibility {
+        guard let snapshots = try? menuBarSnapshots() else { return .unknown }
+        return menuBarVisibility(in: snapshots)
+    }
+
+    private func menuBarVisibility(in snapshots: [MenuBarItemSnapshot]) -> MenuBarVisibility {
+        MenuBarVisibility.of(anchor: anchorSnapshot(in: snapshots), displayXRange: displayXRange)
+    }
+
+    private func anchorSnapshot(in snapshots: [MenuBarItemSnapshot]) -> MenuBarItemSnapshot? {
+        let dividerIDs = Set([hiddenDividerWindowID, alwaysHiddenDividerWindowID].compactMap { $0 })
+        let anchorIDs = controlItemWindowIDs.subtracting(dividerIDs)
+        if let anchor = snapshots.first(where: { anchorIDs.contains($0.windowID) }) { return anchor }
+        let named = snapshots.filter { $0.title == ControlItem.Identifier.anchor.rawValue }
+        // Multiple display copies cannot be disambiguated by enumeration order.
+        return named.count == 1 ? named.first : nil
+    }
 
     private func hiddenDividerMinX(in snapshots: [MenuBarItemSnapshot]) -> CGFloat? {
         controlFrame(in: snapshots, windowID: hiddenDividerWindowID, identifier: .hiddenDivider)?.minX
@@ -774,7 +855,7 @@ final class FloatingBarController {
         )
         try Task.checkCancellation()
         // Apply PID exclusions only after attribution; Tahoe's raw PID can belong to Control Center.
-        let immovablePIDs = ImmovableProcessIDs.current()
+        let immovablePIDs = immovablePIDs()
         let intent = intentControls
         return applyingKnownOwners(to: attributed, observedAt: observedAt)
             .filter { !ImmovableItems.isImmovable($0, immovablePIDs: immovablePIDs) && ItemControlStore.key(for: $0) != nil }

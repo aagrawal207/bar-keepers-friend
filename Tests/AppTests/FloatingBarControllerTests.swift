@@ -546,7 +546,8 @@ struct FloatingBarControllerTests {
         bar.hiddenDividerWindowID = divider.windowID
         await bar.captureAndCache(anchorMinX: 500)
         resolves = false
-        let fresh = snapshot(1, x: -250, width: 28, owner: owner, title: "Item-7")
+        // On screen so the re-capture below still requests it; an off-screen item is never sent to capture.
+        let fresh = snapshot(1, x: 250, width: 28, owner: owner, title: "Item-7")
         server.base = FakeWindowServer(items: [fresh, unknown, divider])
         let items = try await bar.allManageableItems()
         let retained = try #require(items.first)
