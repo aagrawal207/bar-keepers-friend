@@ -552,31 +552,6 @@ struct CosmeticHideEngineTests {
         #expect(recorder.writes.isEmpty)
     }
 
-    @Test func aRevealedSectionCountsAsBusyForLiveLayout() {
-        let engine = CosmeticHideEngine(
-            preferences: Preferences(autoRehide: false, useFloatingBar: false), controlWindowIDs: { (90, 91) },
-            setDividerCollapsed: { _ in }, onPreferencesChanged: { _ in }
-        )
-        defer { engine.uninstall() }
-        // Launch shows the section until the first hide, which must already block Live checks.
-        #expect(engine.isBusyForLiveLayout)
-        engine.toggleHidden()
-        #expect(!engine.isBusyForLiveLayout)
-        engine.toggleHidden()
-        #expect(engine.stateMachine.visibility(of: .hidden) == .shown)
-        #expect(!engine.placementInProgress)
-        #expect(!engine.captureInFlight)
-        #expect(engine.isBusyForLiveLayout)
-        engine.toggleHidden()
-        #expect(!engine.isBusyForLiveLayout)
-        engine.toggleAllSections()
-        #expect(engine.isBusyForLiveLayout)
-        engine.toggleAllSections()
-        #expect(!engine.isBusyForLiveLayout)
-        engine.menuTogglePause()
-        #expect(engine.isBusyForLiveLayout)
-    }
-
     private var tieredControls: [MenuBarItemSnapshot] {
         [
             MenuBarItemSnapshot(windowID: 90, ownerPID: 1, title: "BKFAnchor", frame: CGRect(x: 1000, y: 0, width: 32, height: 22)),

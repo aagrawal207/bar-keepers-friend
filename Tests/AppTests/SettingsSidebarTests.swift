@@ -12,7 +12,6 @@ struct SettingsSidebarTests {
         .items: "settings-items-content",
         .style: "settings-style-enabled",
         .behavior: "settings-behavior-content",
-        .placement: "settings-placement-content",
         .shortcuts: "settings-shortcuts-content",
         .presets: "settings-preset-content",
         .triggers: "settings-trigger-content",
@@ -21,9 +20,9 @@ struct SettingsSidebarTests {
     ]
 
     @Test func tabsExposeStableIdentifiersTitlesAndSymbols() {
-        #expect(SettingsView.Tab.allCases == [.general, .items, .style, .behavior, .placement, .shortcuts, .presets, .triggers, .groups, .widgets])
-        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "style", "behavior", "placement", "shortcuts", "presets", "triggers", "groups", "widgets"])
-        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Style", "Behavior", "Placement", "Shortcuts", "Presets", "Triggers", "Groups", "Widgets"])
+        #expect(SettingsView.Tab.allCases == [.general, .items, .style, .behavior, .shortcuts, .presets, .triggers, .groups, .widgets])
+        #expect(SettingsView.Tab.allCases.map(\.rawValue) == ["general", "items", "style", "behavior", "shortcuts", "presets", "triggers", "groups", "widgets"])
+        #expect(SettingsView.Tab.allCases.map(\.title) == ["General", "Items", "Style", "Behavior", "Shortcuts", "Presets", "Triggers", "Groups", "Widgets"])
         for tab in SettingsView.Tab.allCases {
             #expect(tab.id == tab)
             #expect(NSImage(systemSymbolName: tab.systemImage, accessibilityDescription: nil) != nil, "\(tab) needs a real SF Symbol")
@@ -43,7 +42,7 @@ struct SettingsSidebarTests {
     @Test(arguments: [
         ("screen recording", SettingsView.Tab.general), ("launch at login", .general), ("export", .general),
         ("hover", .behavior), ("Show hidden items in a floating bar", .behavior),
-        ("Dismiss the bar when the pointer leaves it", .behavior), ("layout mode", .placement), ("notch", .placement),
+        ("Dismiss the bar when the pointer leaves it", .behavior), ("notch", .behavior),
         ("keyboard shortcut", .shortcuts), ("Shortcuts", .shortcuts), ("hotkey", .shortcuts),
         ("spacing", .general), ("Reset to system default", .general),
         ("menu bar icon", .style), ("app icon", .style), ("sparkle", .style), ("sunset", .style),
@@ -65,15 +64,13 @@ struct SettingsSidebarTests {
     /// Anchors are unconditional rows, so the result does not depend on this machine's permissions.
     @Test(arguments: [
         (SettingsView.Tab.general, "settings-backup-export"),
-        (.behavior, "settings-behavior-tip"),
-        (.placement, "settings-notch-display-note"),
+        (.behavior, "settings-notch-description"),
         (.style, "settings-style-note"),
         (.shortcuts, "settings-shortcut-items-empty"),
     ])
     func bottommostControlIsVisibleWithoutScrolling(tab: SettingsView.Tab, lastControl: String) async throws {
         var preferences = Preferences.default
         // Richest permission-independent state: every unconditional note and control shown.
-        preferences.layoutMode = .live
         preferences.notchOverflow = .whenNeeded
         preferences.menuBarSpacing = MenuBarSpacing(enabled: true, spacing: 8, selectionPadding: 4)
         preferences.menuBarStyle = MenuBarStyle(isEnabled: true, borderWidth: 2, shape: .rounded)

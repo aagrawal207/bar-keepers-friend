@@ -91,8 +91,6 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Device-local flag; the first-run walkthrough shows until it is completed or skipped.
     public var hasCompletedOnboarding: Bool
 
-    /// On-Demand moves only on Apply/launch/display change; Live also re-applies after app launch/quit.
-    public var layoutMode: LayoutMode
 
     /// Per-owner shortcuts that reveal and activate one item; the toggle shortcut always wins conflicts.
     public var itemHotkeys: [String: HotkeyCombo]
@@ -130,7 +128,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         itemGroups: [ItemGroup] = [],
         menuBarSpacing: MenuBarSpacing = .systemDefault,
         hasCompletedOnboarding: Bool = false,
-        layoutMode: LayoutMode = .onDemand,
         itemHotkeys: [String: HotkeyCombo] = [:],
         menuBarStyle: MenuBarStyle = .none,
         widgets: [MenuBarWidget] = [],
@@ -157,7 +154,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         self.itemGroups = ItemGroupLibrary.normalized(itemGroups)
         self.menuBarSpacing = menuBarSpacing
         self.hasCompletedOnboarding = hasCompletedOnboarding
-        self.layoutMode = layoutMode
         self.itemHotkeys = itemHotkeys
         self.menuBarStyle = menuBarStyle.normalized()
         self.widgets = WidgetLibrary.normalized(widgets)
@@ -195,7 +191,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         case itemGroups
         case menuBarSpacing
         case hasCompletedOnboarding
-        case layoutMode
         case itemHotkeys
         case menuBarStyle
         case widgets
@@ -241,7 +236,6 @@ public struct Preferences: Equatable, Sendable, Codable {
         menuBarSpacing = ((try? container.decodeIfPresent(MenuBarSpacing.self, forKey: .menuBarSpacing)) ?? nil)
             ?? d.menuBarSpacing
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
-        layoutMode = ((try? container.decodeIfPresent(LayoutMode.self, forKey: .layoutMode)) ?? nil) ?? .onDemand
         itemHotkeys = ((try? container.decodeIfPresent([String: HotkeyCombo].self, forKey: .itemHotkeys)) ?? nil) ?? [:]
         menuBarStyle = (((try? container.decodeIfPresent(MenuBarStyle.self, forKey: .menuBarStyle)) ?? nil) ?? .none).normalized()
         let rawWidgets = (try? container.decodeIfPresent([Lossy<MenuBarWidget>].self, forKey: .widgets)) ?? nil

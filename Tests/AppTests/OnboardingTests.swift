@@ -137,8 +137,8 @@ struct OnboardingTests {
         let layoutText = try subtreeText("onboarding-step-layout-mode", in: view)
         #expect(layoutText.contains("On-Demand"))
         #expect(layoutText.contains("only the items you explicitly change"))
-        #expect(layoutText.contains("Live mode"))
-        #expect(layoutText.contains("pointer movement"))
+        #expect(layoutText.contains("never re-applied behind your back"))
+        #expect(!layoutText.contains("Live mode"))
         let layoutStep = try element("onboarding-step-layout-mode", in: view)
         let controlRoles: [NSAccessibility.Role] = [.button, .checkBox, .radioButton, .radioGroup, .popUpButton, .menuButton]
         let layoutControls = settingsTestAccessibility(layoutStep).filter { child in

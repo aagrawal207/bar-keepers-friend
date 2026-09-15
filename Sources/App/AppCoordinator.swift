@@ -108,11 +108,6 @@ final class AppCoordinator {
             onHide: { [weak engine] in engine?.hideFloatingBarOnScroll() }
         )
         engine.scrollRevealMonitor = scroll
-        engine.liveLayoutMonitor = LiveLayoutMonitor.system(
-            isUserInteracting: { [weak engine] in engine?.isBusyForLiveLayout ?? true },
-            previewMoves: { [weak engine] in await engine?.previewPlacementMoves() },
-            requestReconcile: { [weak engine] in engine?.reconcileHiddenItems(userInitiated: false) }
-        )
         engine.onScreenParametersChanged = { [weak self] in self?.menuBarStyleOverlay.screensChanged() }
         let groups = GroupStatusItemsController(activate: { [weak bar] id in bar?.activate(windowID: id) })
         groupStatusItems = groups

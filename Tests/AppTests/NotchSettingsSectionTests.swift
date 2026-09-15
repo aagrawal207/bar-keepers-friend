@@ -78,8 +78,6 @@ struct NotchSettingsSectionTests {
         let ids = identifiers(in: view)
         #expect(ids.contains("settings-notch-picker"))
         #expect(ids.contains("settings-notch-description"))
-        #expect(ids.contains("settings-notch-scope-note"))
-        #expect(ids.contains("settings-notch-display-note"))
         #expect(!ids.contains("settings-notch-accessibility-note"))
         #expect(ids.allSatisfy { $0.hasPrefix("settings-notch-") })
 
@@ -93,8 +91,7 @@ struct NotchSettingsSectionTests {
         let content = text(in: view)
         #expect(content.contains("Notch"))
         #expect(content.contains("Make room near the notch"))
-        #expect(content.contains("When the hidden section is revealed in the menu bar and the notch would clip it, temporarily tuck the shown items closest to the anchor, then put them back when the section hides."))
-        #expect(content.contains("Only applies when hidden items are revealed in the menu bar (floating bar off, or when activating an item)."))
+        #expect(content.contains("When hidden items are revealed in the menu bar itself (floating bar off, or while activating an item) and the notch would clip them"))
         #expect(content.contains("Moves items, so it needs Accessibility and may briefly move the pointer."))
         #expect(content.contains("Has no effect on displays without a notch."))
         // The copy must not promise more than the mover delivers.

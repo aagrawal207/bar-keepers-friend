@@ -126,7 +126,7 @@ private struct LayoutModeStep: View {
             VStack(alignment: .leading, spacing: 10) {
                 BulletRow(text: "Your menu bar stays exactly as you arranged it until you choose Apply Changes.")
                 BulletRow(text: "Hiding or showing one item never shifts the others.")
-                BulletRow(text: "A future Live mode that organizes items automatically may cause brief pointer movement, so it would be a separate opt-in. There is nothing to choose right now.")
+                BulletRow(text: "Saved placement is re-applied when the app launches and when displays change. It is never re-applied behind your back while you work.")
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)

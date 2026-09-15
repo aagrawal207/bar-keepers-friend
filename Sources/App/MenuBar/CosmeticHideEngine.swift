@@ -39,7 +39,6 @@ final class CosmeticHideEngine {
     var floatingBar: FloatingBarController?
     var hoverRevealController: HoverRevealController?
     var scrollRevealMonitor: ScrollRevealMonitor?
-    var liveLayoutMonitor: LiveLayoutMonitor?
     /// Tucks shown items to make room for a notch-clipped reveal and restores them before collapse.
     private(set) var notchOverflowCoordinator: NotchOverflowCoordinator?
     private var makeRoomTask: Task<Void, Never>?
@@ -68,8 +67,6 @@ final class CosmeticHideEngine {
     private(set) var placementPending = false
     private(set) var placementTask: Task<Void, Never>?
     private var placementRequestID = 0
-    /// Intent whose batch had real move failures; Live mode backs off until it changes or succeeds.
-    private(set) var lastFailedControls: ItemControlStore?
     private let controlWindowIDsProvider: (() -> (anchor: CGWindowID, divider: CGWindowID)?)?
     private let setDividerCollapsed: ((Bool) -> Void)?
     private let anchorFrameProvider: (() -> CGRect?)?
@@ -393,7 +390,6 @@ final class CosmeticHideEngine {
         observeScreenChanges()
         updateHoverMonitoring()
         updateScrollMonitoring()
-        updateLiveLayoutMonitoring()
     }
 
     /// The defaults key AppKit uses to persist a status item's horizontal slot, by autosave name.
@@ -533,7 +529,6 @@ final class CosmeticHideEngine {
     func uninstall() {
         hoverRevealController?.stop()
         scrollRevealMonitor?.stop()
-        liveLayoutMonitor?.stop()
         makeRoomTask?.cancel()
         autoRehideWorkItem?.cancel()
         screenChangeWorkItem?.cancel()
@@ -563,7 +558,6 @@ final class CosmeticHideEngine {
         stateMachine.autoRehideSections = Self.autoRehideSections(for: preferences)
         updateHoverMonitoring()
         updateScrollMonitoring()
-        updateLiveLayoutMonitoring()
         ensureAlwaysHiddenDividerIfNeeded()
         applyAnchorArtwork()
 
@@ -585,7 +579,6 @@ final class CosmeticHideEngine {
 
         // Only a changed tier intent moves items; an unrelated settings edit must not drag icons.
         if !placementControls.hasSamePlacementIntent(as: previousControls) {
-            lastFailedControls = nil
             reconcileHiddenItems(userInitiated: userInitiated)
         }
     }
@@ -808,10 +801,8 @@ final class CosmeticHideEngine {
             if result.observationFailed {
                 self.updatePlacementStatus(applying: false, message: "Couldn't read a stable menu bar layout. Items have been left revealed; try again.", failed: true)
             } else if !result.failed.isEmpty {
-                self.lastFailedControls = requestControls
                 self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Retry to apply the saved placement again.", failed: true)
             } else {
-                self.lastFailedControls = nil
                 self.updatePlacementStatus(applying: false)
             }
         }
@@ -973,7 +964,6 @@ final class CosmeticHideEngine {
         isPaused.toggle()
         updateHoverMonitoring()
         updateScrollMonitoring()
-        updateLiveLayoutMonitoring()
         autoRehideWorkItem?.cancel()
         autoRehideWorkItem = nil
         if isPaused {
@@ -1142,34 +1132,6 @@ final class CosmeticHideEngine {
 
     private func updateScrollMonitoring() {
         scrollRevealMonitor?.setEnabled(preferences.revealOnScroll && preferences.useFloatingBar && !isPaused)
-    }
-
-    private func updateLiveLayoutMonitoring() {
-        liveLayoutMonitor?.setEnabled(preferences.layoutMode == .live && !isPaused)
-    }
-
-    /// Live checks must not cancel work in flight or disturb an open bar, menu, or revealed section
-    /// (a click reveal in reflow mode, or items left revealed after a failed observation).
-    var isBusyForLiveLayout: Bool {
-        isPaused || anchorMenuIsOpen || activationOwnsSection || placementInProgress || captureInFlight
-            || sectionInUse
-    }
-
-    /// Plan-only: how many items Live mode would move right now, without revealing or moving.
-    func previewPlacementMoves() async -> Int? {
-        guard !isPaused, let controller = hiddenItemController else { return nil }
-        let controls = placementControls
-        guard controls.hasAnyPlacementIntent else { return 0 }
-        // A batch that already failed is not retried by Live mode; only new intent or Retry may.
-        if placementFailed, let failed = lastFailedControls, controls.hasSamePlacementIntent(as: failed) { return 0 }
-        guard let ids = placementControlIDs else { return nil }
-        publishControlItemWindowIDs()
-        controller.controlItemWindowIDs = floatingBar?.controlItemWindowIDs ?? []
-        return await controller.previewMoves(
-            anchorWindowID: ids.anchor, dividerWindowID: ids.divider,
-            alwaysHiddenDividerWindowID: alwaysHiddenControlWindowID, controls: controls,
-            displayXRange: anchorDisplayXRange, displayMenuBarTop: anchorDisplayMenuBarTop
-        )
     }
 
     /// A scroll gesture is deliberate like a click, so it takes ownership from hover and opens

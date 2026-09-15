@@ -6,7 +6,7 @@ import SwiftUI
 struct SettingsView: View {
     /// Raw values are sidebar accessibility identifiers; the cases are the window controller's API.
     enum Tab: String, CaseIterable, Identifiable {
-        case general, items, style, behavior, placement, shortcuts, presets, triggers, groups, widgets
+        case general, items, style, behavior, shortcuts, presets, triggers, groups, widgets
 
         var id: Self { self }
 
@@ -16,7 +16,6 @@ struct SettingsView: View {
             case .items: "Items"
             case .style: "Style"
             case .behavior: "Behavior"
-            case .placement: "Placement"
             case .shortcuts: "Shortcuts"
             case .presets: "Presets"
             case .triggers: "Triggers"
@@ -31,7 +30,6 @@ struct SettingsView: View {
             case .items: "menubar.rectangle"
             case .style: "paintpalette"
             case .behavior: "slider.horizontal.3"
-            case .placement: "arrow.left.and.right.square"
             case .shortcuts: "keyboard"
             case .presets: "square.on.square"
             case .triggers: "bolt"
@@ -69,10 +67,6 @@ struct SettingsView: View {
                 Dismiss the bar when the pointer leaves it
                 Behavior Automatically re-hide Re-hide after Reveal on hover Reveal on scroll or swipe
                 mouse auto-rehide delay
-                """
-            case .placement:
-                """
-                Layout mode On-Demand Live re-apply after apps launch or quit pointer idle
                 Notch Make room near the notch Never When needed tuck shown items
                 """
             case .shortcuts:
@@ -158,7 +152,6 @@ struct SettingsView: View {
         case .items: ItemsSettingsTab(model: model)
         case .style: StyleSettingsTab(model: model)
         case .behavior: BehaviorSettingsTab(model: model)
-        case .placement: PlacementSettingsTab(model: model)
         case .shortcuts: ShortcutsSettingsTab(model: model)
         case .presets: PresetsSettingsTab(model: model)
         case .triggers: TriggersSettingsTab(model: model)
@@ -243,40 +236,13 @@ private struct BehaviorSettingsTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
-                // A label column would squeeze the tip; a full-width row can wrap without clipping.
-                Text("Tip: click the menu bar anchor to reveal hidden items, or right-click it to open settings.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settings-behavior-tip")
-            }
-        }
-        .formStyle(.grouped)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("settings-behavior-content")
-    }
-}
-
-// MARK: - Placement tab
-
-/// Where items physically go: when saved placement is re-applied, and whether shown items make
-/// room near the notch. Distinct from Behavior (how the bar reveals) and Items (which items go where).
-private struct PlacementSettingsTab: View {
-    @Bindable var model: SettingsModel
-
-    var body: some View {
-        Form {
-            LayoutModeSettingsSection(model: model)
-
             NotchSettingsSection(model: model, mode: $model.preferences.notchOverflow)
         }
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("settings-placement-content")
-        // Both sections warn when Accessibility is missing; the probe lives in General's pane, so
-        // this pane refreshes it too or a stale "Not granted" warning would show here.
+        .accessibilityIdentifier("settings-behavior-content")
+        // The notch section warns when Accessibility is missing; the probe lives in General's pane,
+        // so this pane refreshes it too or a stale "Not granted" warning would show here.
         .onAppear { model.refreshPermissions() }
         .task {
             while !Task.isCancelled {
