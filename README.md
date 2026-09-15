@@ -30,11 +30,18 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
 - **Settings search** filters pages by name and setting keywords without changing your settings.
   Style sits directly below Items in the sidebar. This does not restore the removed menu-bar search.
 - **Settings layout:** General keeps machine-level settings (login, permissions, spacing, backup);
-  Behavior, Placement, and Shortcuts have their own pages. **Style > Icons** picks the menu bar
-  symbol and an app-icon theme for Settings, About, and alerts; the installed Finder icon is unchanged.
+  Behavior (floating bar, re-hide, hover, scroll, notch make-room) and Shortcuts have their own pages.
+  **Style > Icons** picks the menu bar symbol and an app-icon theme for Settings, About, and alerts;
+  the installed Finder icon is unchanged.
+- **Icons stay real.** Captured glyphs are remembered across launches, a hidden menu bar (fullscreen
+  Space, auto-hide) is never photographed, and leaving that Space or closing the bar replaces any
+  remaining fallbacks. Control Center's own items, including the screen-recording indicator, are
+  left to the system and never mirrored.
+- **One layout mode.** Saved placement applies at launch, on Apply Changes, and when displays change;
+  nothing re-applies it behind your back while you work. The Live option was removed on 2026-09-15.
 - **Bartender 6 feature set (2026-09-13):** presets, triggers (battery, charging, low power, Wi-Fi,
   frontmost app, external display, time/weekday), groups, widgets, menu bar styling, item spacing,
-  scroll/swipe reveal, an Always Hidden tier (Option-click reveals it), Live layout mode, a shortcut
+  scroll/swipe reveal, an Always Hidden tier (Option-click reveals it), a shortcut
   recorder with per-item shortcuts, notch make-room, first-run onboarding, Restart and Check for
   Updates. Everything is off or empty by default. These are tested against fakes and off-screen views;
   none has been verified on a live menu bar yet (see PARITY.md).
@@ -67,10 +74,10 @@ native move retries and capture delays can still make Apply take time.
   unit tests alone is not evidence that these paths work on every menu-bar layout.
 - Hover ownership and cancellation are hostless-tested; native focus, first-click delivery,
   and the feel of anchor-to-panel travel still need hardware QA.
-- Cached opening prioritizes non-interruption over freshness. Stale or unfinished icons wait for
-  existing display, placement, or lifecycle refreshes rather than forcing a capture when opened.
+- Cached opening prioritizes non-interruption over freshness: opening never captures. A stale or
+  incomplete mirror is refreshed about 1.5s after the bar closes or the active Space changes.
 - The 2026-09-13 parity features (presets, triggers, groups, widgets, styling, spacing, Always Hidden,
-  Live mode, shortcuts, notch make-room) have not been exercised on hardware. In particular, whether
+  shortcuts, notch make-room) have not been exercised on hardware. In particular, whether
   the style overlay renders behind Tahoe's menu bar and whether the Always Hidden divider lands in
   the right slot on first creation are open questions.
 - Quick Search is intentionally not implemented. Styles and presets apply to all displays at once.
@@ -129,7 +136,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 1168 tests in 84 suites (1886 invocations including parameterized cases).
+It currently contains 1108 tests in 81 suites (1812 invocations including parameterized cases).
 
 ## Credit
 

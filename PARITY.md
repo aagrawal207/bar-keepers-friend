@@ -1,6 +1,6 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-14 (Settings split + icons). Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-15 (icon reliability, Live mode removed). Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
@@ -17,14 +17,14 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
 | Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
-| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests | External-display restart yielded 0/9 glyphs with app-icon fallbacks; recovery, cold-boot collection, saturated-notch activation, and capacity beyond both grid axes remain unverified |
+| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; a hidden menu bar (fullscreen Space, auto-hide) is never photographed; the mirror follows current positions on open and refreshes after close or a Space change; Control Center items are never mirrored | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
 | Hover reveal | Cache-only opens; optional captures revalidate after queue waits; ownership and non-key ordering tested | Native first-click delivery, focus, animation transit, display qualification, and freshness without intrusive capture |
 | Keyboard access | Recorder for the toggle shortcut with system-reserved/conflict detection; per-item shortcuts reveal and activate one item (floating-bar mode) | Real Carbon registration of 1+N slots, recorder first-responder behavior, accessible navigation/dismissal |
 | Reveal gestures | Click, hotkey, opt-in hover, opt-in scroll/swipe (one effect per gesture, cooldown) | Native scroll-direction feel and monitor routing over the live bar |
 | Notch full access | Make-room swap planner + coordinator (default Never): tucks shown items nearest the anchor when a reveal is notch-clipped, restores before every collapse and before quit | Drop relative to a third-party window, partial-overlap tolerance, flicker/latency inside the activation deadline |
-| Layout mode | On-Demand default; Live mode re-applies saved placement after app launch/quit via a plan-only preview with settle/idle gates and failure backoff | Exactly-one-check timing, pointer visibility during the resulting move |
+| Layout mode | One behavior: saved placement applies at launch, on Apply Changes, and on display change. The Live option (re-apply after app launch/quit) was removed on 2026-09-15 as confusing and hardware-unverified | Whether users miss automatic re-application for apps that relaunch |
 | Display correctness | Placement re-reads controls; several coordinate fixes are tested | Explicit 2D display identity, negative-origin capture, stacked-display panel selection, and live external-display qualification |
 | Native-work resilience | Pause/superseding/session interruption cancel safely; submitted downs retain balancing ups; interrupted placement stays pending | Native lock-transition qualification, Space/fullscreen/mouse-idle policies, and genuine recovery from non-returning calls |
 
@@ -40,7 +40,7 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 | Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
 | Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Placement, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
 | Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
@@ -54,7 +54,6 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
   scope unless requested separately.
 - One style and one arrangement for all displays; Bartender styles each menu bar separately.
 - Widgets run only allowlisted actions (URL, app launch, Shortcuts, toggle bar); no scripts.
-- Live mode uses BKF's plan-only preview and never moves while the bar, a menu, or a batch is active.
 
 ## Verification Gates
 
@@ -78,13 +77,47 @@ path including quit).
 
 | Coverage | Evidence | Level |
 |---|---|---|
-| Presets, triggers, groups, widgets, spacing, style, hotkeys, live policy, notch planner, draft models | `LayoutPresetTests`, `TriggerEvaluatorTests`, `ItemGroupTests`, `MenuBarWidgetTests`, `MenuBarSpacingTests`, `MenuBarStyle*Tests`, `HotkeyAssignmentsTests`, `LiveLayoutPolicyTests`, `NotchOverflowPlannerTests`, `ItemControlStoreTests` (tri-state) | Unit |
-| Monitors and controllers with injected sources, clocks, factories, registrars, defaults, runners | `TriggerMonitorTests`, `LiveLayoutMonitorTests`, `ScrollRevealMonitorTests`, `GroupStatusItemsControllerTests`, `WidgetStatusItemsControllerTests`, `MenuBarSpacingServiceTests`, `MenuBarStyleOverlayControllerTests`, `HotkeyServiceTests`, `NotchOverflowCoordinatorTests`, `RestartServiceTests`, `UpdateCheckServiceTests` | Adapter |
-| Engine wiring: lazy tier divider, option-click, live preview/backoff, notch make-room and restore ordering, quit restore | `CosmeticHideEngineTests`, `HiddenItemControllerPreviewTests`, `NotchOverflowEngineTests`, `PlacementIntegrationTests`, `StagedPlacementIntegrationTests` with `FakeWindowServer` | Hostless integration |
+| Presets, triggers, groups, widgets, spacing, style, hotkeys, notch planner, draft models | `LayoutPresetTests`, `TriggerEvaluatorTests`, `ItemGroupTests`, `MenuBarWidgetTests`, `MenuBarSpacingTests`, `MenuBarStyle*Tests`, `HotkeyAssignmentsTests`, `NotchOverflowPlannerTests`, `ItemControlStoreTests` (tri-state) | Unit |
+| Monitors and controllers with injected sources, clocks, factories, registrars, defaults, runners | `TriggerMonitorTests`, `ScrollRevealMonitorTests`, `GroupStatusItemsControllerTests`, `WidgetStatusItemsControllerTests`, `MenuBarSpacingServiceTests`, `MenuBarStyleOverlayControllerTests`, `HotkeyServiceTests`, `NotchOverflowCoordinatorTests`, `RestartServiceTests`, `UpdateCheckServiceTests` | Adapter |
+| Engine wiring: lazy tier divider, option-click, notch make-room and restore ordering, quit restore | `CosmeticHideEngineTests`, `NotchOverflowEngineTests`, `PlacementIntegrationTests`, `StagedPlacementIntegrationTests` with `FakeWindowServer` | Hostless integration |
 | Every Settings pane and section, sidebar navigation, onboarding steps, real presses and field edits | `*SettingsTabTests`, `*SettingsSectionTests`, `SettingsSidebarTests`, `SettingsViewTests`, `OnboardingTests` | Hostless rendering + interaction |
 
 No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
 is the acceptance checklist before any of these is described as working on a real menu bar.
+
+## Icon Reliability Verification
+
+On 2026-09-15 the user reported frequent app-icon fallbacks and the screen-recording indicator
+appearing in both the bar and the mirror. Every capture since 09-14 13:40 had returned an opaque
+black menu-bar strip while the rest of the display captured normally (`BKF_DUMP_CROPS` now writes
+the full frame with per-band luma: strip 0, rest 43). The menu bar was hidden by a fullscreen Space;
+`kCGWindowIsOnscreen` was false for every status window, including the Clock. Three launches that
+day happened in that Space, each caching six fallbacks, and cache-only opens never replaced them.
+The indicator is permanent on this machine because DisplayLink Manager records the screen.
+
+Fixes, in order: snapshots carry `isOnScreen`; a pass whose anchor is on its display but off screen
+refreshes membership without revealing or asking ScreenCaptureKit; leaving a Space and closing the
+bar each run one debounced check that refreshes only an incomplete or out-of-date mirror; opening
+prunes the mirror to what is tucked now; Control Center modules that Accessibility resolves are not
+mirrored while unresolved items stay reachable; captured glyphs are remembered per attribution label
+under Caches and stand in until this launch captures its own.
+
+Full build/test: 1108 tests across 81 suites, 1812 invocations, zero failures or skips (the Live
+mode removal below dropped 64 of the earlier 1171). Strict code signature verification passed.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| Hidden menu bar at launch: zero captures, no reveal, fallbacks reachable; a Space change while still hidden does nothing; the first visible Space change captures once (reveal, capture, collapse); a complete cache asks nothing | `MirrorReliabilityWorkflowTests` with the real engine and controller over `FakeWindowServer` | Functional workflow |
+| Closing an incomplete bar refreshes once after the debounce; reopening first cancels it; a complete, current mirror never refreshes; an item moved back beside the anchor leaves the mirror on the next open without capture | `MirrorReliabilityWorkflowTests` | Functional workflow |
+| Resolved Control Center module excluded from mirror and Settings; unresolved blanket-label item kept | `MirrorReliabilityWorkflowTests` | Functional workflow |
+| Relaunch with new window ids and a hidden bar shows remembered glyphs, not app icons; a damaged file falls back; a newcomer falls back; this launch's capture replaces every remembered glyph and rewrites the damaged file | `MirrorReliabilityWorkflowTests` with `GlyphStore` in a temporary directory | Functional workflow |
+
+Live verification so far: the relaunched app logged `capture: menu bar hidden; skipping reveal` on
+its warm-up while the user's fullscreen Space was active and made no ScreenCaptureKit request. The
+visible-bar half (`isOnScreen == true`, real glyphs after leaving the Space) is confirmed only by the
+window-list semantics Ice relies on and still needs a session on a normal Space. A rapid relaunch
+also resolved the previous instance's lingering control windows once and left placement pending;
+it recovers on the next resume and is not part of this fix.
 
 ## Settings Split And Icon Verification
 

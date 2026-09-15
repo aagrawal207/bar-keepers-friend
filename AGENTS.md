@@ -30,7 +30,7 @@ must remain cache-only. Apply uses the existing serialized mover, not parallel n
 
 On 2026-09-12 the user asked for full Bartender 6 parity and authorized commits/pushes for it. Three
 waves shipped (presets, triggers, groups, spacing, scroll reveal, onboarding, restart, update check;
-Always Hidden tier, Live layout mode, shortcut recorder + item shortcuts, menu bar styling, widgets;
+Always Hidden tier, shortcut recorder + item shortcuts, menu bar styling, widgets;
 notch make-room, Settings sidebar, export/login feedback). Every feature is hostless-tested behind the
 existing seams and defaults to today's behavior; the native QA list below is what still separates
 "feature shipped" from "feature verified". Do not describe any of them as hardware-verified.
@@ -46,6 +46,11 @@ removed. The Apply Changes safety and persistence constraints still apply.
 Later on 2026-09-14 the user asked for General to be split up (it scrolled) and for a choice of BKF
 icons. Both shipped; see Built. The installed Finder icon is never rewritten: that would need
 re-signing the bundle, which would also invalidate granted TCC permissions.
+
+On 2026-09-15 the user asked three things: whether two Layout modes are needed (no: Live is removed,
+see Removed), why icons kept falling back to app icons (a fullscreen Space hid the menu bar; see
+Built, "Icon reliability"), and to keep the screen-recording indicator out of the mirror (done: resolved
+Control Center items are never mirrored, and the mirror follows current positions on open).
 
 **Testing direction (2026-09-14, from the user):** prefer fewer functional workflow tests over many
 unit tests. A workflow test drives the real Settings UI, the real model, real persistence
@@ -132,8 +137,8 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1168 tests, 84 suites**, 1886 invocations including
-  parameterized cases). Last full build/test: 2026-09-14, macOS 26.6.2 / Xcode 26.6, zero failures
+- Test: same command with `test` (currently **1108 tests, 81 suites**, 1812 invocations including
+  parameterized cases). Last full build/test: 2026-09-15, macOS 26.6.2 / Xcode 26.6, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
@@ -156,7 +161,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   `~/Library/Logs/BKF-bar.png` (rendered panel). Async + deep AX inspect — wait ~12–16s, don't
   `rm` around it. The PNG is how to *see* what the user sees.
 - `kill -USR2 <pid>` toggles the bar (for screenshotting).
-- `BKF_DUMP_CROPS=1` (launch the binary directly, not via `open`) dumps raw pre-keying crops.
+- `BKF_DUMP_CROPS=1` dumps raw pre-keying crops plus `BKF-full.png` (quarter-size full frame) and a
+  `full frame ... mean luma strip=/upper=/lower=` log line. `open` drops the environment; set it with
+  `launchctl setenv BKF_DUMP_CROPS 1`, launch, then `launchctl unsetenv`. `BKF-diag.json` also carries
+  `menuBarVisibility` and per-item `isOnScreen`/`hasGlyph`. A strip of 0 with a lit rest of the frame
+  means the bar is hidden (fullscreen Space); do not chase it as a capture bug.
 - Runtime log: `~/Library/Logs/BarKeepersFriend.log`.
 
 ## Built (done)
@@ -219,8 +228,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Warm-up re-arming cannot invalidate an unrelated display refresh. Hover waits for capture and
   divider restoration; a manual open during an already-active capture retains its previous behavior.
   Native diagnostic opening showed the panel with the divider at 1728pt in all 40 samples. Stale or
-  unfinished icons wait for existing lifecycle/display/placement refreshes; there is no general idle
-  refresh scheduler or freshness guarantee on reopen.
+  unfinished icons wait for lifecycle/display/placement refreshes and, since 2026-09-15, for the
+  debounced check after the bar closes or the Space changes; there is still no idle refresh timer
+  and no freshness guarantee at the moment of reopen (opening itself never captures).
 - **Background cursor concealment (2026-09-11, adapter + native capability-tested).** Dynamic
   `CGSSetConnectionProperty` enables `SetsCursorInBackground` only on BKF's own connection. The
   unlocked, inactive-process probe changed cursor visibility from 1 to 0 to 1; without it, hiding
@@ -292,14 +302,16 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   the 180pt sidebar and 820x720 window still fit. See `PARITY.md` for tests and native QA limits.
 - **Settings split + BKF icon choice (2026-09-14, workflow-tested).** General had grown to ten
   sections and scrolled; it now holds only machine-level settings (Launch at login, Permissions,
-  Menu bar spacing, Backup). New panes: **Behavior** (floating bar, re-hide, hover, scroll, tip),
-  **Placement** (Layout mode, Notch make-room; it refreshes the permission probe itself so its
-  Accessibility warnings are never stale), **Shortcuts** (the toggle recorder and per-item
-  shortcuts; the only pane besides Items that reads the menu bar). Sidebar order: General, Items,
-  Style, Behavior, Placement, Shortcuts, Presets, Triggers, Groups, Widgets. Every pane's
-  bottommost control is asserted visible in the real 820x720 window in its richest
-  permission-independent state (`SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling`);
-  Behavior and Style both overflowed during the rearrangement and that test is what caught it.
+  Menu bar spacing, Backup). New panes: **Behavior** (floating bar, re-hide, hover, scroll, and since
+  2026-09-15 Notch make-room; it refreshes the permission probe itself so the notch section's
+  Accessibility warning is never stale), **Shortcuts** (the toggle recorder and per-item shortcuts;
+  the only pane besides Items that reads the menu bar). A Placement pane existed for one day holding
+  Layout mode and Notch; it went with Live mode. Sidebar order: General, Items, Style, Behavior,
+  Shortcuts, Presets, Triggers, Groups, Widgets. Every pane's bottommost control is asserted visible
+  in the real 820x720 window in its richest permission-independent state
+  (`SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling`); Behavior and Style both
+  overflowed during the rearrangement and that test is what caught it, and it caught Behavior again
+  when Notch moved in (fixed by merging the notch notes into one and dropping the redundant tip).
   Style gained an **Icons** row: a menu-bar symbol pop-up (five SF Symbols, `AppIconChoice.MenuBarSymbol`)
   and five app-artwork themes (`AppIconChoice.AppTheme`, Ocean is the shipped icon; others redraw the
   same sparkle-and-pill mark on a different gradient at runtime via `AppIconRenderer`, mirroring
@@ -314,6 +326,29 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   verify one write per edit and one anchor image, zero placement/capture work, an unapplied Items
   draft and aliases intact, then a fresh store/model/engine reads the choice back and no draft.
   Native rendering of the pop-up's menu items and the anchor's live appearance are hardware QA.
+- **Icon reliability (2026-09-15, workflow-tested + hidden path live-verified).** The user's
+  "icons keep falling back" was a hidden menu bar, not compositor timing: every capture since
+  09-14 13:40 returned an opaque black strip while the rest of the display captured fine
+  (`BKF_DUMP_CROPS` now also writes `BKF-full.png` with per-band luma; that is how this was found),
+  because the user works in a fullscreen Space and `kCGWindowIsOnscreen` was false for every status
+  window, Clock included. Three launches that day happened in that Space; each cached six fallbacks
+  and cache-only opens never replaced them. `MenuBarItemSnapshot.isOnScreen` (pure
+  `MenuBarVisibility.of(anchor:displayXRange:)`) now drives four behaviors: (1) a pass whose anchor is
+  on its display but off screen refreshes membership only, with no reveal and no ScreenCaptureKit
+  call (`capture: menu bar hidden; skipping reveal`); (2) `activeSpaceDidChange` and the bar closing
+  each run one 1.5s-debounced `refreshFloatingBarCacheIfStale`, which asks for a capture only when
+  `needsCapture || cachedMirrorIsStale`, so a settled cache never flashes the items; (3) `show()`
+  prunes the mirror to what is tucked right now, so an item the system moved back beside the anchor
+  (the privacy indicator does this) leaves the mirror on the next open; (4) Control Center modules
+  whose owner Accessibility RESOLVED are excluded from the mirror and Settings, while an unresolved
+  item (still carrying Tahoe's blanket pid) stays reachable, so the 02a7cc8 regression cannot recur.
+  `GlyphStore` remembers the last captured glyph per attribution label under `~/Library/Caches`,
+  written only for resolved owners; a remembered glyph stands in on the next launch but counts as
+  incomplete so this launch's own capture replaces it. `MirrorReliabilityWorkflowTests` (4 workflows)
+  drives the real engine and controller over `FakeWindowServer` with a scripted screenshot closure.
+  Live: the relaunch inside the fullscreen Space logged the skip and made zero capture requests. The
+  visible-bar half (real glyphs after leaving the Space) still needs a session on a normal Space.
+  The screen-recording indicator is permanent here because DisplayLink Manager records the screen.
 - **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
   menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
   sparkle, on a teal→blue squircle — the Bar Keepers Friend pun). Rendered by `Scripts/render_icon.swift`
@@ -361,11 +396,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     Only intent-backed owners live in the tier; a stray item that physically lands past the divider
     is mirrored as plain hidden. Planner output is byte-identical without the divider. Items rows use
     a three-segment picker plus Show-in-bar and bar-order controls (presentation-only, immediate).
-  - **Live layout mode** (`LayoutMode`, `LiveLayoutPolicy`, `LiveLayoutMonitor`): after app launch/quit,
-    waits for a 1.5s settle and 0.8s pointer idle (30s deadline, 10s min interval), runs a plan-only
-    preview (`HiddenItemController.previewMoves`, shared observe/plan with `reconcile`), and only then
-    requests a background reconcile; defers while the bar/menu/placement/capture is busy and backs off
-    after a failed batch until intent changes. On-Demand remains the default.
+  - **Live layout mode**: shipped 2026-09-12, removed 2026-09-15 (see Removed). Placement applies at
+    launch (floating-bar mode), on Apply Changes/Retry, on preset/trigger/import intent changes, on
+    display change (floating-bar mode), on unpause, and through `resumePendingPlacement`.
   - **Shortcuts** (`HotkeyAssignments`, `HotkeyRecorderView`, `ShortcutsSettingsSection`): a recorder
     for the toggle shortcut with system-reserved/conflict detection, and per-item shortcuts (owner
     key -> combo, ids 1000+, cap 32, toggle wins conflicts) that reveal and activate one item;
@@ -374,19 +407,26 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     Settings > Style): tint/gradient/opacity/shape/border/shadow drawn by one per-display overlay
     window at `kCGMainMenuWindowLevel - 1`, mouse-transparent, excluded from icon capture. Honors
     Reduce Transparency. Whether level 23 renders behind Tahoe's bar content is a hardware question.
-  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; Placement tab, default
+  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; Behavior tab, default
     Never): when a revealed hidden section would be clipped by the notch (reflow or activation), the
     shown items nearest the anchor are swapped left of the section's leftmost item and put back
     before every collapse (toggle, activation rehide, auto-rehide, Option-click, pause, reconcile,
     and quit via `applicationShouldTerminate` -> `.terminateLater`). Never overlaps a placement batch.
   - **Settings sidebar**: `NavigationSplitView` with a fixed 180pt sidebar (identity header at top)
-    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Behavior, Placement,
-    Shortcuts, Presets, Triggers, Groups, Widgets (see "Settings split" above for the 2026-09-14
+    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Behavior, Shortcuts,
+    Presets, Triggers, Groups, Widgets (see "Settings split" above for the 2026-09-14
     reorganization). `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
   - **Export/login feedback**: export distinguishes cancel from write failure; Launch at login shows
     requires-approval / not-registered notes with an "Open Login Items..." deep link.
 
 ## Removed (intentionally — don't re-add without asking)
+
+- **Live layout mode** and the Layout mode picker (2026-09-15, user asked "do we need two?"). Live
+  re-applied saved placement after any app launched or quit, gated on pointer idleness. It was
+  hardware-unverified, could move the pointer while the user worked, silently needed Accessibility,
+  and the user could not tell the modes apart. AppKit restores a relaunched item's slot and a
+  brand-new item lands hidden but reachable, so the remaining behavior covers the cases that matter.
+  `layoutMode` in old stores/exports is ignored on decode; never re-add the key with a new meaning.
 
 - **Menu-bar Search panel** + its ⌥⌘F hotkey — user found it confusing. Settings-only search is separate.
 - **"Show section dividers"** toggle — divider is now an invisible mechanism only.
@@ -439,6 +479,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   on-screen glyphs; the cache held nine app-icon fallbacks. Placement completed with zero moves.
   This is a capture/recovery verification gap, not a demonstrated timing diagnosis. The highlight
   change touched no capture code; the cause and recovery on this display remain unverified.
+  **2026-09-15:** the built-in-display 0/6 runs had the same signature and were a hidden menu bar
+  (fullscreen Space). Re-check this one with `BKF_DUMP_CROPS=1` and `menuBarVisibility` in
+  `BKF-diag.json` before assuming a different cause; a remembered glyph now also masks it visually.
 - **[OPEN 2026-09-11] Itsycal Shown failed on the external display.** Two live requests on the
   1920-point display each exhausted five attempts: window 58 stayed at x=1525 while the anchor
   was x=1625, despite both relay legs reporting submission. This was a real failed placement,
@@ -919,8 +962,6 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     repair on a real defaults file; two expanded dividers (memory, no flash of tier items on a plain
     reveal); Option-click detection via `NSApp.currentEvent`; native relay drops relative to the tier
     divider; the "stray item lands leftmost" premise.
-  - Live mode: exactly one check ~1.5s after an app launch/quit; pointer-idle gate feel; cursor
-    visibility during the resulting move; no double reconcile on display change.
   - Triggers: IOKit power-source callbacks, CoreWLAN delegate (SSID is nil without Location
     permission, so connection is inferred from station mode + RSSI), time-of-day at DST boundaries.
   - Groups/widgets: status-item slot seeding right of the anchor, Command-drag persistence, menu
