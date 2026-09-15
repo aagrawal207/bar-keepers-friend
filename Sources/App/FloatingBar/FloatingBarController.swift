@@ -17,6 +17,7 @@ final class FloatingBarController {
     private let activateWithAX: (CGWindowID, pid_t, CGRect) async throws -> Bool
     private let panelFactory: (() -> NSPanel)?
     private let immovablePIDs: () -> Set<pid_t>
+    private let glyphStore: GlyphStore?
 
     /// Window ids of the app's own control items, excluded from the mirrored list.
     var controlItemWindowIDs: Set<CGWindowID> = []
@@ -100,6 +101,9 @@ final class FloatingBarController {
     /// cache monotonic: once an item has a clean glyph we never downgrade it to an app icon on a
     /// later flaky capture, and a warm-up pass can upgrade a fallback to a glyph.
     private var capturedGlyphIDs: Set<CGWindowID> = []
+    /// Window ids showing a glyph remembered from an earlier launch: real artwork, but not this
+    /// launch's, so it still counts as incomplete and yields to the next capture.
+    private var rememberedGlyphIDs: Set<CGWindowID> = []
     /// False until the first capture pass finishes. Lets the panel show a "Preparing…" state on
     /// the very first open (during launch warm-up) instead of a misleading "no hidden items".
     private(set) var hasCapturedOnce = false
@@ -167,7 +171,8 @@ final class FloatingBarController {
         attribute: @escaping ([MenuBarItemSnapshot]) async -> [MenuBarItemSnapshot] = { await AXAttributionProvider.attribute($0) },
         activateWithAX: @escaping (CGWindowID, pid_t, CGRect) async throws -> Bool = AXActivator.activate,
         panelFactory: (() -> NSPanel)? = nil,
-        immovablePIDs: @escaping () -> Set<pid_t> = ImmovableProcessIDs.current
+        immovablePIDs: @escaping () -> Set<pid_t> = ImmovableProcessIDs.current,
+        glyphStore: GlyphStore? = nil
     ) {
         self.windowServer = windowServer
         self.captureIcons = captureIcons
@@ -176,6 +181,7 @@ final class FloatingBarController {
         self.activateWithAX = activateWithAX
         self.panelFactory = panelFactory
         self.immovablePIDs = immovablePIDs
+        self.glyphStore = glyphStore
     }
 
     /// Window ids the bar would render right now, in order. For tests and diagnostics.
@@ -289,21 +295,34 @@ final class FloatingBarController {
         let current = applyingKnownOwners(to: attributed, observedAt: observedAt)
         guard !Task.isCancelled, !current.isEmpty else { return }
         unactivatableWindowIDs.removeAll()
-        var captured = 0, fellBack = 0, omitted = 0
+        var captured = 0, remembered = 0, kept = 0, fellBack = 0, omitted = 0
         for item in current {
-            if let cg = images[item.windowID] {
+            let id = item.windowID
+            // Only a resolved owner has a stable identity worth remembering across launches.
+            let storeKey = windowOwners[id]?.owner == nil ? nil : ItemControlStore.key(for: item)
+            if let cg = images[id] {
                 // The captured glyph is trimmed to its bounding box; size the NSImage from the
                 // glyph's own pixel dimensions so its aspect ratio is preserved when scaled.
-                let size = CGSize(width: cg.width, height: cg.height)
-                iconCache[item.windowID] = NSImage(cgImage: cg, size: size)
-                capturedGlyphIDs.insert(item.windowID)
+                let image = NSImage(cgImage: cg, size: CGSize(width: cg.width, height: cg.height))
+                iconCache[id] = image
+                capturedGlyphIDs.insert(id)
+                rememberedGlyphIDs.remove(id)
                 captured += 1
-            } else if capturedGlyphIDs.contains(item.windowID) {
+                if let storeKey { glyphStore?.store(image, for: storeKey) }
+            } else if capturedGlyphIDs.contains(id) {
                 captured += 1 // keep the real glyph already cached (monotonic)
+            } else if rememberedGlyphIDs.contains(id) {
+                kept += 1
+            } else if let storeKey, let stored = glyphStore?.image(for: storeKey) {
+                // A glyph from an earlier launch stands in until this launch captures its own; it is
+                // not counted as captured, so the retries that would replace it keep running.
+                iconCache[id] = stored
+                rememberedGlyphIDs.insert(id)
+                remembered += 1
             } else if allowFallback {
                 // No glyph after this pass and none cached: use the owning app's real icon so the
                 // item is never permanently missing. Only on a settled/final pass.
-                iconCache[item.windowID] = AppIconProvider.icon(forPID: item.ownerPID)
+                iconCache[id] = AppIconProvider.icon(forPID: item.ownerPID)
                 fellBack += 1
             } else {
                 // Early pass: leave absent so it's omitted from the bar (no jarring app icon)
@@ -323,8 +342,9 @@ final class FloatingBarController {
         let liveIDs = Set(current.map { $0.windowID })
         iconCache = iconCache.filter { liveIDs.contains($0.key) }
         capturedGlyphIDs = capturedGlyphIDs.intersection(liveIDs)
+        rememberedGlyphIDs = rememberedGlyphIDs.intersection(liveIDs)
         hasCapturedOnce = true
-        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped, \(dedupedAlwaysHidden.count) in tier (\(strays.count) without intent); glyphs=\(captured) appIconFallback=\(fellBack) omitted=\(omitted); cache size=\(iconCache.count)")
+        DebugLog.log("floatingbar: \(hidden.count) hidden -> \(deduped.count) deduped, \(dedupedAlwaysHidden.count) in tier (\(strays.count) without intent); glyphs=\(captured) remembered=\(remembered) kept=\(kept) appIconFallback=\(fellBack) omitted=\(omitted); cache size=\(iconCache.count)")
         onCacheUpdated?()
         // If the bar is open, re-lay-it-out so a freshly captured glyph (or a now-complete set)
         // appears without the user having to reopen it.
@@ -617,6 +637,7 @@ final class FloatingBarController {
         cachedTierWindowIDs = []
         iconCache.removeAll()
         capturedGlyphIDs.removeAll()
+        rememberedGlyphIDs.removeAll()
         unactivatableWindowIDs.removeAll()
         hasCapturedOnce = true
         onCacheUpdated?()
@@ -743,6 +764,7 @@ final class FloatingBarController {
         }
         iconCache = iconCache.filter { liveIDs.contains($0.key) }
         capturedGlyphIDs.formIntersection(liveIDs)
+        rememberedGlyphIDs.formIntersection(liveIDs)
         cachedHiddenOrder.removeAll { !liveIDs.contains($0.windowID) }
         cachedAlwaysHiddenOrder.removeAll { !liveIDs.contains($0.windowID) }
         cachedTierWindowIDs.formIntersection(liveIDs)

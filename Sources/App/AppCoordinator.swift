@@ -57,7 +57,8 @@ final class AppCoordinator {
         let bar = FloatingBarController(
             windowServer: windowServer,
             captureIcons: capture.captureIcons,
-            preferences: preferences
+            preferences: preferences,
+            glyphStore: .default
         )
         floatingBar = bar
 
