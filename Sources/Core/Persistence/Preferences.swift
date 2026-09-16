@@ -98,7 +98,7 @@ public struct Preferences: Equatable, Sendable, Codable {
     /// Optional tint/shape overlay drawn behind the menu bar; `.none` draws nothing.
     public var menuBarStyle: MenuBarStyle
 
-    /// User-defined menu bar items that run a small allowlisted action when clicked.
+    /// Legacy widget data retained for saved preferences and exports; never installed or executed.
     public var widgets: [MenuBarWidget]
 
     /// Whether a notch-clipped reveal may temporarily tuck shown items to make room (reflow/activation).

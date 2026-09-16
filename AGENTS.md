@@ -15,10 +15,12 @@ options over adding power-user knobs.
 
 ## Current direction
 
-The user has authorized commits and pushes and requested continued work toward Bartender parity.
-Track actual capabilities and verification gaps in [PARITY.md](PARITY.md); do not equate a passing
-build with complete parity. Choose the best engineering approach without asking for routine
-recommendations. Native behavior still requires evidence, and the safety gates below still apply.
+The user has authorized commits and pushes. The current priority (2026-09-15) is core hide/unhide
+reliability, simpler Settings, and less manual testing. Earlier Bartender-parity work is a capability
+inventory, not a mandate to restore removed tools. Track actual capabilities and verification gaps
+in [PARITY.md](PARITY.md); do not equate a passing build with complete parity. Choose the best
+engineering approach without asking for routine recommendations. Native behavior still requires
+evidence, and the safety gates below still apply.
 
 The user explicitly requested hover reveal again on 2026-09-11: an opt-in setting below Auto
 Re-hide that opens the floating bar when hovering over the BKF icon and closes a hover-owned bar after leaving.
@@ -28,18 +30,18 @@ The user requested staged placement and Settings previews on 2026-09-12. Hidden/
 stay in a session-only draft until Apply Changes; Discard abandons only the draft. Preview rendering
 must remain cache-only. Apply uses the existing serialized mover, not parallel native gestures.
 
-On 2026-09-12 the user asked for full Bartender 6 parity and authorized commits/pushes for it. Three
+Historical parity push: on 2026-09-12 the user asked for full Bartender 6 parity. Three
 waves shipped (presets, triggers, groups, spacing, scroll reveal, onboarding, restart, update check;
 Always Hidden tier, shortcut recorder + item shortcuts, menu bar styling, widgets;
-notch make-room, Settings sidebar, export/login feedback). Every feature is hostless-tested behind the
-existing seams and defaults to today's behavior; the native QA list below is what still separates
-"feature shipped" from "feature verified". Do not describe any of them as hardware-verified.
+notch make-room, Settings sidebar, export/login feedback). Those waves received hostless testing
+behind the existing seams, not native qualification. Widgets were subsequently retired at the user's
+request; the retained features still have the hardware gaps below.
 
 Prior focus (2026-09-13): the user requested Items Apply Changes reliability only, not further
 parity expansion. The native grab/drop sequencing defect below is fixed and verified for Alfred and
 ACME on the built-in display. Other native layouts still need evidence; do not broaden this claim.
 
-Current focus (2026-09-14): the user explicitly requested Settings search and moving Style directly
+Earlier focus (2026-09-14): the user explicitly requested Settings search and moving Style directly
 below Items. Search is Settings-only; the removed menu-bar Search panel and its global hotkey stay
 removed. The Apply Changes safety and persistence constraints still apply.
 
@@ -56,6 +58,17 @@ Later on 2026-09-15 the user requested a destination highlight after selecting a
 result. This is implemented as a three-second outline of the matching setting or section, with
 an enabling-switch fallback for hidden controls. See Built and `PARITY.md` for verification.
 
+Latest request (2026-09-15): simplify Settings and reduce the user's manual-testing burden. The user
+expressly said widgets were unnecessary. The primary sidebar is now **General, Items, Style,
+Behavior, Shortcuts, Advanced, About**. Advanced links to Presets/Triggers/Groups and holds spacing,
+notch make-room, and backup; moving these controls does not disable saved rules/groups or retire
+their hardware QA. Widget editing, status-item installation, and action execution are removed;
+readable legacy widget data stays inert through load/import/edit/export. Do not re-add widget
+runtime as parity work. General has an Arrange Items quick start, and About has project/help links.
+The full suite passed, including real-control workflows and AX geometry across every Settings pane.
+Appearance review is partial: off-screen PNGs omit sidebar/glass and some material-backed content.
+Live appearance, focus, and VoiceOver remain unverified; see the verification details below.
+
 **Testing direction (2026-09-14, from the user):** prefer fewer functional workflow tests over many
 unit tests. A workflow test drives the real Settings UI, the real model, real persistence
 (`PreferencesStore` in an isolated `UserDefaults` suite), and the real engine/mover together, and
@@ -64,6 +77,10 @@ mocks only OS boundaries that would otherwise move the user's cursor or rearrang
 rather than as separate narrow tests. `AppIconWorkflowTests` and `NativeMoveTests` are the models
 to follow. Do not delete existing unit tests wholesale; migrate a narrow test only once a workflow
 test demonstrably covers its assertion.
+The 2026-09-15 simplification extends real Settings workflows and records off-screen PNG attachments
+for appearance review. Retire runtime-specific tests only with their retired implementation; keep
+legacy persistence coverage. Off-screen rendering reduces manual checks but does not qualify live
+focus, VoiceOver, native menus, movement, or capture.
 
 ## Loop charter (read first if you are an automated loop fire)
 
@@ -92,7 +109,7 @@ this fire; top blocked items are X, Y — need hardware QA / user input") and **
 - **Do not change the attribution label or any persistence key.** The owner-label string is the key
   for Hidden/Shown intent (`ItemControlStore`) and aliases (`ItemAliasStore`); changing how a key is
   formed silently evaporates every user's saved config. This is the scariest landmine here.
-- **Do not re-add removed features** (menu-bar search or visible section dividers) without an explicit
+- **Do not re-add removed features** (menu-bar search, visible section dividers, or widgets) without an explicit
   request. Hover reveal has fresh user approval; see Current direction. Historical plans are not
   current requirements; AGENTS.md is the source of truth.
 - **Do not weaken, skip, or delete a test to get green.** A failing test is a finding, not an
@@ -140,16 +157,35 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
-- Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1112 tests, 81 suites**, 1819 invocations including
-  parameterized cases). Last full build/test: 2026-09-15, macOS 26.6.2 / Xcode 27.0, zero failures
-  or skipped tests. The built app also passed `codesign --verify --deep --strict`.
+- Setup: [README source-build instructions](README.md#build-from-source) cover full Xcode.app,
+  XcodeGen, the reader's own stable Apple Development identity, and standalone launch. The certificate
+  pinned in `project.yml` belongs to the maintainer; others must override it for both build and test.
+- Build from the repo root, with `BKF_SIGNING_IDENTITY` set as in README:
+  `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -configuration Debug -destination 'platform=macOS' -derivedDataPath "$PWD/DerivedData" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$BKF_SIGNING_IDENTITY" build`
+- Test: same command with `test`.
+- **Latest verified build/test (2026-09-15, Settings simplification/widget retirement):**
+  `xcodebuild ... build test` passed on macOS 26.6.2 / Xcode 27.0: **1082 tests, 79 suites**,
+  1794 invocations including parameterized cases, zero failures or skips. Strict
+  `codesign --verify --deep --strict` passed on
+  `DerivedData/Build/Products/Debug/BarKeepersFriend.app`.
+- **Review:** `git diff --check` and `git diff --cached --check` were clean. A fresh-context,
+  read-only general reviewer approved the staged diff with no findings. The dedicated different-model
+  review failed infrastructure authentication before reviewing; no different-model review completed.
+  Manual security review was completed. `scan_diff`, `semgrep`, and `gitleaks` were unavailable via
+  `command -v`, so no automated security scan ran.
+- **Appearance:** the full suite generated 26 off-screen PNGs; representative inspection was partial
+  because `cacheDisplay` omits sidebar/glass and some material-backed content. AX geometry and real
+  controls passed across all panes. See `PARITY.md` for the inspected views and remaining visual QA.
+- **Historical baseline, before the Settings simplification/widget retirement:**
+  2026-09-15, macOS 26.6.2 / Xcode 27.0, **1112 tests, 81 suites**, 1819 invocations including
+  parameterized cases, zero failures or skipped tests. That built app also passed
+  `codesign --verify --deep --strict`. These are not counts or verification of the current changes.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
   is unchanged. AppKit hide-animation completion still produces pre-existing actor-isolation
   compiler warnings on a full compile.
-- Sign: stable Apple Development identity by SHA-1 (in `project.yml`) so granted TCC
-  permissions persist across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
+- Sign: reuse your stable Apple Development identity by SHA-1 to help preserve TCC permissions
+  across rebuilds. Never ad-hoc (`-`) — it re-prompts every launch.
 - All git on this Mac needs `-c core.hooksPath=/dev/null` (git-defender). Never `git push`
   unless asked; never force-push / rewrite pushed history. Main branch: `main`.
 
@@ -159,7 +195,8 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 `debugserver`, sits in state `SX`, and **cannot be `pkill`ed or signalled**; only Xcode's Stop
 (⌘.) clears it. A standalone launch is parented to `launchd`, state `S`.
 
-- Launch: `open <DerivedData>/.../Debug/BarKeepersFriend.app`
+- Launch from the repo root after the README build:
+  `open "$PWD/DerivedData/Build/Products/Debug/BarKeepersFriend.app"`
 - **Diagnostics (`kill -USR1 <pid>`):** refreshes the mirror, then writes
   `~/Library/Logs/BKF-diag.json` (deep AX dump + attribution per item) and
   `~/Library/Logs/BKF-bar.png` (rendered panel). Async + deep AX inspect — wait ~12–16s, don't
@@ -249,7 +286,7 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 - **Anchor right-click menu** — app name + version header, a live **status line** (Paused / Ready /
   Working… / Collecting icons…, from the pure `AppStatus` enum in Core), a checkable **Pause** (reveals
   items in place and stops all automated hide/reveal/move; session-only), **About** (standard panel),
-  Settings, Quit. *(Restart / Check-for-Updates still to come — see "Rich anchor right-click menu".)*
+  Settings, Restart, Check for Updates, Quit.
 - **Auto re-hide**, **dismiss-on-mouse-exit** (gated on the pointer having first entered the
   panel, so a revealed bar doesn't vanish instantly), **launch at login**, **layout
   export/import** (versioned JSON), **per-item display aliases** (nicknames in the bar/Items
@@ -288,8 +325,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Settings has inert Menu Bar and Hidden Bar/List schematics using cached glyphs/app icons.
   "After Apply" projects merged saved-plus-draft intent; "Last Observed" uses loaded observations,
   with unknown placement separate. These are manageable-item previews, not exact screen replicas.
-  The 640x720 window keeps its footer visible and cached rows present during reloads. Off-screen
-  tests cover actual controls, light/dark pixels, overflow, aliases, unknown placement, and full-window
+  The original 640x720 window kept its footer visible and cached rows present during reloads; the
+  current sidebar window is 820x720. Off-screen tests cover actual controls, light/dark pixels,
+  overflow, aliases, unknown placement, and full-window
   fit with read/placement errors. Test windows never order on screen. Pointer/VoiceOver feel and
   external-display placement still need native QA. No native delays, relay, or capture transport changed.
 - **Hide All / Show All** stage all applicable owner choices in the same draft, including explicit
@@ -301,9 +339,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Typing keeps the current pane mounted and preserves Items drafts without extra item reads or writes.
   Result buttons, including the current page, and Return navigate and clear the query; blank/unmatched
   Return does nothing. Escape, the clear button, and external tab requests clear search. Marked-text
-  commands remain with the input method. Query history is disabled. This is not item-name filtering,
-  a jump to an individual control, or the removed global Search feature. Style is directly below Items;
-  the 180pt sidebar and 820x720 window still fit. See `PARITY.md` for tests and native QA limits.
+  commands remain with the input method. Query history is disabled. Search does not filter item names,
+  auto-scroll, or move keyboard focus. Style is directly below Items. Advanced children remain directly
+  searchable, including parent-qualified queries such as "Advanced Wi-Fi"; destination highlights
+  are described below. The window is 820x720 with a 180pt sidebar. The new hierarchy passed hostless
+  workflows and AX-geometry checks; see `PARITY.md` for results and native QA limits.
 - **Settings search destination highlights (2026-09-15, workflow + bitmap-tested).** Selecting a
   result, including the current page, outlines the matching setting or section for three seconds.
   `SettingsSearchTarget` shares keywords with the sidebar index. Page-qualified queries such as
@@ -313,31 +353,51 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   clears the cue; repeated selections restart its lifetime without remounting the pane. The outline
   and tint add no layout space and ignore pointer input. Reduce Motion disables the fade, increased
   contrast thickens the outline, and accessibility custom content exposes "Settings search: Match"
-  without replacing a control's existing help or value. Four workflows added to `SettingsSearchTests`
-  exercise 34 destination queries, conditional controls, cancellation/repeat timing, and actual
-  light/dark pixels. Its harness uses a real isolated `PreferencesStore` and real engine with counted
+  without replacing a control's existing help or value. The original four workflows in
+  `SettingsSearchTests` covered 34 destination queries, conditional controls, cancellation/repeat
+  timing, and actual light/dark pixels; those are historical coverage figures before the hierarchy
+  update. Its harness uses a real isolated `PreferencesStore` and real engine with counted
   item-provider/capture/status-button seams; search preserves Items drafts and performs no preference
   writes, moves, or capture. No auto-scroll or keyboard-focus jump was added. On-screen VoiceOver
   delivery and the feel of the fade remain native QA.
-- **Settings split + BKF icon choice (2026-09-14, workflow-tested).** General had grown to ten
-  sections and scrolled; it now holds only machine-level settings (Launch at login, Permissions,
-  Menu bar spacing, Backup). New panes: **Behavior** (floating bar, re-hide, hover, scroll, and since
-  2026-09-15 Notch make-room; it refreshes the permission probe itself so the notch section's
-  Accessibility warning is never stale), **Shortcuts** (the toggle recorder and per-item shortcuts;
-  the only pane besides Items that reads the menu bar). A Placement pane existed for one day holding
-  Layout mode and Notch; it went with Live mode. Sidebar order: General, Items, Style, Behavior,
-  Shortcuts, Presets, Triggers, Groups, Widgets. Every pane's bottommost control is asserted visible
-  in the real 820x720 window in its richest permission-independent state
-  (`SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling`); Behavior and Style both
-  overflowed during the rearrangement and that test is what caught it, and it caught Behavior again
-  when Notch moved in (fixed by merging the notch notes into one and dropping the redundant tip).
+- **Settings simplification + About (2026-09-15, hostless workflow/geometry verified).** Seven
+  primary rows: **General, Items, Style, Behavior, Shortcuts, Advanced, About**. The Advanced hub has
+  buttons for Presets/Triggers/Groups, followed by spacing, notch make-room, and backup. Each child
+  has a back-to-Advanced button and keeps Advanced selected in the normal sidebar. Existing retained
+  child identifiers and `requestedTab` deep links remain usable; a search result can open a child
+  directly and highlight its controls (including "Advanced Wi-Fi"). General contains Arrange Items,
+  launch at login, and permissions. Behavior groups hidden-bar, closing, and reveal-gesture controls.
+  Advanced refreshes permissions for the relocated notch warning even if General was never opened.
+  Native grouped forms share a compact icon/title/purpose header; empty preset/trigger/group pages
+  use cards. About renders the selected runtime app artwork and bundle version, with explicit links
+  to the GitHub project, issues, and MIT license. It does not rewrite the installed icon.
+  Navigation-only actions perform no preference writes, moves, or capture. Items, Shortcuts, and Groups retain
+  their legitimate item reads; entering Advanced does not eagerly mount its children. Saved presets,
+  enabled rules, and groups retain their behavior and outstanding hardware QA.
+  `SettingsSearchTests.quickStartAdvancedToolsSearchAndAboutPreserveAnUnappliedDraft` adds an
+  empty/populated workflow over the real UI/model/store/engine, including General's Arrange Items,
+  an unapplied Items draft, child/back navigation, qualified search, and exact About-link URLs via
+  injected `OpenURLAction`. `SettingsSidebarTests` checks all seven primary rows, parent selection,
+  child routing, light/dark pane bounds, and richest configuration-pane fits. These checks passed in
+  the full suite, which generated 20 light/dark pane PNGs and six expanded-configuration PNGs.
+  Representative appearance review is partial: `cacheDisplay` omits sidebar text/icons, glass, and
+  some material-backed Items/Advanced-child content, while Form contents are readable. AX geometry
+  and real controls are verified across all panes, including omitted regions. Expanded Advanced
+  controls/error text fit close to the bottom. Full-window appearance, focus, and VoiceOver remain
+  unverified. No native input or capture mechanism changed; see `PARITY.md` for review details.
+- **Settings split + BKF icon choice (2026-09-14, historical layout; icon workflow-tested).** The
+  earlier split reduced General's ten sections by introducing Behavior and Shortcuts. A temporary
+  Placement pane went with Live mode. Spacing/backup and then notch moved to Advanced in the later
+  simplification above. `SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling` caught
+  Behavior/Style overflow during those earlier arrangements; current configuration-pane bounds pass,
+  with the partial appearance-review limits above.
   Style gained an **Icons** row: a menu-bar symbol pop-up (five SF Symbols, `AppIconChoice.MenuBarSymbol`)
   and five app-artwork themes (`AppIconChoice.AppTheme`, Ocean is the shipped icon; others redraw the
   same sparkle-and-pill mark on a different gradient at runtime via `AppIconRenderer`, mirroring
   `Scripts/render_icon.swift`). Persisted as `Preferences.appIcon` with per-field lenient decoding, so
   a future symbol name degrades only that field. The anchor image is applied through
   `CosmeticHideEngine.applyAnchorArtwork` only when the symbol changes (test seam `setAnchorImage`);
-  the app image reaches the Settings header, the About panel (explicit `.applicationIcon` option),
+  the app image reaches the Settings header, About page, the About panel (explicit `.applicationIcon` option),
   and `NSApp.applicationIconImage` for alerts. **The installed Finder icon is never rewritten**; the
   Settings note says so. Ocean's fallback never reads `NSApp.applicationIconImage` (this feature sets
   it, so it would echo the current theme). `AppIconWorkflowTests` drives the real Settings controls,
@@ -374,16 +434,17 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   (pure Core Graphics, no SVG toolchain needed) at the 10 standard macOS renditions; wired via
   `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`. Verified in the built bundle (`AppIcon.icns` +
   `Assets.car`, `CFBundleIconName=AppIcon`, `assetutil` lists all renditions). Matters even for an
-  agent app: the Settings header and the About panel both render `NSApp.applicationIconImage`
+  agent app: the Settings header and About surfaces render BKF's runtime artwork
   (previously the blank generic icon). *Large/mid sizes verified by eye here; the in-Settings/About
   appearance is review-only (no Settings visibility from this rig).*
 
-- **Bartender-parity tier (2026-09-12/13, pure + adapter + rendering-tested; native QA pending).**
-  All persisted as new lenient/lossy `Preferences` fields; existing stores load unchanged and every
-  feature is off or empty by default, so a user who never touches them keeps the prior behavior.
-  - **Presets** (`LayoutPreset`, `PresetLibrary`; Settings > Presets; anchor-menu submenu with the
+- **Organization, appearance, and convenience tools (introduced 2026-09-12/13; historical pure +
+  adapter + rendering coverage, native QA pending).** Retained features use lenient/lossy
+  `Preferences` fields and opt-in defaults. Moving their Settings pages does not turn off existing
+  saved configuration. Widgets are retired, as recorded under Removed.
+  - **Presets** (`LayoutPreset`, `PresetLibrary`; Settings > Advanced > Presets; anchor-menu submenu with the
     active preset checked). Applying replaces `itemControls` only and runs the normal placement path.
-  - **Triggers** (`TriggerRule`, `TriggerEvaluator`, `TriggerMonitor`; Settings > Triggers). Battery,
+  - **Triggers** (`TriggerRule`, `TriggerEvaluator`, `TriggerMonitor`; Settings > Advanced > Triggers). Battery,
     charging, battery-below, low power, Wi-Fi, frontmost app, external display, time-of-day/weekday.
     A matching rule applies its preset and remembers the prior arrangement in `triggerState`; the
     baseline is restored when no rule matches or the rule/preset is deleted. Evaluation is idempotent;
@@ -391,20 +452,17 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     (never close an open menu or prompt for Accessibility). Sources are armed only for the conditions
     in use; a 30s poll exists only while a Wi-Fi/battery rule exists. An unapplied Items draft is
     discarded when a trigger/preset changes the saved sets, with a footer notice.
-  - **Groups** (`ItemGroup`, `ItemGroupLibrary`, `GroupStatusItemsController`; Settings > Groups).
+  - **Groups** (`ItemGroup`, `ItemGroupLibrary`, `GroupStatusItemsController`; Settings > Advanced > Groups).
     Grouped owners are forced Hidden through `ItemGroupLibrary.effectiveControls` (placement, change
     detection, Items rows, previews) and reachable from a `BKFGroup-<uuid>` status item whose menu
     activates members from the glyph cache. Items rows for grouped owners are disabled ("In group").
-  - **Widgets** (`MenuBarWidget`, `WidgetActionRunner`, `WidgetStatusItemsController`; Settings >
-    Widgets). `BKFWidget-<uuid>` status items running allowlisted actions only: http/https/mailto
-    URL, launch app by bundle id, `shortcuts run -- <name>` (argv, no shell), toggle bar.
-  - **Menu bar item spacing** (`MenuBarSpacing`, `MenuBarSpacingService`; General tab). Writes the
+  - **Menu bar item spacing** (`MenuBarSpacing`, `MenuBarSpacingService`; Advanced page). Writes the
     global-domain `NSStatusItemSpacing`/`NSStatusItemSelectionPadding` (ByHost + AnyHost) only on an
     explicit change; launch never removes values set elsewhere. Needs app relaunch/logout to show.
   - **Scroll/swipe reveal** (`ScrollRevealRecognizer`, `ScrollRevealMonitor`; opt-in below hover).
     Global+local scroll monitors (no Accessibility), one effect per gesture, 400ms cooldown.
   - **Onboarding** (`Onboarding*`): shown once for genuinely fresh installs (no saved store), never
-    for upgrades. Welcome, layout mode, permissions with live chips, done.
+    for upgrades. Welcome, placement explanation, permissions with live chips, done.
   - **Restart** (`RestartService`: detached `/bin/sh` waits for our pid to exit, then `open`) and
     **Check for Updates** (`UpdateCheckService`: manual GET of the GitHub latest release, no polling)
     in the anchor menu; `AppStatus.updateAvailable` is fed by the manual check.
@@ -426,19 +484,32 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     Settings > Style): tint/gradient/opacity/shape/border/shadow drawn by one per-display overlay
     window at `kCGMainMenuWindowLevel - 1`, mouse-transparent, excluded from icon capture. Honors
     Reduce Transparency. Whether level 23 renders behind Tahoe's bar content is a hardware question.
-  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; Behavior tab, default
+  - **Notch make-room** (`NotchOverflowPlanner`, `NotchOverflowCoordinator`; Advanced page, default
     Never): when a revealed hidden section would be clipped by the notch (reflow or activation), the
     shown items nearest the anchor are swapped left of the section's leftmost item and put back
     before every collapse (toggle, activation rehide, auto-rehide, Option-click, pause, reconcile,
     and quit via `applicationShouldTerminate` -> `.terminateLater`). Never overlaps a placement batch.
   - **Settings sidebar**: `NavigationSplitView` with a fixed 180pt sidebar (identity header at top)
-    and a titled detail pane; window 820x720. Tabs: General, Items, Style, Behavior, Shortcuts,
-    Presets, Triggers, Groups, Widgets (see "Settings split" above for the 2026-09-14
-    reorganization). `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
+    and an icon/title/purpose detail header; window 820x720. Primary pages: General, Items, Style,
+    Behavior, Shortcuts, Advanced, About. Presets/Triggers/Groups are Advanced children, independently
+    searchable. `SettingsView(model:initialTab:)` and `requestedTab` remain the navigation API.
   - **Export/login feedback**: export distinguishes cancel from write failure; Launch at login shows
     requires-approval / not-registered notes with an "Open Login Items..." deep link.
 
 ## Removed (intentionally — don't re-add without asking)
+
+- **Widgets (2026-09-15, user said they were unnecessary).** Removed `WidgetsSettingsTab`,
+  `WidgetStatusItemsController`, `WidgetActionRunner`, and their AppCoordinator wiring. No widget
+  status items or actions are installed/executed. The `widgets` preferences key, `MenuBarWidget`,
+  and legacy action Codable shape remain for load/import/edit/export compatibility; readable
+  payloads remain inert, including parameters the former editor rejected. Existing lossy decoding,
+  duplicate/cap handling, and name/symbol fallbacks remain. Tests for the retired runner, controller,
+  and editor were removed with those implementations; legacy `MenuBarWidgetTests` remain, and new
+  `WidgetCompatibilityWorkflowTests` cover persisted/imported literal JSON through real Behavior
+  edits, save/reload, and export while preserving aliases and an Items draft. These checks passed
+  in the full suite.
+  Widget-only native QA (status-item placement, action launch, Shortcuts process, mailto handoff)
+  is retired with those paths; this does not retire group, trigger, or per-item-shortcut QA.
 
 - **Live layout mode** and the Layout mode picker (2026-09-15, user asked "do we need two?"). Live
   re-applied saved placement after any app launched or quit, gated on pointer idleness. It was
@@ -974,17 +1045,22 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   Hammerspoon, ACME); `BKF-bar.png` confirms it. Kept as a note in case it regresses on a different
   menu-bar layout.
 
-### Needs hardware verification (can't be done from an agent — Xcode holds the app)
+### Needs hardware verification (off-screen tests do not qualify native behavior)
 
-- **Parity-tier native behavior (2026-09-13).** Everything below is hostless-tested only:
+Moving tools into Advanced changes their discoverability, not their saved configuration or native
+mechanisms. Their hardware obligations remain. Widget-specific runtime paths and their hardware
+checks were removed; legacy widget persistence and its compatibility workflows passed the current
+full suite.
+
+- **Retained parity-tier native behavior (historical hostless coverage from 2026-09-13).**
   - Always Hidden: first creation of `BKFAlwaysHidden` lands left of `BKFHidden`; three-slot launch
     repair on a real defaults file; two expanded dividers (memory, no flash of tier items on a plain
     reveal); Option-click detection via `NSApp.currentEvent`; native relay drops relative to the tier
     divider; the "stray item lands leftmost" premise.
   - Triggers: IOKit power-source callbacks, CoreWLAN delegate (SSID is nil without Location
     permission, so connection is inferred from station mode + RSSI), time-of-day at DST boundaries.
-  - Groups/widgets: status-item slot seeding right of the anchor, Command-drag persistence, menu
-    presentation via `performClick`, `shortcuts run` exit handling, `mailto:` handoff.
+  - Groups: status-item slot seeding right of the anchor, Command-drag persistence, member-menu
+    presentation via `performClick`, and activation through the shared item path.
   - Spacing: `defaults -currentHost read -globalDomain NSStatusItemSpacing` after Apply; effect
     after relaunching a menu-bar app; whether ByHost or AnyHost is the domain AppKit reads.
   - Styling: whether a level-23 overlay is visible behind Tahoe's transparent bar; interaction with
@@ -995,8 +1071,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     must not close Settings while recording); item shortcut fires reveal -> click -> rehide.
   - Restart/update: LaunchServices settle vs the single-instance guard; live GitHub check (the repo
     has no releases yet, so it should read "No published releases").
-  - Onboarding/sidebar: glass sidebar rendering, non-collapsibility under drag, VoiceOver.
+  - Onboarding: live permission transitions, presentation, and VoiceOver.
 
+- **Simplified Settings and About (2026-09-15).** Real-control workflows and AX geometry pass across
+  all panes. PNG review is partial because `cacheDisplay` omits sidebar/glass and some material-backed
+  content; full-window appearance remains unverified. Native material appearance, sidebar
+  non-collapsibility under drag, pointer/keyboard focus, child/back navigation feel, VoiceOver, and
+  real browser handoff still need live checks. Injected `OpenURLAction` tests verify exact URLs.
+  The About PNG's version 16.0 comes from the test runner's `Bundle.main`, not the production app.
+  A smaller sidebar and retired widgets reduce the QA surface without qualifying retained native tools.
 - **Staged Settings interaction.** Off-screen tests exercise Apply/Discard/bulk controls, edited
   aliases across regrouping, preview overflow, and the full window's bounds. Pointer/keyboard focus
   transitions and VoiceOver navigation in an on-screen Settings window remain unverified. The
@@ -1059,12 +1142,15 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 ### Features not yet built (from the plan, roughly prioritized)
 
 - **Sparkle auto-update** and a **notarized DMG** (Developer ID signing). The manual GitHub check is
-  in place; a signed feed and installer are the remaining distribution work.
+  in place; release signing, Hardened Runtime validation, notarization, a signed feed, and packaging
+  remain. Read-only GitHub checks on 2026-09-15 found no releases or downloadable release assets.
+  README documents source builds with the reader's own stable signing identity.
+- **A future Mac App Store edition** requires a public-API, sandboxed redesign. The current
+  unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); this is not a
+  claim that a redesigned edition is permanently impossible. See README's Apple source links.
 - **Per-Space / per-display styles and presets.** Bartender applies styles per menu bar; BKF uses
   one style and one arrangement for all displays.
 - **Menu-bar search** stays removed at the user's request (see Removed); Settings search is built.
-- **Settings polish that needs the user's eye:** section spacing/footnotes and an About area; the
-  sidebar shipped 2026-09-13 and the previous "tab strip" TODO is closed.
 - **Restart / Check for Updates** shipped 2026-09-12 (anchor menu); the earlier "Rich anchor menu"
   in-progress notes are superseded by the Built entry above.
 

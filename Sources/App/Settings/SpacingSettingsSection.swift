@@ -1,8 +1,7 @@
 import BarKeepersFriendCore
 import SwiftUI
 
-/// General-tab section for system-wide status item spacing. Edits go straight to `model.preferences`;
-/// the coordinator writes the global domain and passes back whether a relaunch is still pending.
+/// Custom spacing is system-wide and takes effect per app at relaunch.
 struct SpacingSettingsSection: View {
     @Bindable var model: SettingsModel
     var needsLogout: Bool
@@ -11,43 +10,51 @@ struct SpacingSettingsSection: View {
 
     var body: some View {
         Section("Menu bar spacing") {
-            Toggle("Reduce menu bar item spacing", isOn: $model.preferences.menuBarSpacing.enabled)
-                .accessibilityIdentifier("settings-spacing-enabled")
-                .settingsSearchTarget(.spacing)
-
-            if spacing.enabled {
-                LabeledContent("Spacing") {
-                    Stepper(value: $model.preferences.menuBarSpacing.spacing, in: MenuBarSpacing.validRange) {
-                        Text("\(spacing.spacing) pt")
-                            .monospacedDigit()
-                    }
-                    .accessibilityIdentifier("settings-spacing-spacing")
+            HStack {
+                Toggle("Reduce menu bar item spacing", isOn: $model.preferences.menuBarSpacing.enabled)
+                    .accessibilityIdentifier("settings-spacing-enabled")
+                    .settingsSearchTarget(.spacing)
+                Spacer(minLength: 12)
+                if spacing.enabled {
+                    Button("Reset to system default") { model.preferences.menuBarSpacing = .systemDefault }
+                        .help("Turns custom spacing off and restores the system values (\(MenuBarSpacing.systemDefault.spacing) pt).")
+                        .accessibilityIdentifier("settings-spacing-reset")
                 }
-                LabeledContent("Selection padding") {
-                    Stepper(value: $model.preferences.menuBarSpacing.selectionPadding, in: MenuBarSpacing.validRange) {
-                        Text("\(spacing.selectionPadding) pt")
-                            .monospacedDigit()
-                    }
-                    .accessibilityIdentifier("settings-spacing-padding")
-                }
-                // The system default is "no custom spacing", so a reset also turns the toggle off.
-                Button("Reset to system default") { model.preferences.menuBarSpacing = .systemDefault }
-                    .help("Turns custom spacing off and restores the system values (\(MenuBarSpacing.systemDefault.spacing) pt).")
-                    .accessibilityIdentifier("settings-spacing-reset")
             }
 
-            Text("This is a system-wide setting shared by all apps, not just this one.")
-                .font(.callout)
+            if spacing.enabled {
+                HStack(spacing: 20) {
+                    LabeledContent("Spacing") {
+                        Stepper(value: $model.preferences.menuBarSpacing.spacing, in: MenuBarSpacing.validRange) {
+                            Text("\(spacing.spacing) pt")
+                                .monospacedDigit()
+                        }
+                        .fixedSize()
+                        .accessibilityIdentifier("settings-spacing-spacing")
+                    }
+                    LabeledContent("Selection padding") {
+                        Stepper(value: $model.preferences.menuBarSpacing.selectionPadding, in: MenuBarSpacing.validRange) {
+                            Text("\(spacing.selectionPadding) pt")
+                                .monospacedDigit()
+                        }
+                        .fixedSize()
+                        .accessibilityIdentifier("settings-spacing-padding")
+                    }
+                }
+            }
+
+            Text("System-wide: all apps share these values.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-spacing-shared-note")
 
             if needsLogout {
                 Label(
-                    "Takes effect for each app after it relaunches, or after you log out and back in.",
+                    "Relaunch menu bar apps or log out to see the change.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
-                .font(.callout)
+                .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-spacing-logout-note")

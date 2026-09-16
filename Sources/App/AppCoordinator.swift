@@ -29,7 +29,6 @@ final class AppCoordinator {
     private var onboardingController: OnboardingWindowController?
     /// True while a trigger rewrites intent, so placement defers instead of acting like a Settings edit.
     private var backgroundApplyInFlight = false
-    private var widgetStatusItems: WidgetStatusItemsController?
     private let menuBarStyleOverlay = MenuBarStyleOverlayController()
 
     /// Listens for SIGUSR1 to dump a read-only diagnostics report (development aid).
@@ -112,10 +111,6 @@ final class AppCoordinator {
         let groups = GroupStatusItemsController(activate: { [weak bar] id in bar?.activate(windowID: id) })
         groupStatusItems = groups
         bar.onCacheUpdated = { [weak self] in self?.refreshGroupStatusItems() }
-        let widgets = WidgetStatusItemsController(
-            runner: WidgetActionRunner(toggleBar: { [weak engine] in engine?.toggleFromShortcut() })
-        )
-        widgetStatusItems = widgets
         engine.onNeedsAccessibilityForMove = { AccessibilityPermission.requestAndOpenSettings() }
         engine.onPlacementStatusChanged = { [weak self] in self?.syncPlacementStatus() }
         engine.onPlacementCompleted = { [weak self] in
@@ -145,7 +140,6 @@ final class AppCoordinator {
             }
         }
         hotkeys.apply(preferences: preferences)
-        widgets.update(widgets: preferences.widgets)
         menuBarStyleOverlay.apply(style: preferences.menuBarStyle)
         applyAppIcon(preferences.appIcon.appTheme)
 
@@ -214,7 +208,6 @@ final class AppCoordinator {
         floatingBar?.preferences = updated
         hotkeys.apply(preferences: updated)
         settingsWindowController?.model.hotkeyRegistrationFailures = hotkeys.lastRegistrationFailures
-        widgetStatusItems?.update(widgets: updated.widgets)
         if updated.menuBarStyle != previous.menuBarStyle { menuBarStyleOverlay.apply(style: updated.menuBarStyle) }
         if updated.appIcon.appTheme != previous.appIcon.appTheme { applyAppIcon(updated.appIcon.appTheme) }
         triggerMonitor.update(rules: updated.triggers)

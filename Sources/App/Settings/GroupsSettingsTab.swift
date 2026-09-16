@@ -23,35 +23,40 @@ struct GroupsSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("settings-group-header")
-                .settingsSearchTarget(.groups)
-            createRow
-            if let error = model.itemsLoadError {
-                HStack(spacing: 8) {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("settings-group-items-error")
-                    Spacer(minLength: 0)
-                    Button("Retry Reading") { Task { await model.reloadItems() } }
-                        .controlSize(.small)
-                        .disabled(model.itemsLoading)
-                        .accessibilityIdentifier("settings-group-retry-reading")
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("settings-group-header")
+                        .settingsSearchTarget(.groups)
+                    createRow
+                    if let error = model.itemsLoadError {
+                        HStack(spacing: 8) {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("settings-group-items-error")
+                            Spacer(minLength: 0)
+                            Button("Retry Reading") { Task { await model.reloadItems() } }
+                                .controlSize(.small)
+                                .disabled(model.itemsLoading)
+                                .accessibilityIdentifier("settings-group-retry-reading")
+                        }
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                .padding(6)
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
 
             if groups.isEmpty {
                 emptyState
+                Spacer(minLength: 12)
             } else {
                 groupList
             }
 
-            Divider()
             footer
         }
         .padding(.top, 8)
@@ -60,16 +65,11 @@ struct GroupsSettingsContent: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Item Groups")
-                .font(.headline)
-            Text("A group combines several items behind one icon in the menu bar. Grouped items are hidden from the menu bar and open from that icon's menu. Your Shown/Hidden choices in Items are kept but do not apply while an item is in a group.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        Text("Grouped items open from one menu bar icon. Their saved Shown/Hidden choices are kept but do not apply while grouped.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var createProblem: ItemGroupLibrary.ValidationError? {
@@ -103,8 +103,6 @@ struct GroupsSettingsContent: View {
                     .accessibilityIdentifier("settings-group-create-error")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
     }
 
     private func createGroup() {
@@ -114,19 +112,23 @@ struct GroupsSettingsContent: View {
     }
 
     private var groupList: some View {
-        List {
-            ForEach(groups) { group in
-                Section {
-                    GroupHeaderRow(model: model, group: group)
-                    ForEach(memberRows(for: group)) { row in
-                        GroupMemberRow(model: model, group: group, row: row)
+        GroupBox {
+            List {
+                ForEach(groups) { group in
+                    Section {
+                        GroupHeaderRow(model: model, group: group)
+                        ForEach(memberRows(for: group)) { row in
+                            GroupMemberRow(model: model, group: group, row: row)
+                        }
                     }
                 }
             }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .accessibilityIdentifier("settings-group-list")
         }
-        .listStyle(.inset)
-        .frame(minHeight: 120, maxHeight: .infinity)
-        .accessibilityIdentifier("settings-group-list")
+        .padding(.horizontal, 20)
     }
 
     /// Every loaded owner once (first appearance, left to right), then members without a running
@@ -152,30 +154,35 @@ struct GroupsSettingsContent: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            Image(systemName: "square.grid.2x2")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No groups yet.")
-                .font(.headline)
-            Text("Create a group above, then check the items that belong in it.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
-            Spacer()
+        GroupBox {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No groups yet.")
+                        .font(.headline)
+                    Text("Create a group, then choose the items to put in it.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 20)
         .accessibilityIdentifier("settings-group-empty")
     }
 
     private var footer: some View {
-        Text("Group changes apply right away and need no Apply Changes. Removing an item from a group leaves it where it is; use Items to show it again.")
+        Text("Group changes apply right away. Removing an item leaves it where it is; use Items to show it again.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .accessibilityIdentifier("settings-group-footer")
     }
@@ -209,6 +216,8 @@ private struct GroupHeaderRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "square.grid.2x2")
                     .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                    .accessibilityHidden(true)
                 TextField("Group name", text: Binding(
                     get: { nameEdit?.text ?? group.name },
                     set: { text in
@@ -232,21 +241,12 @@ private struct GroupHeaderRow: View {
 
                 Text(countLabel)
                     .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                     .accessibilityIdentifier("settings-group-count-\(group.id)")
 
-                Spacer(minLength: 8)
-
-                if confirmingDelete {
-                    Text("Delete \"\(group.name)\"?")
-                        .font(.callout)
-                        .accessibilityIdentifier("settings-group-delete-prompt-\(group.id)")
-                    Button("Cancel") { confirmingDelete = false }
-                        .accessibilityIdentifier("settings-group-cancel-delete-\(group.id)")
-                    Button("Delete", role: .destructive) { deleteGroup() }
-                        .disabled(model.placementInProgress)
-                        .accessibilityIdentifier("settings-group-confirm-delete-\(group.id)")
-                } else {
+                if !confirmingDelete {
                     Button("Delete…") { confirmingDelete = true }
                         .disabled(model.placementInProgress)
                         .help("Delete \(group.name). Its items leave the group and keep their saved placement.")
@@ -254,6 +254,24 @@ private struct GroupHeaderRow: View {
                 }
             }
             .controlSize(.small)
+
+            if confirmingDelete {
+                HStack(spacing: 8) {
+                    Text("Delete \"\(group.name)\"?")
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("settings-group-delete-prompt-\(group.id)")
+                    Spacer(minLength: 8)
+                    Button("Cancel") { confirmingDelete = false }
+                        .accessibilityIdentifier("settings-group-cancel-delete-\(group.id)")
+                    Button("Delete", role: .destructive) { deleteGroup() }
+                        .disabled(model.placementInProgress)
+                        .accessibilityIdentifier("settings-group-confirm-delete-\(group.id)")
+                }
+                .controlSize(.small)
+                .padding(.top, 4)
+            }
 
             if let renameError {
                 Text(renameError)
@@ -339,14 +357,17 @@ private struct GroupMemberRow: View {
                   ?? "Include \(row.name) in \(group.name).")
             .accessibilityIdentifier("settings-group-member-\(group.id)-\(row.key)")
 
+            Spacer(minLength: 8)
+
             // A sibling, not toggle label content: the toggle is one accessibility element.
             if let otherGroup {
                 Text("In \(otherGroup.name)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .accessibilityIdentifier("settings-group-member-elsewhere-\(group.id)-\(row.key)")
             }
-            Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
     }

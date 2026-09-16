@@ -67,7 +67,7 @@ struct SpacingSettingsSectionTests {
 
         let content = text(in: hosting.view)
         #expect(content.contains("Reduce menu bar item spacing"))
-        #expect(content.contains("system-wide setting shared by all apps"))
+        #expect(content.contains("System-wide: all apps share these values."))
         #expect(!content.contains("log out"))
         #expect(!hosting.testWindow.isVisible)
     }
@@ -91,7 +91,7 @@ struct SpacingSettingsSectionTests {
     func logoutNoteAppearsOnlyWhenTheCoordinatorAsksForIt(enabled: Bool, needsLogout: Bool) {
         let hosting = host(makeModel(MenuBarSpacing(enabled: enabled, spacing: 6, selectionPadding: 6)), needsLogout: needsLogout)
         #expect(identifiers(in: hosting.view).contains("settings-spacing-logout-note") == needsLogout)
-        let expected = "Takes effect for each app after it relaunches, or after you log out and back in."
+        let expected = "Relaunch menu bar apps or log out to see the change."
         #expect(text(in: hosting.view).contains(expected) == needsLogout)
     }
 

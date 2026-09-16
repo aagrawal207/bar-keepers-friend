@@ -51,10 +51,15 @@ struct TriggersSettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("settings-trigger-header")
-                .settingsSearchTarget(.triggers)
+            GroupBox {
+                header
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-trigger-header")
+                    .settingsSearchTarget(.triggers)
+                    .padding(6)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
             if let editing {
                 TriggerRuleEditor(
                     rule: editing.rule, isNew: editing.isNew, presets: presets,
@@ -68,10 +73,10 @@ struct TriggersSettingsContent: View {
             } else {
                 if rules.isEmpty {
                     emptyState
+                    Spacer(minLength: 12)
                 } else {
                     ruleList
                 }
-                Divider()
                 footer
             }
         }
@@ -81,54 +86,56 @@ struct TriggersSettingsContent: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Triggers")
-                .font(.headline)
-            Text("A trigger applies a preset while all of its conditions hold, then puts your previous arrangement back. Rules are checked top to bottom; the first match wins.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        Text("Rules run top to bottom; the first match applies its preset. Your previous arrangement returns when no rules match.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var ruleList: some View {
-        List {
-            ForEach(rules) { rule in
-                TriggerRuleRow(model: model, rule: rule) {
-                    editing = Editing(rule: rule, isNew: false)
+        GroupBox {
+            List {
+                ForEach(rules) { rule in
+                    TriggerRuleRow(model: model, rule: rule) {
+                        editing = Editing(rule: rule, isNew: false)
+                    }
                 }
             }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .accessibilityIdentifier("settings-trigger-list")
         }
-        .listStyle(.inset)
-        .frame(minHeight: 120, maxHeight: .infinity)
-        .accessibilityIdentifier("settings-trigger-list")
+        .padding(.horizontal, 20)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            Image(systemName: "bolt.badge.clock")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No triggers yet.")
-                .font(.headline)
-            Text(presets.isEmpty
-                 ? "Save a preset first. A trigger switches to a preset when its conditions hold."
-                 : "Add a rule to switch presets on battery, Wi-Fi, the frontmost app, displays, or a schedule.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            Spacer()
+        GroupBox {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "bolt.badge.clock")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No triggers yet.")
+                        .font(.headline)
+                    Text("Switch presets based on power, Wi-Fi, an app, a display, or a schedule.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 20)
         .accessibilityIdentifier("settings-trigger-empty")
     }
 
     private var addHint: String? {
-        if presets.isEmpty { return "Save a preset before adding a rule; triggers switch between presets." }
+        if presets.isEmpty { return "Save a preset before adding a rule." }
         if rules.count >= TriggerRuleLibrary.maxRules { return "You can have at most \(TriggerRuleLibrary.maxRules) rules." }
         return nil
     }
@@ -153,12 +160,12 @@ struct TriggersSettingsContent: View {
                 .disabled(addHint != nil)
                 .accessibilityIdentifier("settings-trigger-add")
             }
-            Text("Rules take effect as soon as you save them and need no Apply Changes. Turning a rule off or deleting it restores the arrangement it replaced.")
+            Text("Saved rules take effect immediately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)
         .padding(.vertical, 12)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-trigger-footer")
@@ -176,50 +183,58 @@ private struct TriggerRuleRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Toggle("", isOn: Binding(
-                get: { rule.isEnabled },
-                set: { model.setTriggerRuleEnabled($0, id: rule.id) }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .controlSize(.small)
-            .accessibilityLabel("Enable \(displayName)")
-            .help(rule.isEnabled ? "Turn off \(displayName)." : "Turn on \(displayName).")
-            .accessibilityIdentifier("settings-trigger-enabled-\(rule.id)")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Toggle("", isOn: Binding(
+                    get: { rule.isEnabled },
+                    set: { model.setTriggerRuleEnabled($0, id: rule.id) }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.small)
+                .accessibilityLabel("Enable \(displayName)")
+                .help(rule.isEnabled ? "Turn off \(displayName)." : "Turn on \(displayName).")
+                .accessibilityIdentifier("settings-trigger-enabled-\(rule.id)")
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayName)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .accessibilityIdentifier("settings-trigger-name-\(rule.id)")
-                Text(rule.conditionsSummary)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settings-trigger-summary-\(rule.id)")
-                presetLine
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("settings-trigger-name-\(rule.id)")
+                    Text(rule.conditionsSummary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings-trigger-summary-\(rule.id)")
+                    presetLine
+                }
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+                if !confirmingDelete {
+                    Button("Edit…", action: onEdit)
+                        .accessibilityIdentifier("settings-trigger-edit-\(rule.id)")
+                    Button("Delete…") { confirmingDelete = true }
+                        .help("Delete \(displayName). If it is active, your previous arrangement is restored.")
+                        .accessibilityIdentifier("settings-trigger-delete-\(rule.id)")
+                }
             }
 
-            Spacer(minLength: 8)
-
             if confirmingDelete {
-                Text("Delete \"\(displayName)\"?")
-                    .font(.callout)
-                    .accessibilityIdentifier("settings-trigger-delete-prompt-\(rule.id)")
-                Button("Cancel") { confirmingDelete = false }
-                    .accessibilityIdentifier("settings-trigger-cancel-delete-\(rule.id)")
-                Button("Delete", role: .destructive) {
-                    confirmingDelete = false
-                    model.deleteTriggerRule(id: rule.id)
+                HStack(spacing: 8) {
+                    Text("Delete \"\(displayName)\"?")
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("settings-trigger-delete-prompt-\(rule.id)")
+                    Spacer(minLength: 8)
+                    Button("Cancel") { confirmingDelete = false }
+                        .accessibilityIdentifier("settings-trigger-cancel-delete-\(rule.id)")
+                    Button("Delete", role: .destructive) {
+                        confirmingDelete = false
+                        model.deleteTriggerRule(id: rule.id)
+                    }
+                    .accessibilityIdentifier("settings-trigger-confirm-delete-\(rule.id)")
                 }
-                .accessibilityIdentifier("settings-trigger-confirm-delete-\(rule.id)")
-            } else {
-                Button("Edit…", action: onEdit)
-                    .accessibilityIdentifier("settings-trigger-edit-\(rule.id)")
-                Button("Delete…") { confirmingDelete = true }
-                    .help("Delete \(displayName). If it is active, your previous arrangement is restored.")
-                    .accessibilityIdentifier("settings-trigger-delete-\(rule.id)")
             }
         }
         .controlSize(.small)
@@ -290,7 +305,7 @@ struct TriggerRuleEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section(isNew ? "New Rule" : "Edit Rule") {
+                Section(isNew ? "New rule" : "Edit rule") {
                     TextField("Rule name", text: $draft.name)
                         .accessibilityLabel("Rule name")
                         .accessibilityIdentifier("settings-trigger-editor-name")
@@ -318,7 +333,7 @@ struct TriggerRuleEditor: View {
                 } header: {
                     Text("Conditions")
                 } footer: {
-                    Text("All conditions must hold at the same time for the rule to apply.")
+                    Text("All conditions must match.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -415,11 +430,11 @@ struct TriggerConditionParameterEditor: View {
     var body: some View {
         switch condition {
         case .onBattery:
-            note("Holds while the Mac runs on its battery.")
+            note("Running on battery power.")
         case .charging:
-            note("Holds while the Mac is connected to power, including with a full battery.")
+            note("Connected to power, even with a full battery.")
         case .lowPowerMode:
-            note("Holds while Low Power Mode is on.")
+            note("Low Power Mode is on.")
         case let .batteryBelow(percent):
             HStack(spacing: 6) {
                 TextField("Percent", value: percentBinding(percent), format: .number)

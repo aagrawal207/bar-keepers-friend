@@ -11,6 +11,7 @@ struct SettingsSidebar: View {
     var onSearchSelection: (SettingsView.Tab, String) -> Void = { _, _ in }
 
     private var tabs: [SettingsView.Tab] { SettingsView.Tab.matching(searchText) }
+    private var isSearching: Bool { searchText.contains(where: { !$0.isWhitespace }) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,11 +30,25 @@ struct SettingsSidebar: View {
                 ForEach(tabs) { tab in
                     // Activating the current pane must work without a selection-change notification.
                     Button { select(tab) } label: {
-                        Label(tab.title, systemImage: tab.systemImage)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(tab.title)
+                                if isSearching, tab.sidebarTab != tab {
+                                    Text(tab.sidebarTab.title)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: tab.systemImage)
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 3)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(tab.title)
                     .accessibilityIdentifier("settings-sidebar-\(tab.rawValue)")
                     .tag(tab)
                 }
@@ -56,7 +71,13 @@ struct SettingsSidebar: View {
 
     /// Command-clicking the selected row deselects in a List; the detail must always show a pane.
     private var listSelection: Binding<SettingsView.Tab?> {
-        Binding(get: { selection }, set: { if let tab = $0 { select(tab) } })
+        Binding(get: { isSearching ? selection : selection.sidebarTab }, set: { tab in
+            guard let tab else { return }
+            // AppKit can echo the parent selection while a child is open; row buttons handle a
+            // deliberate activation of that already-selected parent.
+            guard isSearching || tab != selection.sidebarTab else { return }
+            select(tab)
+        })
     }
 
     private func select(_ tab: SettingsView.Tab) {

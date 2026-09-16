@@ -1,15 +1,23 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-15 (Settings search destination highlights). Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-15 (Settings simplification and widget retirement; hostless verification passed,
+appearance review partial).
+Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
-Feature-surface parity with Bartender 6 is now implemented for every item on Bartender's public
-feature list except Quick Search (removed at the user's request), per-Space/per-display styles, and
-signed auto-update. Verified parity is not established: every 2026-09-12/13 feature is hostless-tested
-only. The checklist separates shipped behavior, automated verification, and native behavior that still
-needs evidence. Passing geometry or fake-backed tests does not prove that macOS opened a particular
-third-party menu, moved an item to the requested slot, or rendered a cursor without flicker.
+This is a capability and verification inventory, not a claim of full Bartender feature or native
+behavior parity. The user's current priority is reliable hide/unhide, simpler Settings, and less
+manual testing. Widgets were removed at the user's request on 2026-09-15; retained advanced tools
+still run saved configurations and still need their hardware QA. Per-Space/per-display styles and
+presets, signed auto-update, and release packaging remain gaps. Menu-bar search stays removed.
+
+The checklist distinguishes implementation, automated coverage, and native evidence. Passing geometry
+or fake-backed tests does not prove that macOS opened a particular third-party menu, moved an item to
+the requested slot, or rendered a cursor without flicker. The new Settings workflows passed the full
+suite, including real-control and AX-geometry checks across all panes. Off-screen appearance review
+is partial because the PNGs omit some sidebar/material-backed content. Earlier results under
+Historical Verification Records predate this simplification.
 
 ## Core Workflows
 
@@ -17,13 +25,13 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
 | Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
-| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; a hidden menu bar (fullscreen Space, auto-hide) is never photographed; the mirror follows current positions on open and refreshes after close or a Space change; Control Center items are never mirrored | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
+| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; hidden-menu-bar captures are skipped; the mirror follows current positions on open and checks for refresh after close or a Space change; resolved Control Center items are excluded | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
 | Hover reveal | Cache-only opens; optional captures revalidate after queue waits; ownership and non-key ordering tested | Native first-click delivery, focus, animation transit, display qualification, and freshness without intrusive capture |
 | Keyboard access | Recorder for the toggle shortcut with system-reserved/conflict detection; per-item shortcuts reveal and activate one item (floating-bar mode) | Real Carbon registration of 1+N slots, recorder first-responder behavior, accessible navigation/dismissal |
 | Reveal gestures | Click, hotkey, opt-in hover, opt-in scroll/swipe (one effect per gesture, cooldown) | Native scroll-direction feel and monitor routing over the live bar |
-| Notch full access | Make-room swap planner + coordinator (default Never): tucks shown items nearest the anchor when a reveal is notch-clipped, restores before every collapse and before quit | Drop relative to a third-party window, partial-overlap tolerance, flicker/latency inside the activation deadline |
+| Notch full access | Make-room in Settings > Advanced (default Never): tucks shown items nearest the anchor when a reveal is notch-clipped, restores before every collapse and before quit | Drop relative to a third-party window, partial-overlap tolerance, flicker/latency inside the activation deadline |
 | Layout mode | One behavior: saved placement applies at launch, on Apply Changes, and on display change. The Live option (re-apply after app launch/quit) was removed on 2026-09-15 as confusing and hardware-unverified | Whether users miss automatic re-application for apps that relaunch |
 | Display correctness | Placement re-reads controls; several coordinate fixes are tested | Explicit 2D display identity, negative-origin capture, stacked-display panel selection, and live external-display qualification |
 | Native-work resilience | Pause/superseding/session interruption cancel safely; submitted downs retain balancing ups; interrupted placement stays pending | Native lock-transition qualification, Space/fullscreen/mouse-idle policies, and genuine recovery from non-returning calls |
@@ -34,15 +42,19 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 |---|---|---|
 | Ordering | Items rows have Show-in-bar and Move Up/Down controls for the floating bar (presentation-only, immediate) | Native menu-bar ordering is not managed; only Shown/Hidden/Always Hidden placement is |
 | Multiple items from one owner | Coupled by the existing persisted owner key | A deliberate migration design before any independent identity scheme |
-| Presets/profiles | Named presets (save current, apply, update, rename, delete) in Settings and the anchor menu | Per-display/per-Space presets; native verification of a preset apply is the same as placement |
-| Triggers | Battery, charging, battery-below, low power, Wi-Fi, frontmost app, external display, time/weekday rules apply a preset and restore the baseline afterward | IOKit/CoreWLAN callbacks and DST boundaries on hardware |
-| Groups/Always Hidden | Groups behind a BKF-owned status item with a member menu; Always Hidden tier behind a lazily created third divider, Option-click reveals it | Slot seeding, tier-divider drops, two expanded dividers, stray-item premise |
-| Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
+| Presets/profiles | Named presets (save current, apply, update, rename, delete) in Settings > Advanced > Presets and the anchor menu; saved arrangements remain usable | Per-display/per-Space presets; native verification of a preset apply is the same as placement |
+| Triggers | Settings > Advanced > Triggers; saved enabled rules still apply presets and restore the baseline for battery, charging, battery-below, low power, Wi-Fi, frontmost app, external display, and time/weekday conditions | IOKit/CoreWLAN callbacks and DST boundaries on hardware |
+| Groups/Always Hidden | Group editing is in Settings > Advanced > Groups; saved groups still install a BKF-owned member menu. Always Hidden retains its lazily created divider and Option-click reveal | Group slot seeding and member activation; tier-divider drops, two expanded dividers, stray-item premise |
+| Widgets | Removed from UI/runtime on 2026-09-15 at the user's request; readable legacy data remains inert through load/import/edit/export | Keep legacy Codable and workflow compatibility coverage; widget-only native QA is retired, and reintroduction needs a new request |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
-| Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search with transient destination highlights; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Spacing | Settings > Advanced; global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
+| Settings navigation | Seven primary rows: General, Items, Style, Behavior, Shortcuts, Advanced, About. Advanced links to Presets/Triggers/Groups; child pages retain parent selection and a back button. General has Arrange Items/login/permissions; Behavior groups hidden-bar, closing, and reveal controls. Real-control and AX-geometry checks passed | Partial PNG review omits sidebar/glass and some material content; full-window appearance, live focus, and VoiceOver remain unverified |
+| Settings search | Passing hostless workflows cover deep-links and highlights, including "Advanced Wi-Fi"; navigation-only actions do not write preferences, move items, or capture. Items/Shortcuts/Groups retain their item loads | Live input-method/focus/VoiceOver checks remain; no item-name search or auto-scroll |
+| About | Runtime app artwork and bundle version; explicit GitHub project, issues, and MIT license links; exact URLs verified through injected `OpenURLAction` | PNG version 16.0 is the test runner's `Bundle.main` version, not the production app's; real browser handoff and on-screen accessibility remain native QA |
+| Onboarding/login/backup | Fresh-install onboarding, live permission status, staged Apply/Discard and cached previews retained; login approval feedback in General; layout import/export in Advanced | Real permission and `SMAppService` transitions; native onboarding presentation |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
-| Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
+| Updates/install | Manual GitHub release check and Restart in the anchor menu; [README source build](README.md#build-from-source) uses the reader's own stable Apple Development identity. Read-only GitHub checks on 2026-09-15 found no releases or downloadable release assets | Signed update feed (Sparkle), Developer ID signing, Hardened Runtime validation, notarization, and packaging |
+| Mac App Store | Current unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); see [README's Apple sources](README.md#distribution-and-the-mac-app-store) | A future edition needs a public-API, sandboxed redesign and an eligibility assessment; it is not permanently ruled out |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
 ## Deliberate Differences
@@ -53,7 +65,12 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 - Bartender Pro's additional shelf/media/calendar/file utilities are outside the menu-bar-manager
   scope unless requested separately.
 - One style and one arrangement for all displays; Bartender styles each menu bar separately.
-- Widgets run only allowlisted actions (URL, app launch, Shortcuts, toggle bar); no scripts.
+- Widgets are retired because the user found them unnecessary. Legacy data is preserved inertly;
+  a historical feature checklist is not authorization to reinstall their runtime.
+- Presets, triggers, and groups remain available under Advanced. Relocation does not disable saved
+  rules/groups or retire their native verification obligations. Widget-only hardware paths are gone.
+- Settings workflows and off-screen PNG review reduce the user's manual-testing burden. They do not
+  establish native focus, VoiceOver, menu activation, capture, or movement correctness.
 
 ## Verification Gates
 
@@ -66,9 +83,89 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
 
-## Parity Verification
+## Settings Simplification And Widget Retirement
 
-Full build/test on 2026-09-13: 1132 tests across 80 suites, 1760 invocations, zero failures or skips.
+On 2026-09-15 the user asked for simpler Settings and fewer manual checks, and explicitly said widgets
+were unnecessary. `SettingsView.Tab.sidebarTabs` exposes General, Items, Style, Behavior, Shortcuts,
+Advanced, and About. `advancedTabs` holds Presets/Triggers/Groups; their existing identifiers and
+`requestedTab` deep links remain usable. The Advanced hub mounts no child until selected. Its child
+pages show a back-to-Advanced button and keep Advanced selected in the normal sidebar.
+
+General now has Arrange Items, launch at login, and permissions. Behavior groups hidden-bar, closing,
+and reveal-gesture controls. Spacing, notch make-room, and backup moved into Advanced; its own
+permission refresh keeps the notch warning current without a visit to General. Native grouped forms
+use a compact icon/title/purpose header, with cards for empty preset/trigger/group pages. About uses
+the selected runtime artwork, bundle version, and explicit project/help/license links. It does not
+rewrite the installed Finder icon. Search still highlights individual settings and sections, including
+Advanced-qualified child queries, without enabling controls or opening editors.
+
+`WidgetsSettingsTab`, `WidgetStatusItemsController`, `WidgetActionRunner`, and their AppCoordinator
+wiring were removed. `MenuBarWidget`, `WidgetAction`, and the `widgets` preferences key remain for
+compatibility. Readable action parameters are retained even when the former editor would reject them;
+they cannot execute. Existing lossy decoding, duplicate/cap handling, and name/symbol fallbacks remain.
+Tests for the retired runner/controller/editor were removed with those implementations. Legacy Codable
+tests remain, and the new compatibility workflow uses literal JSON rather than generating its input
+with the current encoder. Group installation and trigger monitoring remain wired to saved preferences.
+
+### Automated coverage — passed in the full suite
+
+| Coverage | Test or artifact | Level |
+|---|---|---|
+| Empty and populated preset/trigger/group libraries; General's Arrange Items; staged Hide All; child/back navigation; Advanced parent selection; saved configuration and unapplied draft/aliases preserved | `SettingsSearchTests.quickStartAdvancedToolsSearchAndAboutPreserveAnUnappliedDraft`, parameterized over both library states | Functional workflow |
+| "Advanced Wi-Fi" and preset search deep-links; About artwork/version; exact project, `/issues`, and `/blob/main/LICENSE` URLs requested only after pressing a link | Same workflow with real Settings UI/model, isolated `PreferencesStore`, real engine, and injected `OpenURLAction` | Functional workflow |
+| Navigation-only actions produce no preference writes, retries, moves, clicks, capture, or divider/artwork changes; item reads counted for Items, Shortcuts, and Groups | `SettingsSearchTests` harness and expanded search workflows | Functional workflow |
+| Seven primary rows, primary-row navigation from a child, stable child routing, parent selection, no eager sibling panes, and light/dark AX bounds across every pane | `SettingsSidebarTests`, `SettingsSearchTests` | Hostless interaction + AX geometry |
+| Bottommost controls of richest configuration panes and error notes fit; the suite generated light/dark and expanded-state PNGs with the capture omissions described below | `SettingsSidebarTests`: `settings-<tab>-light.png`, `settings-<tab>-dark.png`, `settings-<tab>-expanded.png` Swift Testing attachments | AX geometry + partial bitmap review |
+| Legacy saved preferences and imported layout JSON survive real Behavior edits, save/reload, and export; aliases and an Items draft survive; a fresh model has no session draft; no native work occurs | `WidgetCompatibilityWorkflowTests.legacyWidgetsSurviveSettingsEditsAndBackup`, parameterized over persisted/imported input | Functional workflow |
+| Widget JSON keys/discriminators, readable payloads, malformed entries, old fallback rules, duplicates, and caps | Retained `MenuBarWidgetTests` | Unit/compatibility |
+
+The workflow harnesses use real persistence and engine/model wiring with OS boundaries replaced by
+fakes. Their windows remain off screen. About-link assertions intercept `OpenURLAction` and do not open
+a browser. There are no new metrics, telemetry, native input gestures, or capture mechanisms in this
+change. Moving retained tools changes their discoverability, not their runtime or hardware QA.
+Widget-specific status-item/action/Shortcuts-process/mailto checks are retired with those paths.
+
+### Verification results (2026-09-15)
+
+- **Full build/test:** `xcodebuild ... build test` passed on macOS 26.6.2 / Xcode 27.0:
+  **1082 tests across 79 suites, 1794 invocations, zero failures or skips**.
+- **Signature:** `codesign --verify --deep --strict` passed on
+  `DerivedData/Build/Products/Debug/BarKeepersFriend.app`.
+- **Diff/review:** `git diff --check` and `git diff --cached --check` were clean. A fresh-context,
+  read-only general reviewer approved the staged diff with no findings. The dedicated different-model
+  review failed infrastructure authentication before reviewing; no different-model review completed.
+- **Security:** manual security review completed. `scan_diff`, `semgrep`, and `gitleaks` were
+  unavailable via `command -v`; no automated security scan ran.
+
+### Partial off-screen appearance review
+
+The normal full suite generated **26 PNG attachments: 20 light/dark pane renders and six expanded
+configuration panes**. Representative inspection covered General light/dark, Items light, Behavior
+dark, Advanced normal/expanded, Style expanded, About dark, Presets light/dark, Triggers dark, and
+Groups light. Form contents were readable; expanded Advanced controls and error text fit close to
+the bottom.
+
+`cacheDisplay` omits glass/sidebar text and icons and some native material-backed content, leaving
+blank portions in Items and Advanced-child cards. AX geometry and real-control checks passed across
+all panes, including those omitted regions. This is a partial appearance review, not full-window
+visual verification. Live sidebar/material appearance, non-collapsibility under drag, pointer/keyboard
+focus, child/back navigation feel, VoiceOver, and browser handoff remain outstanding.
+
+The About PNG displays the test runner's `Bundle.main` version, **16.0**, rather than the production
+app's version. A temporary layer-render experiment did not improve the omissions and was reverted;
+the final production/test sources match the passing full-suite run, with only documentation updated.
+At the user's disk-space request, test artifacts are transient and cleaned after summarization;
+retention of the result bundle or exported PNGs is not guaranteed.
+
+## Historical Verification Records
+
+The dated results below describe their original code states, before the current Settings
+simplification/widget retirement. Counts, former page layouts, and retired widget test names are
+historical records, not claims about the current tree. Current completion evidence belongs above.
+
+### Parity Verification
+
+Historical full build/test on 2026-09-13: 1132 tests across 80 suites, 1760 invocations, zero failures or skips.
 The built app passed strict code-signature verification. Each wave had an independent read-only review
 whose concrete findings were fixed before commit (background trigger applies deferring like launch
 placement; spacing written only on explicit change; Live-mode busy gate including a revealed section;
@@ -82,10 +179,10 @@ path including quit).
 | Engine wiring: lazy tier divider, option-click, notch make-room and restore ordering, quit restore | `CosmeticHideEngineTests`, `NotchOverflowEngineTests`, `PlacementIntegrationTests`, `StagedPlacementIntegrationTests` with `FakeWindowServer` | Hostless integration |
 | Every Settings pane and section, sidebar navigation, onboarding steps, real presses and field edits | `*SettingsTabTests`, `*SettingsSectionTests`, `SettingsSidebarTests`, `SettingsViewTests`, `OnboardingTests` | Hostless rendering + interaction |
 
-No native probe was run for any parity feature; the "Needs hardware verification" list in AGENTS.md
-is the acceptance checklist before any of these is described as working on a real menu bar.
+No native probe was run for a feature in that parity wave. The current "Needs hardware verification"
+list in AGENTS.md applies to retained behavior; widget-specific paths and QA were later retired.
 
-## Icon Reliability Verification
+### Icon Reliability Verification
 
 On 2026-09-15 the user reported frequent app-icon fallbacks and the screen-recording indicator
 appearing in both the bar and the mirror. Every capture since 09-14 13:40 had returned an opaque
@@ -102,8 +199,8 @@ prunes the mirror to what is tucked now; Control Center modules that Accessibili
 mirrored while unresolved items stay reachable; captured glyphs are remembered per attribution label
 under Caches and stand in until this launch captures its own.
 
-Full build/test: 1108 tests across 81 suites, 1812 invocations, zero failures or skips (the Live
-mode removal below dropped 64 of the earlier 1171). Strict code signature verification passed.
+Historical full build/test after Live mode removal: 1108 tests across 81 suites, 1812 invocations,
+zero failures or skips. Strict code signature verification passed for that build.
 
 | Coverage | Evidence | Level |
 |---|---|---|
@@ -119,15 +216,16 @@ window-list semantics Ice relies on and still needs a session on a normal Space.
 also resolved the previous instance's lingering control windows once and left placement pending;
 it recovers on the next resume and is not part of this fix.
 
-## Settings Split And Icon Verification
+### Settings Split And Icon Verification
 
 On 2026-09-14 the user reported that General scrolled and asked for a choice of BKF icons. General
 was measured at ten sections; Behavior with the moved sections still overflowed by 300 to 550pt, and
-Style with spacing reached 1041pt in a 704pt detail area. The final arrangement keeps every pane's
+Style with spacing reached 1041pt in a 704pt detail area. That historical arrangement kept every pane's
 bottommost control inside the window: General (login, permissions, spacing, backup), Behavior
 (floating bar, re-hide, hover, scroll), Placement (layout mode, notch), Shortcuts, and Style
-(icons, styling, preview). Placement refreshes the permission probe itself, so its Accessibility
-warnings cannot go stale when General was never visited.
+(icons, styling, preview). Placement refreshed the permission probe itself, so its Accessibility
+warnings could not go stale when General was never visited. The current hierarchy is documented
+above; spacing/backup/notch now live in Advanced and Placement was removed with Live mode.
 
 Icons are a new `Preferences.appIcon` value decoded field by field. The menu-bar symbol is applied
 to the anchor only when it changes; the app theme reaches the Settings header, the About panel, and
@@ -135,7 +233,7 @@ to the anchor only when it changes; the app theme reaches the Settings header, t
 stays as shipped and granted permissions survive. Ocean, the shipped artwork, never falls back to
 `NSApp.applicationIconImage`, which this feature itself sets.
 
-Full build/test: 1168 tests across 84 suites, 1886 invocations, zero failures or skips. Strict code
+Historical full build/test: 1168 tests across 84 suites, 1886 invocations, zero failures or skips. Strict code
 signature verification passed. Two independent review passes found and closed: an Ocean fallback that
 would have echoed the active theme, stale Placement permission warnings, a Dock claim for an app with
 no Dock tile, search-term fusion, a tooltip on the wrong control, and duplicate VoiceOver labels.
@@ -145,7 +243,7 @@ no Dock tile, search-term fusion, a tooltip on the wrong control, and duplicate 
 | Choose both icons in the real Settings UI; one write per edit, one anchor image, zero placement/capture work; unapplied Items draft and aliases intact; fresh store/model/engine reload the choice and no draft; re-selecting the current value writes nothing; leaving Ocean and returning restores it | `AppIconWorkflowTests` with real `PreferencesStore` in an isolated `UserDefaults` suite and the real engine | Functional workflow |
 | Export/import round trip; per-field leniency (unknown symbol keeps a valid theme); both-bad, string, and integer `appIcon` values; missing key on older files | `AppIconWorkflowTests` | Functional workflow |
 | Every symbol renders a visible template glyph; every theme renders the shared mark on transparent margins and differs from Ocean | `AppIconWorkflowTests`, bitmap rendering | Rendering |
-| Every pane's bottommost control visible in the real 820x720 window in its richest permission-independent state; panes other than Items/Shortcuts read no items just to render | `SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling` | Hostless rendering |
+| Configuration panes' bottommost controls visible in the historical 820x720 arrangement in their richest permission-independent states | `SettingsSidebarTests.bottommostControlIsVisibleWithoutScrolling` | Hostless rendering |
 | Search keywords follow the moved sections; moved terms no longer match General | `SettingsSidebarTests`, `SettingsSearchTests` | Unit + hostless interaction |
 
 `install()` does not run in hostless tests, so the install-time anchor image and the live status
@@ -153,7 +251,7 @@ button are exercised only through the `setAnchorImage` seam. The pop-up's native
 reachable off screen; the workflow drives the exact binding the picker holds. Live appearance of the
 chosen symbol in the menu bar and the About panel's rendering remain hardware QA.
 
-## Settings Search Highlight Verification
+### Settings Search Highlight Verification
 
 On 2026-09-15 the user requested a highlight at the destination of a Settings search. The sidebar
 preserves the selected query when it clears the search field, so `SettingsView` can identify the
@@ -184,25 +282,26 @@ Search emits no new logs or metrics; tests assert zero writes, moves, and captur
 setting edit. No native input events are posted and test windows remain off screen. On-screen VoiceOver
 delivery and animation feel remain native QA; auto-scrolling to a control is outside this change.
 
-Full build/test on macOS 26.6.2 with Xcode 27.0: 1112 tests across 81 suites, 1819 invocations,
-zero failures or skips. The signed app passed `codesign --verify --deep --strict`. `scan_diff` was
-unavailable; the diff received manual security review.
+**Historical last full-suite result before Settings simplification/widget retirement:**
+macOS 26.6.2 with Xcode 27.0, 1112 tests across 81 suites, 1819 invocations, zero failures or skips.
+That signed app passed `codesign --verify --deep --strict`. `scan_diff` was unavailable; that diff
+received manual security review. These results do not verify the current changes.
 
-## Settings Search Verification
+### Settings Search Verification
 
 On 2026-09-14 the user requested search within Settings and Style directly below Items. A native
 `NSSearchField` sits below the sidebar identity. It filters pages by their names and static setting
 keywords, including controls hidden behind disabled options. All query words must match; matching
 ignores case/accents and ranks page-name matches first. It does not filter individual menu-bar item
-names or scroll directly to a control. The normal order is General, Items, Style, Presets, Triggers,
-Groups, Widgets; tab identifiers are unchanged.
+names or scroll directly to a control. The historical sidebar order in this change was General,
+Items, Style, Presets, Triggers, Groups, Widgets; subsequent splits and widget retirement supersede it.
 
 Typing does not navigate or remount the current pane. Activating a result or pressing Return selects
 a page and clears the query; Return with blank text or no match does nothing. Escape, the native clear
 button, and external tab requests also clear it. Return/Escape defer to the input method during marked
 text composition. Search history is disabled, and query state is session-only.
 
-Full build/test: 1161 tests across 82 suites, 1847 invocations, zero failures or skips. Strict code
+Historical full build/test: 1161 tests across 82 suites, 1847 invocations, zero failures or skips. Strict code
 signature verification passed. Independent review found no remaining issues after fixing activation
 of an already-selected result and adding input-method/event-ordering coverage.
 
@@ -213,13 +312,13 @@ of an already-selected result and adding input-method/event-ordering coverage.
 | Field-editor typing, native List selection, result activation, Return, clear/Escape, external tab requests, marked text and immediate submission | `SettingsSearchTests` | Hostless interaction |
 | Mounted Items, cached rows/images, mixed placement draft, unchanged preference-write/retry/item-provider counts while typing | `SettingsSearchTests` | Hostless integration |
 
-This adds 16 tests / 58 cases. No placement, capture, attribution, global shortcut, persistence key,
+That change added 16 tests / 58 cases. No placement, capture, attribution, global shortcut, persistence key,
 telemetry, or background search work was added. Explicit page selection retains that page's existing
 lifecycle reads. Test windows never order on screen or post input. Live pointer feel, VoiceOver, and
 real input-method handoff remain native QA, not claims established by off-screen tests.
 Automated security scanners were unavailable; the diff received manual security review.
 
-## Apply Reliability Verification
+### Apply Reliability Verification
 
 On 2026-09-13 the user narrowed work to repeated Items Apply failures. Current logs identified Alfred
 as the failed item in two mixed batches, with successful relay forwarding but no relocation. During
@@ -232,7 +331,7 @@ failure, or cancellation. After the initial 120ms settle it polls live item/cont
 to one second before retrying. A frame still outside the menu-bar row cannot count as success or
 receive a recovery click. The five-attempt limit and event-routing fields are unchanged.
 
-Full build/test: 1145 tests across 81 suites, 1789 invocations, zero failures or skips. Strict code
+Historical full build/test: 1145 tests across 81 suites, 1789 invocations, zero failures or skips. Strict code
 signature verification passed. An independent review found a delayed-release validation gap; the
 on-row guard and its regression tests addressed it before native verification.
 
@@ -254,9 +353,9 @@ These results do not qualify every third-party item, external displays, visual c
 native lock transitions. Polling deadlines cannot interrupt a non-returning synchronous native read.
 The remaining Settings attribution/capture costs are separate from this move-sequencing fix.
 
-## Settings Verification
+### Settings Verification
 
-Full build/test on 2026-09-12: 510 tests across 42 suites, 833 invocations, zero failures or skips.
+Historical full build/test on 2026-09-12: 510 tests across 42 suites, 833 invocations, zero failures or skips.
 The built app passed strict code-signature verification. Independent reviews found no remaining
 issues after fixes for stale-observation retries, deferred-intent reversal, complete draft previews,
 and alias loss during row regrouping.
@@ -285,9 +384,9 @@ passes remain. No native end-to-end speed measurement or external-display fix is
 Test windows never order on screen or post input. They enable and restore process-local accessibility
 metadata for in-process control testing. On-screen focus and VoiceOver navigation still need human QA.
 
-## Hover Verification
+### Hover Verification
 
-Full build/test on 2026-09-11: 456 tests across 38 suites, 706 invocations, zero failures or skips.
+Historical full build/test on 2026-09-11: 456 tests across 38 suites, 706 invocations, zero failures or skips.
 The built app passed strict code-signature verification. Independent source review found no
 remaining issues after fixes for context-menu ownership, synthetic pointer excursions, focus-taking
 presentation calls, and held-click races.
@@ -318,7 +417,7 @@ tests assert behavior, not log strings. No automated security scan was available
 `gitleaks`, and `semgrep` were absent); the diff received manual security review.
 Item-level hover feedback adds no polling, logging, telemetry, or permission requirements.
 
-## Native Investigation
+### Native Investigation
 
 - **Cached opening:** a standalone diagnostic toggle displayed the panel while all 40 samples
   retained the 1728pt divider. This verifies that opening did not initiate a real-item reveal on

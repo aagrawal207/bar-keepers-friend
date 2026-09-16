@@ -63,7 +63,7 @@ struct StyleSettingsTab: View {
         Form {
             AppIconSettingsSection(model: model)
 
-            Section("Menu bar style") {
+            Section {
                 Toggle("Style the menu bar", isOn: committed.isEnabled)
                     .accessibilityIdentifier("settings-style-enabled")
                     .settingsSearchTarget(.menuBarStyle, including: displayed.isEnabled ? [] : SettingsSearchTarget.styleControls)
@@ -114,7 +114,9 @@ struct StyleSettingsTab: View {
                         Stepper(value: committed.cornerRadius, in: MenuBarStyle.cornerRadiusRange, step: 1) {
                             Text(Self.points(displayed.cornerRadius))
                                 .monospacedDigit()
+                                .frame(minWidth: 38, alignment: .trailing)
                         }
+                        .fixedSize()
                         .accessibilityIdentifier("settings-style-corner-radius")
                     }
                     .disabled(!displayed.shape.usesCornerRadius)
@@ -124,7 +126,9 @@ struct StyleSettingsTab: View {
                             Stepper(value: committed.borderWidth, in: MenuBarStyle.borderWidthRange, step: 1) {
                                 Text(displayed.hasBorder ? Self.points(displayed.borderWidth) : "None")
                                     .monospacedDigit()
+                                    .frame(minWidth: 38, alignment: .trailing)
                             }
+                            .fixedSize()
                             .accessibilityIdentifier("settings-style-border-width")
                             if displayed.hasBorder {
                                 ColorPicker("Border color", selection: colorBinding(\.borderColor), supportsOpacity: true)
@@ -149,13 +153,13 @@ struct StyleSettingsTab: View {
                             .settingsSearchTarget(.resetStyle)
                     }
                 }
-            }
-
-            Section("Preview") {
                 MenuBarStylePreview(style: displayed)
                     .settingsSearchTarget(.stylePreview)
-                Text("Bar Keeper's Friend paints this style itself, behind the menu bar. It needs no permissions and does not change the menu bar's text or icons. If nothing changes on screen, turn off \"Show menu bar background\" in System Settings > Menu Bar. The app icon above changes in Settings, About, and alerts; the installed icon in Finder stays as shipped.")
-                    .font(.callout)
+            } header: {
+                Text("Menu bar")
+            } footer: {
+                Text("Styling needs no permissions and does not change the menu bar's text or icons. If the style is hidden, turn off “Show menu bar background” in System Settings → Menu Bar. App artwork changes in Settings, About, and alerts; the Finder icon stays as shipped.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("settings-style-note")
@@ -204,7 +208,7 @@ struct AppIconSettingsSection: View {
             // One row: the pop-up is narrow and five 28pt swatches fit beside it, which keeps the
             // richest Style pane inside the window without scrolling.
             LabeledContent("Menu bar icon") {
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     Picker("Menu bar icon", selection: menuBarSymbol) {
                         ForEach(AppIconChoice.MenuBarSymbol.allCases) { symbol in
                             Label(symbol.displayName, systemImage: symbol.systemName)

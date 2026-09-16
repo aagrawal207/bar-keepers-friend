@@ -77,9 +77,8 @@ targets:
     entitlements:
       path: Sources/App/BarKeepersFriend.entitlements
       properties:
-        # Sandbox MUST be off: this app class calls private window-server APIs and
-        # synthesizes events into other processes. That also makes the Mac App Store
-        # permanently infeasible (guidelines 2.5.1 + 2.4.5(i)).
+        # Private window-server APIs and cross-process input require this unsandboxed build.
+        # A Mac App Store edition needs a public-API, sandboxed redesign (2.5.1 + 2.4.5(i)).
         com.apple.security.app-sandbox: false
         com.apple.security.files.user-selected.read-only: true
 

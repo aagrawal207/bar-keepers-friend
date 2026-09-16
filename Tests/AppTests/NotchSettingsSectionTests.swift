@@ -91,9 +91,9 @@ struct NotchSettingsSectionTests {
         let content = text(in: view)
         #expect(content.contains("Notch"))
         #expect(content.contains("Make room near the notch"))
-        #expect(content.contains("When hidden items are revealed in the menu bar itself (floating bar off, or while activating an item) and the notch would clip them"))
-        #expect(content.contains("Moves items, so it needs Accessibility and may briefly move the pointer."))
-        #expect(content.contains("Has no effect on displays without a notch."))
+        #expect(content.contains("When a notch would clip revealed menu bar items, temporarily tuck nearby shown icons and restore them when the section hides."))
+        #expect(content.contains("Requires Accessibility and may briefly move the pointer."))
+        #expect(content.contains("No effect on displays without a notch."))
         // The copy must not promise more than the mover delivers.
         #expect(!content.lowercased().contains("instantly"))
         #expect(!content.lowercased().contains("always works"))
@@ -113,7 +113,7 @@ struct NotchSettingsSectionTests {
         // The test process holds no Accessibility grant, so the requirement note must appear.
         #expect(model.status(of: .accessibility) != .granted)
         #expect(await settle(hosting) { identifiers(in: hosting.view).contains("settings-notch-accessibility-note") })
-        #expect(text(in: hosting.view).contains("Making room needs Accessibility to move items."))
+        #expect(text(in: hosting.view).contains("Grant Accessibility in General → Permissions to move items."))
         #expect(!hosting.testWindow.isVisible)
     }
 

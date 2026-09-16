@@ -5,10 +5,13 @@ import SwiftUI
 // Placement edits stay local to the Items tab's model until explicitly applied.
 struct SettingsView: View {
     /// Raw values are sidebar accessibility identifiers; the cases are the window controller's API.
-    enum Tab: String, CaseIterable, Identifiable {
-        case general, items, style, behavior, shortcuts, presets, triggers, groups, widgets
+    enum Tab: String, CaseIterable, Identifiable, Sendable {
+        case general, items, style, behavior, shortcuts, advanced, presets, triggers, groups, about
 
         var id: Self { self }
+        static let advancedTabs: [Self] = [.presets, .triggers, .groups]
+        static var sidebarTabs: [Self] { allCases.filter { $0.sidebarTab == $0 } }
+        var sidebarTab: Self { Self.advancedTabs.contains(self) ? .advanced : self }
 
         var title: String {
             switch self {
@@ -17,10 +20,11 @@ struct SettingsView: View {
             case .style: "Style"
             case .behavior: "Behavior"
             case .shortcuts: "Shortcuts"
+            case .advanced: "Advanced"
             case .presets: "Presets"
             case .triggers: "Triggers"
             case .groups: "Groups"
-            case .widgets: "Widgets"
+            case .about: "About"
             }
         }
 
@@ -31,10 +35,26 @@ struct SettingsView: View {
             case .style: "paintpalette"
             case .behavior: "slider.horizontal.3"
             case .shortcuts: "keyboard"
+            case .advanced: "gearshape.2"
             case .presets: "square.on.square"
             case .triggers: "bolt"
             case .groups: "square.grid.2x2"
-            case .widgets: "star.square.on.square"
+            case .about: "info.circle"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .general: "Start with the basics and permissions."
+            case .items: "Choose which icons stay in your menu bar."
+            case .style: "Choose the look of your menu bar and BKF."
+            case .behavior: "Choose how hidden icons appear and close."
+            case .shortcuts: "Open the bar or an item from your keyboard."
+            case .advanced: "Optional tools and menu bar adjustments."
+            case .presets: "Save arrangements you can switch between."
+            case .triggers: "Apply a preset when your conditions are met."
+            case .groups: "Collect related icons under one menu bar button."
+            case .about: "Version, project information, and help."
             }
         }
     }
@@ -82,14 +102,38 @@ struct SettingsView: View {
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(selectedTab.title)
-                .font(.title2.weight(.semibold))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("settings-detail-title")
-                .settingsSearchTarget(.pageTitle)
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
+            HStack(spacing: 12) {
+                Image(systemName: selectedTab.systemImage)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 36, height: 36)
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedTab.title)
+                        .font(.title2.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("settings-detail-title")
+                        .settingsSearchTarget(.pageTitle)
+                    Text(selectedTab.subtitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if selectedTab.sidebarTab == .advanced, selectedTab != .advanced {
+                    Button { sidebarSelection.wrappedValue = .advanced } label: {
+                        Label("Advanced", systemImage: "chevron.left")
+                    }
+                    .controlSize(.small)
+                    .accessibilityLabel("Advanced")
+                    .accessibilityIdentifier("settings-back-to-advanced")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            Divider()
             paneContent
         }
         // Fully flexible so the split view sizes this column: a column's minimum size becomes an
@@ -109,15 +153,16 @@ struct SettingsView: View {
 
     @ViewBuilder private var paneContent: some View {
         switch selectedTab {
-        case .general: GeneralSettingsTab(model: model)
+        case .general: GeneralSettingsTab(model: model) { sidebarSelection.wrappedValue = .items }
         case .items: ItemsSettingsTab(model: model)
         case .style: StyleSettingsTab(model: model)
         case .behavior: BehaviorSettingsTab(model: model)
         case .shortcuts: ShortcutsSettingsTab(model: model)
+        case .advanced: AdvancedSettingsTab(model: model) { sidebarSelection.wrappedValue = $0 }
         case .presets: PresetsSettingsTab(model: model)
         case .triggers: TriggersSettingsTab(model: model)
         case .groups: GroupsSettingsTab(model: model)
-        case .widgets: WidgetsSettingsTab(model: model)
+        case .about: AboutSettingsTab(model: model)
         }
     }
 
@@ -134,17 +179,31 @@ struct SettingsView: View {
 
 private struct GeneralSettingsTab: View {
     @Bindable var model: SettingsModel
+    let showItems: () -> Void
 
     var body: some View {
         Form {
+            Section("Get started") {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Keep the icons you need")
+                            .font(.headline)
+                        Text("Choose Hidden in Items, then Apply Changes.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Arrange Items…", action: showItems)
+                        .accessibilityIdentifier("settings-open-items")
+                        .settingsSearchTarget(.getStarted)
+                }
+                .padding(.vertical, 4)
+            }
+
             LaunchAtLoginSection(model: model)
 
             PermissionsSection(model: model)
-
-            // System-wide and logout-gated like Launch at login, so it sits with the other machine settings.
-            SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)
-
-            BackupSettingsSection(model: model)
         }
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
@@ -171,13 +230,10 @@ private struct BehaviorSettingsTab: View {
                     .pickerStyle(.radioGroup)
                     .accessibilityIdentifier("settings-floating-bar-style")
                     .settingsSearchTarget(.floatingBarStyle)
-                    Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
-                        .accessibilityIdentifier("settings-dismiss-on-exit")
-                        .settingsSearchTarget(.dismissOnExit)
                 }
             }
 
-            Section("Behavior") {
+            Section("Closing the bar") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
                     .accessibilityIdentifier("settings-auto-rehide")
                     .settingsSearchTarget(.autoRehide)
@@ -189,41 +245,41 @@ private struct BehaviorSettingsTab: View {
                             step: 1
                         ) {
                             Text("\(Int(model.preferences.autoRehideDelay))s")
+                                .monospacedDigit()
                         }
+                        .fixedSize()
                     }
                 }
+                if model.preferences.useFloatingBar {
+                    Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
+                        .accessibilityIdentifier("settings-dismiss-on-exit")
+                        .settingsSearchTarget(.dismissOnExit)
+                }
+            }
+
+            Section("Reveal gestures") {
                 Toggle("Reveal on hover", isOn: $model.preferences.revealOnHover)
                     .disabled(!model.preferences.useFloatingBar)
                     .accessibilityIdentifier("settings-reveal-hover")
                     .settingsSearchTarget(.hover)
-                Text("Hover over the BKF icon to open the floating bar. Moving away closes only a hover-opened bar.")
-                    .font(.callout)
+                Text("Hover over BKF to open the floating bar. Moving away closes only a hover-opened bar.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Reveal on scroll or swipe", isOn: $model.preferences.revealOnScroll)
                     .disabled(!model.preferences.useFloatingBar)
                     .accessibilityIdentifier("settings-reveal-scroll")
                     .settingsSearchTarget(.scroll)
-                Text("Scroll down or swipe left on the menu bar to open the floating bar; the opposite gesture closes it.")
-                    .font(.callout)
+                Text("Scroll down or swipe left on the menu bar to open; reverse the gesture to close.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings-scroll-description")
             }
-
-            NotchSettingsSection(model: model, mode: $model.preferences.notchOverflow)
         }
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-behavior-content")
-        // The notch section warns when Accessibility is missing; the probe lives in General's pane,
-        // so this pane refreshes it too or a stale "Not granted" warning would show here.
-        .onAppear { model.refreshPermissions() }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                model.refreshPermissions()
-            }
-        }
     }
 }
 
@@ -248,7 +304,7 @@ struct LaunchAtLoginSection: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        Section("General") {
+        Section("Startup") {
             Toggle("Launch at login", isOn: $model.launchAtLogin)
                 .accessibilityIdentifier("settings-launch-at-login")
                 .settingsSearchTarget(.launchAtLogin)
@@ -309,13 +365,7 @@ struct BackupSettingsSection: View {
 
 // MARK: - Permissions section
 
-/// Surfaces the two optional permissions the Pro features rely on, so the user isn't left with a
-/// silently-failing "Hidden" toggle or blank icons. Each row shows the live status and, when not
-/// granted, a button that routes to the right System Settings pane. Polls while visible so a grant
-/// the user just flipped in System Settings updates here without reopening Settings.
-///
-/// Both permissions are OPTIONAL — the cosmetic hide/show baseline needs neither — so this never
-/// nags or blocks; it explains what each unlocks and gets out of the way once granted.
+/// Permissions unlock item placement and the mirror; neither is required for basic in-place hiding.
 private struct PermissionsSection: View {
     @Bindable var model: SettingsModel
 
@@ -325,7 +375,7 @@ private struct PermissionsSection: View {
                 model: model,
                 permission: .accessibility,
                 title: "Accessibility",
-                purpose: "Lets the app hide and reveal menu bar items by moving them."
+                purpose: "Lets Apply Changes move icons and lets the floating bar open their menus."
             )
             PermissionRow(
                 model: model,
@@ -504,13 +554,11 @@ struct ItemsSettingsContent: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Arrange Menu Bar Items")
-                .font(.headline)
-            Text("Choose Shown, Hidden, or Always Hidden, review the preview, then Apply Changes. Editing placement here does not move items. Always Hidden items appear only when you Option-click the BKF icon.")
+            Text("Choose Shown, Hidden, or Always Hidden. Apply Changes moves the icons; Discard clears your placement edits.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Show in bar and the order arrows change only the floating bar and save immediately.")
+            Text("Option-click BKF to reveal Always Hidden items. Show in bar and the order arrows change only the floating bar and save immediately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

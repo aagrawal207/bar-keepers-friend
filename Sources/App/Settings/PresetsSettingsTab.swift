@@ -12,20 +12,27 @@ struct PresetsSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .settingsSearchTarget(.presets)
-            saveRow
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("settings-preset-save-row")
-                .settingsSearchTarget(.savePreset)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                        .settingsSearchTarget(.presets)
+                    saveRow
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("settings-preset-save-row")
+                        .settingsSearchTarget(.savePreset)
+                }
+                .padding(6)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
 
             if presets.isEmpty {
                 emptyState
+                Spacer(minLength: 12)
             } else {
                 presetList
             }
 
-            Divider()
             footer
         }
         .padding(.top, 8)
@@ -34,18 +41,13 @@ struct PresetsSettingsTab: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Layout Presets")
-                .font(.headline)
-            Text("A preset saves the Shown/Hidden arrangement so you can switch between arrangements later. Applying a preset replaces the saved arrangement and moves items to match, which needs Accessibility.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("settings-preset-header")
+        Text("Applying a preset moves items to its saved arrangement and requires Accessibility.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-preset-header")
     }
 
     private var saveProblem: PresetLibrary.ValidationProblem? {
@@ -74,8 +76,6 @@ struct PresetsSettingsTab: View {
                     .accessibilityIdentifier("settings-preset-save-error")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
     }
 
     private func savePreset() {
@@ -88,42 +88,51 @@ struct PresetsSettingsTab: View {
     }
 
     private var presetList: some View {
-        List {
-            ForEach(presets) { preset in
-                PresetRow(model: model, preset: preset, isActive: preset.id == activeID)
+        GroupBox {
+            List {
+                ForEach(presets) { preset in
+                    PresetRow(model: model, preset: preset, isActive: preset.id == activeID)
+                }
             }
+            .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 120, maxHeight: .infinity)
+            .accessibilityIdentifier("settings-preset-list")
         }
-        .listStyle(.inset)
-        .frame(minHeight: 120, maxHeight: .infinity)
-        .accessibilityIdentifier("settings-preset-list")
+        .padding(.horizontal, 20)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            Image(systemName: "square.on.square")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No presets yet.")
-                .font(.headline)
-            Text("Arrange items in Items, then save that arrangement above as a preset.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
-            Spacer()
+        GroupBox {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "square.on.square")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No presets yet.")
+                        .font(.headline)
+                    Text("Apply your arrangement in Items, then save it here.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 20)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-preset-empty")
     }
 
     private var footer: some View {
-        Text("Presets store the saved arrangement only; pending changes in Items are not included until you Apply Changes there. Item names are not part of a preset.")
+        Text("Apply pending changes in Items before saving a preset. Item names are not included.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 20)
             .padding(.vertical, 12)
             .accessibilityIdentifier("settings-preset-footer")
     }
@@ -153,6 +162,8 @@ private struct PresetRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "square.on.square")
                     .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                    .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     TextField("Preset name", text: Binding(
@@ -191,20 +202,8 @@ private struct PresetRow: View {
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 8)
-
-                HStack(spacing: 8) {
-                    if confirmingDelete {
-                        Text("Delete \"\(preset.name)\"?")
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .accessibilityIdentifier("settings-preset-delete-prompt-\(preset.id)")
-                        Button("Cancel") { confirmingDelete = false }
-                            .accessibilityIdentifier("settings-preset-cancel-delete-\(preset.id)")
-                        Button("Delete", role: .destructive) { deletePreset() }
-                            .accessibilityIdentifier("settings-preset-confirm-delete-\(preset.id)")
-                    } else {
+                if !confirmingDelete {
+                    HStack(spacing: 8) {
                         Button("Apply") { applyPreset() }
                             .disabled(isActive || model.placementInProgress)
                             .help(applyHelp)
@@ -217,8 +216,25 @@ private struct PresetRow: View {
                             .help("Delete \(preset.name). The saved arrangement is not changed.")
                             .accessibilityIdentifier("settings-preset-delete-\(preset.id)")
                     }
+                    .controlSize(.small)
+                }
+            }
+
+            if confirmingDelete {
+                HStack(spacing: 8) {
+                    Text("Delete \"\(preset.name)\"?")
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("settings-preset-delete-prompt-\(preset.id)")
+                    Spacer(minLength: 8)
+                    Button("Cancel") { confirmingDelete = false }
+                        .accessibilityIdentifier("settings-preset-cancel-delete-\(preset.id)")
+                    Button("Delete", role: .destructive) { deletePreset() }
+                        .accessibilityIdentifier("settings-preset-confirm-delete-\(preset.id)")
                 }
                 .controlSize(.small)
+                .padding(.top, 4)
             }
 
             if let renameError {

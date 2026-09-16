@@ -5,16 +5,18 @@ import SwiftUI
 /// an off switch. These are Settings destinations, never item-owner or persistence identities.
 enum SettingsSearchTarget: CaseIterable, Hashable, Sendable {
     case pageTitle
-    case launchAtLogin, accessibility, screenRecording, spacing, backup
+    case getStarted, launchAtLogin, accessibility, screenRecording, spacing, backup
     case itemArrangement, placementPreview, bulkPlacement, placementActions
     case icons, menuBarStyle, tint, gradient, opacity, shape, cornerRadius, border, shadow, resetStyle, stylePreview
     case floatingBar, floatingBarStyle, dismissOnExit, autoRehide, hover, scroll, notch
     case toggleShortcut, itemShortcuts
-    case presets, savePreset, triggers, groups, widgets
+    case advancedTools, presets, savePreset, triggers, groups
+    case aboutVersion, aboutProject, aboutSupport, aboutLicense
 
     var searchTerms: String {
         switch self {
         case .pageTitle: ""
+        case .getStarted: "Get started Arrange Items"
         case .launchAtLogin: "Launch at login startup"
         case .accessibility: "Permissions Accessibility"
         case .screenRecording: "Permissions Screen Recording"
@@ -48,6 +50,7 @@ enum SettingsSearchTarget: CaseIterable, Hashable, Sendable {
         case .notch: "Notch Make room near the notch Never When needed tuck shown items"
         case .toggleShortcut: "Shortcuts Toggle the bar with a global shortcut Toggle bar Record Clear keyboard hotkey"
         case .itemShortcuts: "Item shortcuts Record Clear"
+        case .advancedTools: "Optional tools Presets Triggers Groups"
         case .presets: "Layout Presets Rename Apply Update from Current Delete profiles arrangements"
         case .savePreset: "New preset name Save Current Layout"
         case .triggers:
@@ -55,10 +58,10 @@ enum SettingsSearchTarget: CaseIterable, Hashable, Sendable {
                 + " Add Rule Edit Rule Rule name Conditions Apply preset Add Condition Remove Condition Save Delete"
                 + " automatic automation percentage wifi network connected not connection application bundle monitor screen weekdays schedule"
         case .groups: "Item Groups New group name Create Group Rename Delete members membership add move remove apps applications"
-        case .widgets:
-            WidgetAction.Kind.allCases.map(\.displayName).joined(separator: " ")
-                + " Add Widget Edit Widget Name Symbol SF Symbol name Action Link Choose App Bundle identifier Shortcut name Save Delete"
-                + " custom menu bar icon url http https mail email application shortcuts"
+        case .aboutVersion: "Version macOS Tahoe compatibility"
+        case .aboutProject: "Project GitHub website source code"
+        case .aboutSupport: "Help Support Feedback Report an issue"
+        case .aboutLicense: "MIT License Open source acknowledgments credits"
         }
     }
 
@@ -68,25 +71,29 @@ enum SettingsSearchTarget: CaseIterable, Hashable, Sendable {
 extension SettingsView.Tab {
     var searchTargets: [SettingsSearchTarget] {
         switch self {
-        case .general: [.launchAtLogin, .accessibility, .screenRecording, .spacing, .backup]
+        case .general: [.getStarted, .launchAtLogin, .accessibility, .screenRecording]
         case .items: [.itemArrangement, .placementPreview, .bulkPlacement, .placementActions]
         case .style: [.icons, .menuBarStyle] + SettingsSearchTarget.styleControls + [.stylePreview]
-        case .behavior: [.floatingBar, .floatingBarStyle, .dismissOnExit, .autoRehide, .hover, .scroll, .notch]
+        case .behavior: [.floatingBar, .floatingBarStyle, .dismissOnExit, .autoRehide, .hover, .scroll]
         case .shortcuts: [.toggleShortcut, .itemShortcuts]
+        case .advanced: [.advancedTools, .spacing, .notch, .backup]
         case .presets: [.presets, .savePreset]
         case .triggers: [.triggers]
         case .groups: [.groups]
-        case .widgets: [.widgets]
+        case .about: [.aboutVersion, .aboutProject, .aboutSupport, .aboutLicense]
         }
     }
 
+    private var searchPath: String { sidebarTab == self ? title : "\(sidebarTab.title) \(title)" }
+
     static func matching(_ query: String) -> [Self] {
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return sidebarTabs }
         func containsWords(_ text: String) -> Bool {
             words.allSatisfy { text.localizedStandardContains($0) }
         }
         let matches = allCases.filter { tab in
-            containsWords(([tab.title] + tab.searchTargets.map(\.searchTerms)).joined(separator: " "))
+            containsWords(([tab.searchPath] + tab.searchTargets.map(\.searchTerms)).joined(separator: " "))
         }
         return matches.filter { containsWords($0.title) } + matches.filter { !containsWords($0.title) }
     }
@@ -94,7 +101,7 @@ extension SettingsView.Tab {
     func highlightTargets(for query: String) -> Set<SettingsSearchTarget> {
         // A page-qualified query such as "Style opacity" should still point to the opacity row.
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
-            .filter { !title.localizedStandardContains($0) }
+            .filter { !searchPath.localizedStandardContains($0) }
         guard !words.isEmpty else { return [.pageTitle] }
         let scored = searchTargets.map { target in
             (target, words.filter { target.searchTerms.localizedStandardContains($0) }.count)

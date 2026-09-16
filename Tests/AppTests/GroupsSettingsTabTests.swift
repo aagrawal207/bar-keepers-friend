@@ -24,7 +24,7 @@ struct GroupsSettingsTabTests {
         #expect(!identifiers.contains("settings-group-list"))
         #expect(!identifiers.contains("settings-group-items-error"))
         let text = elements.map { settingsTestAccessibilityText($0) }.joined(separator: " ")
-        #expect(text.contains("Item Groups"))
+        #expect(text.contains("Grouped items open from one menu bar icon. Their saved Shown/Hidden choices are kept but do not apply while grouped."))
         #expect(text.contains("No groups yet."))
         #expect(text.contains("Group changes apply right away"))
 
