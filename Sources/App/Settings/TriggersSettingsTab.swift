@@ -52,6 +52,9 @@ struct TriggersSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-trigger-header")
+                .settingsSearchTarget(.triggers)
             if let editing {
                 TriggerRuleEditor(
                     rule: editing.rule, isNew: editing.isNew, presets: presets,

@@ -50,6 +50,7 @@ struct WidgetsSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .settingsSearchTarget(.widgets)
             if let editing {
                 WidgetEditor(
                     draft: editing, existing: widgets, chooseApp: chooseApp,

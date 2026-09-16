@@ -28,7 +28,8 @@ Working prototype, not yet a drop-in replacement for every Bartender workflow:
 - **Item feedback** highlights the row or icon under the pointer, regardless of how the bar opened.
   Disabled items remain dimmed and non-interactive.
 - **Settings search** filters pages by name and setting keywords without changing your settings.
-  Style sits directly below Items in the sidebar. This does not restore the removed menu-bar search.
+  Selecting a result highlights the matching setting or section for three seconds. Hidden controls
+  point to their enabling switch. Style sits directly below Items in the sidebar.
 - **Settings layout:** General keeps machine-level settings (login, permissions, spacing, backup);
   Behavior (floating bar, re-hide, hover, scroll, notch make-room) and Shortcuts have their own pages.
   **Style > Icons** picks the menu bar symbol and an app-icon theme for Settings, About, and alerts;
@@ -136,7 +137,7 @@ xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend \
 The suite includes pure Core tests and a hostless App-adapter target. Adapter tests measure actual
 SwiftUI content off-screen and exercise cancellation with fake native dependencies, without
 launching the menu-bar app, taking screenshots, or moving the mouse.
-It currently contains 1108 tests in 81 suites (1812 invocations including parameterized cases).
+It currently contains 1112 tests in 81 suites (1819 invocations including parameterized cases).
 
 ## Credit
 

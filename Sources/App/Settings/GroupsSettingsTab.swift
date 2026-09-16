@@ -24,6 +24,9 @@ struct GroupsSettingsContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-group-header")
+                .settingsSearchTarget(.groups)
             createRow
             if let error = model.itemsLoadError {
                 HStack(spacing: 8) {

@@ -37,66 +37,6 @@ struct SettingsView: View {
             case .widgets: "star.square.on.square"
             }
         }
-
-        // Include conditional controls without mounting panes or reading the menu bar to index them.
-        private var searchTerms: String {
-            switch self {
-            case .general:
-                """
-                Launch at login Permissions Accessibility Screen Recording
-                Menu bar spacing Reduce menu bar item spacing Selection padding Reset to system default
-                Backup Layout file Export Import startup
-                """
-            case .items:
-                """
-                Arrange Menu Bar Items Hidden Shown Always Hidden Placement Display name Show in bar
-                Move earlier Move later Hide All Show All Apply Changes Discard Retry Retry Reading
-                Placement Preview After Apply Last Observed apps applications alias aliases nickname rename order
-                """
-            case .style:
-                """
-                Style the menu bar Tint color Gradient end color Opacity Shape Full Rounded Pill
-                Corner radius Border width Border color Shadow Preview Reset Style
-                Icons Menu bar icon App icon symbol theme appearance styles styling colour transparency background
-                """
-                    + " " + AppIconChoice.MenuBarSymbol.allCases.map(\.displayName).joined(separator: " ")
-                    + " " + AppIconChoice.AppTheme.allCases.map(\.displayName).joined(separator: " ")
-            case .behavior:
-                """
-                Hidden items Show hidden items in a floating bar Floating bar style Horizontal strip Vertical list
-                Dismiss the bar when the pointer leaves it
-                Behavior Automatically re-hide Re-hide after Reveal on hover Reveal on scroll or swipe
-                mouse auto-rehide delay
-                Notch Make room near the notch Never When needed tuck shown items
-                """
-            case .shortcuts:
-                """
-                Shortcuts Item shortcuts Toggle the bar with a global shortcut Toggle bar Record Clear
-                keyboard hotkey
-                """
-            case .presets:
-                "Layout Presets New preset name Save Current Layout Rename Apply Update from Current Delete profiles arrangements"
-            case .triggers:
-                TriggerCondition.Kind.allCases.map(\.displayName).joined(separator: " ")
-                    + " Add Rule Edit Rule Rule name Conditions Apply preset Add Condition Remove Condition Save Delete"
-                    + " automatic automation percentage wifi network connected not connection application bundle monitor screen weekdays schedule"
-            case .groups:
-                "Item Groups New group name Create Group Rename Delete members membership add move remove apps applications"
-            case .widgets:
-                WidgetAction.Kind.allCases.map(\.displayName).joined(separator: " ")
-                    + " Add Widget Edit Widget Name Symbol SF Symbol name Action Link Choose App Bundle identifier Shortcut name Save Delete"
-                    + " custom menu bar icon url http https mail email application shortcuts"
-            }
-        }
-
-        static func matching(_ query: String) -> [Self] {
-            let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
-            func containsWords(_ text: String) -> Bool {
-                words.allSatisfy { text.localizedStandardContains($0) }
-            }
-            let matches = allCases.filter { containsWords("\($0.title) \($0.searchTerms)") }
-            return matches.filter { containsWords($0.title) } + matches.filter { !containsWords($0.title) }
-        }
     }
 
     static let windowSize = CGSize(width: 820, height: 720)
@@ -106,6 +46,7 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
     @State private var selectedTab: Tab
     @State private var searchText = ""
+    @State private var searchHighlight: SettingsSearchHighlight?
 
     init(model: SettingsModel, initialTab: Tab = .general) {
         self.model = model
@@ -116,9 +57,11 @@ struct SettingsView: View {
         // A constant visibility plus no toggle keeps the sidebar, the only pane switcher, on screen.
         NavigationSplitView(columnVisibility: .constant(.all)) {
             // toolbar(removing:) must sit inside the width modifier; outside it, the width is lost.
-            SettingsSidebar(selection: $selectedTab, searchText: $searchText, appTheme: model.preferences.appIcon.appTheme)
-                .toolbar(removing: .sidebarToggle)
-                .navigationSplitViewColumnWidth(Self.sidebarWidth)
+            SettingsSidebar(selection: sidebarSelection, searchText: $searchText, appTheme: model.preferences.appIcon.appTheme) { tab, query in
+                searchHighlight = SettingsSearchHighlight(targets: tab.highlightTargets(for: query))
+            }
+            .toolbar(removing: .sidebarToggle)
+            .navigationSplitViewColumnWidth(Self.sidebarWidth)
         } detail: {
             detail
         }
@@ -126,6 +69,15 @@ struct SettingsView: View {
         .frame(width: Self.windowSize.width, height: Self.windowSize.height)
         .onAppear { consumeRequestedTab() }
         .onChange(of: model.requestedTab) { _, _ in consumeRequestedTab() }
+        .onChange(of: searchText) { _, query in
+            if !query.isEmpty { searchHighlight = nil }
+        }
+        .onDisappear { searchHighlight = nil }
+        .task(id: searchHighlight?.id) {
+            guard let id = searchHighlight?.id else { return }
+            do { try await Task.sleep(for: SettingsSearchHighlight.duration) } catch { return }
+            if searchHighlight?.id == id { searchHighlight = nil }
+        }
     }
 
     private var detail: some View {
@@ -134,6 +86,7 @@ struct SettingsView: View {
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("settings-detail-title")
+                .settingsSearchTarget(.pageTitle)
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 8)
@@ -144,6 +97,14 @@ struct SettingsView: View {
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-detail")
+        .environment(\.settingsSearchHighlight, searchHighlight)
+    }
+
+    private var sidebarSelection: Binding<Tab> {
+        Binding(get: { selectedTab }, set: { tab in
+            if selectedTab != tab { searchHighlight = nil }
+            selectedTab = tab
+        })
     }
 
     @ViewBuilder private var paneContent: some View {
@@ -163,6 +124,7 @@ struct SettingsView: View {
     private func consumeRequestedTab() {
         guard let tab = model.requestedTab else { return }
         searchText = ""
+        searchHighlight = nil
         selectedTab = tab
         model.requestedTab = nil
     }
@@ -199,18 +161,26 @@ private struct BehaviorSettingsTab: View {
         Form {
             Section("Hidden items") {
                 Toggle("Show hidden items in a floating bar", isOn: $model.preferences.useFloatingBar)
+                    .accessibilityIdentifier("settings-floating-bar-enabled")
+                    .settingsSearchTarget(.floatingBar, including: model.preferences.useFloatingBar ? [] : [.floatingBarStyle, .dismissOnExit])
                 if model.preferences.useFloatingBar {
                     Picker("Floating bar style", selection: $model.preferences.floatingBarStyle) {
                         Text("Horizontal strip").tag(FloatingBarStyle.horizontal)
                         Text("Vertical list").tag(FloatingBarStyle.vertical)
                     }
                     .pickerStyle(.radioGroup)
+                    .accessibilityIdentifier("settings-floating-bar-style")
+                    .settingsSearchTarget(.floatingBarStyle)
                     Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
+                        .accessibilityIdentifier("settings-dismiss-on-exit")
+                        .settingsSearchTarget(.dismissOnExit)
                 }
             }
 
             Section("Behavior") {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
+                    .accessibilityIdentifier("settings-auto-rehide")
+                    .settingsSearchTarget(.autoRehide)
                 if model.preferences.autoRehide {
                     LabeledContent("Re-hide after") {
                         Stepper(
@@ -224,12 +194,16 @@ private struct BehaviorSettingsTab: View {
                 }
                 Toggle("Reveal on hover", isOn: $model.preferences.revealOnHover)
                     .disabled(!model.preferences.useFloatingBar)
+                    .accessibilityIdentifier("settings-reveal-hover")
+                    .settingsSearchTarget(.hover)
                 Text("Hover over the BKF icon to open the floating bar. Moving away closes only a hover-opened bar.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Toggle("Reveal on scroll or swipe", isOn: $model.preferences.revealOnScroll)
                     .disabled(!model.preferences.useFloatingBar)
+                    .accessibilityIdentifier("settings-reveal-scroll")
+                    .settingsSearchTarget(.scroll)
                 Text("Scroll down or swipe left on the menu bar to open the floating bar; the opposite gesture closes it.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -277,6 +251,7 @@ struct LaunchAtLoginSection: View {
         Section("General") {
             Toggle("Launch at login", isOn: $model.launchAtLogin)
                 .accessibilityIdentifier("settings-launch-at-login")
+                .settingsSearchTarget(.launchAtLogin)
             if let notice = model.loginItemNotice {
                 HStack(spacing: 8) {
                     Label(notice.text, systemImage: "exclamationmark.triangle.fill")
@@ -317,6 +292,9 @@ struct BackupSettingsSection: View {
                         .accessibilityIdentifier("settings-backup-import")
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-backup-row")
+            .settingsSearchTarget(.backup)
             if let message = model.transferMessage {
                 // A write failure carries the system's full sentence; wrap it rather than truncate.
                 Text(message)
@@ -394,6 +372,9 @@ private struct PermissionRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-permission-\(permission.rawValue)")
+        .settingsSearchTarget(permission == .accessibility ? .accessibility : .screenRecording)
     }
 
     @ViewBuilder private var statusChip: some View {
@@ -439,6 +420,9 @@ struct ItemsSettingsContent: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             placementPreview
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-placement-preview")
+                .settingsSearchTarget(.placementPreview)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
             listHeader
@@ -553,6 +537,9 @@ struct ItemsSettingsContent: View {
                 bulkActions
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-items-list-header")
+        .settingsSearchTarget(.itemArrangement, including: items.isEmpty ? [.bulkPlacement] : [])
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
     }
@@ -571,6 +558,9 @@ struct ItemsSettingsContent: View {
             .accessibilityIdentifier("settings-placement-show-all")
         }
         .controlSize(.small)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-placement-bulk")
+        .settingsSearchTarget(.bulkPlacement)
     }
 
     private var placementFooter: some View {
@@ -616,6 +606,9 @@ struct ItemsSettingsContent: View {
                     .disabled(!model.hasPendingChanges || model.placementInProgress)
                     .accessibilityIdentifier("settings-placement-apply")
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-placement-actions")
+            .settingsSearchTarget(.placementActions)
             Text("Apply and Discard affect placement only. Names save separately on Return or when you leave the field.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

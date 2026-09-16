@@ -24,6 +24,7 @@ struct ShortcutsSettingsSection: View {
         Section("Shortcuts") {
             Toggle("Toggle the bar with a global shortcut", isOn: $model.preferences.enableGlobalHotkey)
                 .accessibilityIdentifier("settings-shortcut-toggle-enabled")
+                .settingsSearchTarget(.toggleShortcut)
             if model.preferences.enableGlobalHotkey {
                 LabeledContent("Toggle bar") {
                     HotkeyRecorderView(
@@ -50,6 +51,7 @@ struct ShortcutsSettingsSection: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-shortcut-items-hint")
+                .settingsSearchTarget(.itemShortcuts)
 
             // One line for the whole section; every row would otherwise repeat the same reason.
             if !model.preferences.useFloatingBar {

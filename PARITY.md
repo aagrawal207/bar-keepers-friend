@@ -1,6 +1,6 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-15 (icon reliability, Live mode removed). Reference: [Bartender 6 product](https://www.macbartender.com/),
+Last reviewed: 2026-09-15 (Settings search destination highlights). Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
 
@@ -40,7 +40,7 @@ third-party menu, moved an item to the requested slot, or rendered a cursor with
 | Widgets | Custom status items with allowlisted actions (URL, app, Shortcut, toggle bar); no shell | Live menu-bar appearance, `shortcuts run`, `mailto:` handoff |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
 | Spacing | Global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
+| Settings/onboarding | Sidebar layout (820x720) with General, Items, Style, Behavior, Shortcuts, Presets, Triggers, Groups, Widgets; Settings search with transient destination highlights; every pane fits without scrolling; staged Apply/Discard, cached previews, live permission status, first-run onboarding for fresh installs, export/login feedback | Glass sidebar rendering, VoiceOver, real `SMAppService` transitions |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
 | Updates/install | Manual GitHub release check and Restart in the anchor menu; local Apple Development build | Signed update feed (Sparkle), Developer ID signing, notarization |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
@@ -152,6 +152,41 @@ no Dock tile, search-term fusion, a tooltip on the wrong control, and duplicate 
 button are exercised only through the `setAnchorImage` seam. The pop-up's native menu items are not
 reachable off screen; the workflow drives the exact binding the picker holds. Live appearance of the
 chosen symbol in the menu bar and the About panel's rendering remain hardware QA.
+
+## Settings Search Highlight Verification
+
+On 2026-09-15 the user requested a highlight at the destination of a Settings search. The sidebar
+preserves the selected query when it clears the search field, so `SettingsView` can identify the
+matching settings or sections. The cue lasts three seconds, also works for the current
+page, and resets on repeated selection. Typing another query or navigating elsewhere clears it;
+an older timeout cannot clear a newer cue.
+
+An unavailable control highlights its enabling switch. For example, searching "opacity" with styling
+off highlights "Style the menu bar"; explicitly enabling styling transfers the cue to the opacity row.
+A query such as "Style opacity border" highlights both matching rows. A page-name-only query
+highlights the page heading. Search does not enable features, open editors, or move keyboard focus.
+
+The outline and background tint occupy no additional layout space and ignore pointer input. Reduce
+Motion suppresses the fade. Accessibility custom content marks the region as "Settings search: Match"
+while retaining existing control values and help text. Plain accessibility hints did not surface on
+SwiftUI container groups in the workflow tests; custom content does.
+
+| Coverage | Evidence | Level |
+|---|---|---|
+| 34 queries across every pane, Return and result-button activation, shared sections, page qualifiers, accents, matching destination bounds, and retained Items drafts | `SettingsSearchTests.searchResultsHighlightTheirDestinationsAcrossEveryPaneWithoutApplyingAnything` | Functional workflow |
+| Hidden controls point to visible switches; disabled hover stays disabled; explicitly enabling styling transfers the highlight and saves once | `SettingsSearchTests.hiddenAndDisabledSearchControlsPointToReachableDestinations` | Functional workflow |
+| Current-page repeat, independent expiry, manual/external navigation, new and unmatched queries, no Items reload or draft loss | `SettingsSearchTests.repeatedHighlightsExpireIndependentlyAndNavigationClearsThemWithoutLosingDrafts`, existing search interaction tests | Functional workflow |
+| Actual highlight pixels and stable bounds in light/dark with motion enabled/disabled; highlighted checkbox activation persists one edit | `SettingsSearchTests.highlightsPaintTheDestinationWithoutResizingOrDisablingIt` | Hostless rendering + interaction |
+
+The search harness uses the real model, an isolated `UserDefaults`-backed `PreferencesStore`, and the
+real engine. Item reads and native capture/status-button operations are counted at the existing seams.
+Search emits no new logs or metrics; tests assert zero writes, moves, and capture before an explicit
+setting edit. No native input events are posted and test windows remain off screen. On-screen VoiceOver
+delivery and animation feel remain native QA; auto-scrolling to a control is outside this change.
+
+Full build/test on macOS 26.6.2 with Xcode 27.0: 1112 tests across 81 suites, 1819 invocations,
+zero failures or skips. The signed app passed `codesign --verify --deep --strict`. `scan_diff` was
+unavailable; the diff received manual security review.
 
 ## Settings Search Verification
 

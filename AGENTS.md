@@ -52,6 +52,10 @@ see Removed), why icons kept falling back to app icons (a fullscreen Space hid t
 Built, "Icon reliability"), and to keep the screen-recording indicator out of the mirror (done: resolved
 Control Center items are never mirrored, and the mirror follows current positions on open).
 
+Later on 2026-09-15 the user requested a destination highlight after selecting a Settings search
+result. This is implemented as a three-second outline of the matching setting or section, with
+an enabling-switch fallback for hidden controls. See Built and `PARITY.md` for verification.
+
 **Testing direction (2026-09-14, from the user):** prefer fewer functional workflow tests over many
 unit tests. A workflow test drives the real Settings UI, the real model, real persistence
 (`PreferencesStore` in an isolated `UserDefaults` suite), and the real engine/mover together, and
@@ -137,8 +141,8 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Build: `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -destination 'platform=macOS' build`
-- Test: same command with `test` (currently **1108 tests, 81 suites**, 1812 invocations including
-  parameterized cases). Last full build/test: 2026-09-15, macOS 26.6.2 / Xcode 26.6, zero failures
+- Test: same command with `test` (currently **1112 tests, 81 suites**, 1819 invocations including
+  parameterized cases). Last full build/test: 2026-09-15, macOS 26.6.2 / Xcode 27.0, zero failures
   or skipped tests. The built app also passed `codesign --verify --deep --strict`.
 - Adapter tests only: append `-only-testing:BarKeepersFriendAppTests` to the test command. Their
   `BKF_TESTING` compilation condition keeps synthetic diagnostics console-only; production logging
@@ -300,6 +304,21 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   commands remain with the input method. Query history is disabled. This is not item-name filtering,
   a jump to an individual control, or the removed global Search feature. Style is directly below Items;
   the 180pt sidebar and 820x720 window still fit. See `PARITY.md` for tests and native QA limits.
+- **Settings search destination highlights (2026-09-15, workflow + bitmap-tested).** Selecting a
+  result, including the current page, outlines the matching setting or section for three seconds.
+  `SettingsSearchTarget` shares keywords with the sidebar index. Page-qualified queries such as
+  "Style opacity" target the setting; equally strong matches can highlight several regions.
+  Page-name-only queries highlight the page heading. Hidden controls point to their enabling switch;
+  search does not enable them or open an editor. A new query, another page, or an external tab request
+  clears the cue; repeated selections restart its lifetime without remounting the pane. The outline
+  and tint add no layout space and ignore pointer input. Reduce Motion disables the fade, increased
+  contrast thickens the outline, and accessibility custom content exposes "Settings search: Match"
+  without replacing a control's existing help or value. Four workflows added to `SettingsSearchTests`
+  exercise 34 destination queries, conditional controls, cancellation/repeat timing, and actual
+  light/dark pixels. Its harness uses a real isolated `PreferencesStore` and real engine with counted
+  item-provider/capture/status-button seams; search preserves Items drafts and performs no preference
+  writes, moves, or capture. No auto-scroll or keyboard-focus jump was added. On-screen VoiceOver
+  delivery and the feel of the fade remain native QA.
 - **Settings split + BKF icon choice (2026-09-14, workflow-tested).** General had grown to ten
   sections and scrolled; it now holds only machine-level settings (Launch at login, Permissions,
   Menu bar spacing, Backup). New panes: **Behavior** (floating bar, re-hide, hover, scroll, and since

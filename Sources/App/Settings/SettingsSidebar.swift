@@ -8,6 +8,7 @@ struct SettingsSidebar: View {
     @Binding var selection: SettingsView.Tab
     @Binding var searchText: String
     var appTheme: AppIconChoice.AppTheme = .ocean
+    var onSearchSelection: (SettingsView.Tab, String) -> Void = { _, _ in }
 
     private var tabs: [SettingsView.Tab] { SettingsView.Tab.matching(searchText) }
 
@@ -59,8 +60,10 @@ struct SettingsSidebar: View {
     }
 
     private func select(_ tab: SettingsView.Tab) {
+        let query = searchText
         searchText = ""
         selection = tab
+        if query.contains(where: { !$0.isWhitespace }) { onSearchSelection(tab, query) }
     }
 }
 

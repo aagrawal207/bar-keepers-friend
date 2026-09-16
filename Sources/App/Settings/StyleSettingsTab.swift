@@ -66,6 +66,7 @@ struct StyleSettingsTab: View {
             Section("Menu bar style") {
                 Toggle("Style the menu bar", isOn: committed.isEnabled)
                     .accessibilityIdentifier("settings-style-enabled")
+                    .settingsSearchTarget(.menuBarStyle, including: displayed.isEnabled ? [] : SettingsSearchTarget.styleControls)
 
                 if displayed.isEnabled {
                     // Related controls share rows to keep the style section compact.
@@ -75,8 +76,10 @@ struct StyleSettingsTab: View {
                                 .labelsHidden()
                                 .accessibilityLabel("Tint color")
                                 .accessibilityIdentifier("settings-style-tint")
+                                .settingsSearchTarget(.tint)
                             Toggle("Gradient", isOn: gradientEnabled)
                                 .accessibilityIdentifier("settings-style-gradient-enabled")
+                                .settingsSearchTarget(.gradient)
                             if displayed.hasGradient {
                                 ColorPicker("Gradient end color", selection: gradientEndColor, supportsOpacity: false)
                                     .labelsHidden()
@@ -96,6 +99,9 @@ struct StyleSettingsTab: View {
                                 .accessibilityIdentifier("settings-style-opacity-value")
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-style-opacity-row")
+                    .settingsSearchTarget(.opacity)
                     Picker("Shape", selection: committed.shape) {
                         Text("Full").tag(MenuBarStyle.Shape.full)
                         Text("Rounded").tag(MenuBarStyle.Shape.rounded)
@@ -103,6 +109,7 @@ struct StyleSettingsTab: View {
                     }
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("settings-style-shape")
+                    .settingsSearchTarget(.shape)
                     LabeledContent("Corner radius") {
                         Stepper(value: committed.cornerRadius, in: MenuBarStyle.cornerRadiusRange, step: 1) {
                             Text(Self.points(displayed.cornerRadius))
@@ -111,6 +118,7 @@ struct StyleSettingsTab: View {
                         .accessibilityIdentifier("settings-style-corner-radius")
                     }
                     .disabled(!displayed.shape.usesCornerRadius)
+                    .settingsSearchTarget(.cornerRadius)
                     LabeledContent("Border") {
                         HStack(spacing: 12) {
                             Stepper(value: committed.borderWidth, in: MenuBarStyle.borderWidthRange, step: 1) {
@@ -126,20 +134,26 @@ struct StyleSettingsTab: View {
                             }
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-style-border-row")
+                    .settingsSearchTarget(.border)
                     HStack {
                         Toggle("Shadow", isOn: committed.shadowEnabled)
                             .accessibilityIdentifier("settings-style-shadow")
+                            .settingsSearchTarget(.shadow)
                         Spacer()
                         // Reset restores the default look but leaves styling on; the toggle above turns it off.
                         Button("Reset Style") { editor.commit(MenuBarStyle(isEnabled: true)) }
                             .disabled(displayed.isDefaultAppearance)
                             .accessibilityIdentifier("settings-style-reset")
+                            .settingsSearchTarget(.resetStyle)
                     }
                 }
             }
 
             Section("Preview") {
                 MenuBarStylePreview(style: displayed)
+                    .settingsSearchTarget(.stylePreview)
                 Text("Bar Keeper's Friend paints this style itself, behind the menu bar. It needs no permissions and does not change the menu bar's text or icons. If nothing changes on screen, turn off \"Show menu bar background\" in System Settings > Menu Bar. The app icon above changes in Settings, About, and alerts; the installed icon in Finder stays as shipped.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -219,6 +233,9 @@ struct AppIconSettingsSection: View {
                     .accessibilityIdentifier("settings-icon-app-theme")
                 }
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-icons-row")
+            .settingsSearchTarget(.icons)
         }
     }
 }

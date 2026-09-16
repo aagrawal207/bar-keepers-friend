@@ -13,6 +13,7 @@ struct SpacingSettingsSection: View {
         Section("Menu bar spacing") {
             Toggle("Reduce menu bar item spacing", isOn: $model.preferences.menuBarSpacing.enabled)
                 .accessibilityIdentifier("settings-spacing-enabled")
+                .settingsSearchTarget(.spacing)
 
             if spacing.enabled {
                 LabeledContent("Spacing") {

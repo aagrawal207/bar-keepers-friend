@@ -13,7 +13,11 @@ struct PresetsSettingsTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .settingsSearchTarget(.presets)
             saveRow
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-preset-save-row")
+                .settingsSearchTarget(.savePreset)
 
             if presets.isEmpty {
                 emptyState

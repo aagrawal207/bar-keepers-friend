@@ -27,6 +27,7 @@ struct NotchSettingsSection: View {
             }
             .pickerStyle(.radioGroup)
             .accessibilityIdentifier("settings-notch-picker")
+            .settingsSearchTarget(.notch)
 
             Text("When hidden items are revealed in the menu bar itself (floating bar off, or while activating an item) and the notch would clip them, the shown items closest to the anchor are tucked away, then put back when the section hides. Moves items, so it needs Accessibility and may briefly move the pointer. Has no effect on displays without a notch.")
                 .font(.callout)
