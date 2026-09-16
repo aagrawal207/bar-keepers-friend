@@ -41,22 +41,33 @@ struct SettingsSidebarTests {
     @Test(arguments: SettingsView.Tab.allCases)
     func pageNamesRankTheirOwnPaneFirst(tab: SettingsView.Tab) {
         #expect(SettingsView.Tab.matching(tab.title).first == tab)
+        #expect(tab.highlightTargets(for: tab.title) == [.pageTitle])
+        if tab.sidebarTab != tab {
+            let path = "Advanced \(tab.title)"
+            #expect(SettingsView.Tab.matching(path).first == tab)
+            #expect(tab.highlightTargets(for: path) == [.pageTitle])
+        }
     }
 
     @Test(arguments: [
         ("screen recording", SettingsView.Tab.general), ("launch at login", .general), ("get started", .general),
+        ("Permissions", .general), ("Startup", .general), ("General Permissions Accessibility", .general),
         ("Arrange Items", .general), ("export", .advanced), ("backup", .advanced),
         ("hover", .behavior), ("Show hidden items in a floating bar", .behavior),
+        ("Hidden items", .behavior), ("Closing the bar", .behavior), ("Reveal gestures", .behavior),
         ("Dismiss the bar when the pointer leaves it", .behavior), ("notch", .advanced),
         ("keyboard shortcut", .shortcuts), ("Shortcuts", .shortcuts), ("hotkey", .shortcuts),
         ("spacing", .advanced), ("Reset to system default", .advanced), ("advanced tools", .advanced),
+        ("Menu bar spacing", .advanced), ("Optional tools", .advanced),
         ("menu bar icon", .style), ("app icon", .style), ("sparkle", .style), ("sunset", .style),
         ("apply changes", .items), ("always hidden", .items), ("aliases", .items),
+        ("Items Menu Bar", .items), ("Hidden Bar", .items), ("Placement Preview", .items),
         ("opacity", .style), ("gradient", .style), ("styles", .style), ("save layout", .presets),
         ("low power", .triggers), ("Wi-Fi", .triggers), ("membership", .groups),
         ("Advanced Wi-Fi", .triggers), ("Advanced profiles", .presets), ("Advanced membership", .groups),
         ("Advanced selection padding", .advanced), ("Advanced Triggers Wi-Fi", .triggers),
         ("license", .about), ("support", .about), ("version", .about), ("project", .about),
+        ("Project & help", .about), ("Shortcuts Item shortcuts", .shortcuts),
     ])
     func searchFindsSettingsWithinTheirPane(query: String, expected: SettingsView.Tab) {
         #expect(SettingsView.Tab.matching(query).contains(expected))
@@ -91,7 +102,9 @@ struct SettingsSidebarTests {
         let model = SettingsModel(preferences: preferences, loginItem: SettingsTestLoginItem(), itemsProvider: { [] }, onChange: { _ in })
         model.spacingNeedsLogout = true
         model.exportLayout { _ in .failed("The disk is full. Free up some space and try exporting the layout again.") }
-        let hosting = settingsTestHost(SettingsView(model: model, initialTab: tab))
+        let hosting = settingsTestHost(
+            SettingsView(model: model, initialTab: tab), configureWindow: SettingsWindowController.configureWindow
+        )
         #expect(await waitForUpdate(hosting.view) { self.paneIsShown(tab, in: hosting.view) })
         if tab == .shortcuts {
             // Shortcuts reads the (empty) menu bar first; its empty-state row is the true bottom.
@@ -99,11 +112,21 @@ struct SettingsSidebarTests {
         } else {
             #expect(model.itemsLoading, "\(tab) must not read the menu bar just to render")
         }
+        let window = hosting.testWindow!
+        let usefulFrame = window.convertToScreen(window.contentLayoutRect)
         let detail = try element("settings-detail", in: hosting.view).accessibilityFrame()
+        #expect(window.contentLayoutRect.size == SettingsView.windowSize)
+        #expect(usefulFrame.contains(detail))
         for identifier in lastControls {
             let last = try element(identifier, in: hosting.view).accessibilityFrame()
             #expect(!last.isEmpty)
             #expect(detail.contains(last), "\(tab) scrolls: \(identifier) at \(last) is outside the detail \(detail)")
+            #expect(usefulFrame.contains(last))
+            for scroll in settingsTestSubviews(hosting.view).compactMap({ $0 as? NSScrollView }) where
+                settingsTestAccessibility(scroll).contains(where: { $0.accessibilityIdentifier() == identifier }) {
+                let viewport = window.convertToScreen(scroll.contentView.convert(scroll.contentView.visibleRect, to: nil))
+                #expect(viewport.contains(last), "\(identifier) at \(last) is clipped by its scroll viewport \(viewport)")
+            }
         }
         let bitmap = try settingsTestBitmap(hosting.view)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -121,14 +144,59 @@ struct SettingsSidebarTests {
         #expect(SettingsView.Tab.matching("Advanced opacity").isEmpty)
         #expect(SettingsView.Tab.matching("Advanced Wi-Fi membership").isEmpty)
         #expect(SettingsView.Tab.matching("no-such-setting").isEmpty)
+        #expect(SettingsView.Tab.general.highlightTargets(for: "  GÉNERAL Permíssions\n") == [.permissions])
+        #expect(SettingsView.Tab.style.highlightTargets(for: "  Style OPÁCITY\n border\t") == [.opacity, .border])
+        #expect(SettingsView.Tab.triggers.highlightTargets(for: "  ADVÁNCED Tríggers Wi-Fi\n") == [.triggerConditions])
+        #expect(SettingsView.Tab.items.highlightTargets(for: "Items item") == [.itemArrangement])
+        #expect(SettingsView.Tab.advanced.highlightTargets(for: "Advanced ad") == [.selectionPadding])
+        #expect(SettingsView.Tab.shortcuts.highlightTargets(for: "Shortcuts Item shortcuts") == [.itemShortcuts])
+        #expect(SettingsView.Tab.style.highlightTargets(for: "Style Reset Style") == [.resetStyle])
+    }
+
+    @Test func sectionNamesAndSpecificControlsHaveDistinctSearchDestinations() {
+        let cases: [(String, SettingsView.Tab, Set<SettingsSearchTarget>)] = [
+            ("Permissions", .general, [.permissions]),
+            ("Permissions Accessibility", .general, [.accessibility]),
+            ("General Permissions Screen Recording", .general, [.screenRecording]),
+            ("Startup", .general, [.startup]),
+            ("Launch at login", .general, [.launchAtLogin]),
+            ("Icons", .style, [.icons]),
+            ("Icons sparkle", .style, [.menuBarIcon]),
+            ("Style Icons Sunset", .style, [.appIcon]),
+            ("Style Menu bar", .style, [.menuBarAppearance]),
+            ("Style the menu bar", .style, [.menuBarStyle]),
+            ("Menu bar spacing", .advanced, [.menuBarSpacing]),
+            ("Menu bar spacing Selection padding", .advanced, [.selectionPadding]),
+            ("Backup", .advanced, [.backup]),
+            ("Backup Import", .advanced, [.importLayout]),
+            ("Hidden items", .behavior, [.hiddenItems]),
+            ("Closing the bar", .behavior, [.closingBar]),
+            ("Closing the bar delay", .behavior, [.autoRehideDelay]),
+            ("Reveal gestures", .behavior, [.revealGestures]),
+            ("Reveal gestures hover", .behavior, [.hover]),
+            ("Items Menu Bar", .items, [.menuBarPlacement]),
+            ("Hidden Bar", .items, [.hiddenPlacement]),
+            ("Always Hidden", .items, [.alwaysHiddenPlacement]),
+            ("Placement Preview", .items, [.placementPreview]),
+            ("Project & help", .about, [.aboutLinks])
+        ]
+        for (query, tab, targets) in cases {
+            #expect(SettingsView.Tab.matching(query).first == tab, "The named destination should rank first for \(query).")
+            #expect(tab.highlightTargets(for: query) == targets)
+        }
     }
 
     @Test(arguments: SettingsView.Tab.allCases, [ColorScheme.light, .dark])
     func everyPaneFitsBesideTheSidebar(tab: SettingsView.Tab, scheme: ColorScheme) async throws {
         let model = makeModel()
-        let hosting = settingsTestHost(SettingsView(model: model, initialTab: tab).environment(\.colorScheme, scheme))
+        let hosting = settingsTestHost(
+            SettingsView(model: model, initialTab: tab).environment(\.colorScheme, scheme),
+            configureWindow: SettingsWindowController.configureWindow
+        )
         let window = hosting.testWindow!
         window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+        window.setFrameOrigin(CGPoint(x: 150, y: 160))
+        hosting.render()
         #expect(await waitForUpdate(hosting.view) { self.paneIsShown(tab, in: hosting.view) })
         if tab == .groups {
             // The member list is populated by Groups' own item load before its bounds are measured.
@@ -136,8 +204,10 @@ struct SettingsSidebarTests {
         }
 
         let size = SettingsView.windowSize
-        #expect(hosting.view.bounds.size == size)
+        #expect(hosting.view.bounds.width == size.width)
+        #expect(hosting.view.bounds.height - hosting.view.safeAreaInsets.top == size.height)
         #expect(window.contentLayoutRect.size == size)
+        let usefulFrame = window.convertToScreen(window.contentLayoutRect)
         let rootFrame = window.convertToScreen(hosting.view.convert(hosting.view.bounds, to: nil))
         let sidebarFrame = try element("settings-sidebar", in: hosting.view).accessibilityFrame()
         let detailFrame = try element("settings-detail", in: hosting.view).accessibilityFrame()
@@ -150,15 +220,17 @@ struct SettingsSidebarTests {
         #expect(!detailFrame.isEmpty)
         #expect(rootFrame.contains(sidebarFrame))
         #expect(rootFrame.contains(detailFrame))
+        #expect(usefulFrame.contains(sidebarFrame))
+        #expect(usefulFrame.contains(detailFrame))
         #expect(abs(sidebarFrame.width - SettingsView.sidebarWidth) <= 2)
-        #expect(sidebarFrame.minX <= 16)
-        #expect(sidebarFrame.minY <= 16)
-        #expect(sidebarFrame.maxY >= size.height - 40)
-        #expect(detailFrame.maxX >= size.width - 2)
-        #expect(detailFrame.maxY >= size.height - 40)
-        #expect(detailFrame.minY <= 16)
+        #expect(sidebarFrame.minX <= usefulFrame.minX + 16)
+        #expect(sidebarFrame.minY <= usefulFrame.minY + 16)
+        #expect(sidebarFrame.maxY >= usefulFrame.maxY - 40)
+        #expect(detailFrame.maxX >= usefulFrame.maxX - 2)
+        #expect(detailFrame.maxY >= usefulFrame.maxY - 40)
+        #expect(detailFrame.minY <= usefulFrame.minY + 16)
         // Scrolling panes may extend beneath the floating sidebar; their content must not.
-        #expect(size.width - sidebarFrame.maxX >= 620)
+        #expect(usefulFrame.maxX - sidebarFrame.maxX >= 620)
         #expect(!titleFrame.isEmpty)
         #expect(titleElement.accessibilityLabel() == tab.title)
         #expect(detailFrame.contains(titleFrame))
@@ -172,7 +244,19 @@ struct SettingsSidebarTests {
 
         #expect(headerFrame.height >= 48)
         #expect(sidebarFrame.contains(headerFrame))
+        #expect(usefulFrame.contains(headerFrame))
         #expect(headerFrame.maxY >= sidebarFrame.maxY - 2)
+        for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton] {
+            let button = try #require(window.standardWindowButton(kind))
+            let frame = window.convertToScreen(button.convert(button.bounds, to: nil))
+            #expect(button.isEnabled)
+            #expect(!button.isHiddenOrHasHiddenAncestor)
+            #expect(!frame.isEmpty)
+            #expect(window.frame.contains(frame))
+            #expect(frame.minY >= usefulFrame.maxY)
+            #expect(!frame.intersects(headerFrame))
+            #expect(!frame.intersects(titleFrame))
+        }
         for row in SettingsView.Tab.sidebarTabs {
             let rowElement = try element("settings-sidebar-\(row.rawValue)", in: hosting.view)
             let rowFrame = rowElement.accessibilityFrame()

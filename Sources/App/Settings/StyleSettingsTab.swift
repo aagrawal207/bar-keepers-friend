@@ -79,12 +79,13 @@ struct StyleSettingsTab: View {
                                 .settingsSearchTarget(.tint)
                             Toggle("Gradient", isOn: gradientEnabled)
                                 .accessibilityIdentifier("settings-style-gradient-enabled")
-                                .settingsSearchTarget(.gradient)
+                                .settingsSearchTarget(.gradient, including: displayed.hasGradient ? [] : [.gradientEnd])
                             if displayed.hasGradient {
                                 ColorPicker("Gradient end color", selection: gradientEndColor, supportsOpacity: false)
                                     .labelsHidden()
                                     .accessibilityLabel("Gradient end color")
                                     .accessibilityIdentifier("settings-style-gradient-end")
+                                    .settingsSearchTarget(.gradientEnd)
                             }
                         }
                     }
@@ -120,6 +121,8 @@ struct StyleSettingsTab: View {
                         .accessibilityIdentifier("settings-style-corner-radius")
                     }
                     .disabled(!displayed.shape.usesCornerRadius)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-style-corner-radius-row")
                     .settingsSearchTarget(.cornerRadius)
                     LabeledContent("Border") {
                         HStack(spacing: 12) {
@@ -135,12 +138,13 @@ struct StyleSettingsTab: View {
                                     .labelsHidden()
                                     .accessibilityLabel("Border color")
                                     .accessibilityIdentifier("settings-style-border-color")
+                                    .settingsSearchTarget(.borderColor)
                             }
                         }
                     }
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("settings-style-border-row")
-                    .settingsSearchTarget(.border)
+                    .settingsSearchTarget(.border, including: displayed.hasBorder ? [] : [.borderColor])
                     HStack {
                         Toggle("Shadow", isOn: committed.shadowEnabled)
                             .accessibilityIdentifier("settings-style-shadow")
@@ -156,7 +160,7 @@ struct StyleSettingsTab: View {
                 MenuBarStylePreview(style: displayed)
                     .settingsSearchTarget(.stylePreview)
             } header: {
-                Text("Menu bar")
+                SettingsSearchSectionHeading(target: .menuBarAppearance, id: "settings-style-menu-bar-heading")
             } footer: {
                 Text("Styling needs no permissions and does not change the menu bar's text or icons. If the style is hidden, turn off “Show menu bar background” in System Settings → Menu Bar. App artwork changes in Settings, About, and alerts; the Finder icon stays as shipped.")
                     .font(.caption)
@@ -204,7 +208,7 @@ struct AppIconSettingsSection: View {
     }
 
     var body: some View {
-        Section("Icons") {
+        Section {
             // One row: the pop-up is narrow and five 28pt swatches fit beside it, which keeps the
             // richest Style pane inside the window without scrolling.
             LabeledContent("Menu bar icon") {
@@ -219,6 +223,7 @@ struct AppIconSettingsSection: View {
                     .fixedSize()
                     .accessibilityLabel("Menu bar icon")
                     .accessibilityIdentifier("settings-icon-menu-bar")
+                    .settingsSearchTarget(.menuBarIcon)
                     Spacer(minLength: 8)
                     // The swatch group carries the accessible name; this caption is visual only.
                     Text("App icon")
@@ -235,11 +240,13 @@ struct AppIconSettingsSection: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("App icon")
                     .accessibilityIdentifier("settings-icon-app-theme")
+                    .settingsSearchTarget(.appIcon)
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings-icons-row")
-            .settingsSearchTarget(.icons)
+        } header: {
+            SettingsSearchSectionHeading(target: .icons, id: "settings-icons-heading")
         }
     }
 }

@@ -604,7 +604,7 @@ struct SettingsViewTests {
         #expect(!hosting.testWindow.isVisible)
     }
 
-    @Test func choosingAlwaysHiddenStagesTheRowAndPreviewsTheThirdBox() async throws {
+    @Test func choosingAlwaysHiddenStagesTheRowAndFillsTheThirdBar() async throws {
         let item = settingsTestItem(1, observedPlacement: .shown)
         var writes = 0
         let model = SettingsModel(
@@ -612,7 +612,9 @@ struct SettingsViewTests {
         )
         await model.reloadItems()
         let before = settingsTestHost(ItemsSettingsTab(model: model).content.frame(width: 640))
-        #expect(!settingsTestAccessibility(before.view).contains { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+        let emptyBar = try element("settings-preview-always-hidden", in: before.view)
+        #expect(!emptyBar.accessibilityFrame().isEmpty)
+        #expect(!settingsTestAccessibility(emptyBar).contains { $0.accessibilityIdentifier() == "settings-preview-item-1" })
         #expect(!settingsTestAccessibility(before.view).contains { $0.accessibilityIdentifier() == "settings-item-bar-visible-1" })
 
         model.setPlacement(.alwaysHidden, for: item)

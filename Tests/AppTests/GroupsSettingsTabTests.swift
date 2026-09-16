@@ -99,6 +99,7 @@ struct GroupsSettingsTabTests {
         let home = ItemGroup(name: "Home")
         let writes = PreferenceWrites()
         let model = makeModel(groups: [work, home], items: [settingsTestItem(1)], writes: writes)
+        let initial = model.preferences
         await model.reloadItems()
         let hosting = groupsHost(model)
         let window = hosting.testWindow!
@@ -142,6 +143,40 @@ struct GroupsSettingsTabTests {
                 && find("settings-group-name-error-\(work.id)", in: hosting.view) == nil
         })
         #expect(writes.count == 2)
+        #expect(window.makeFirstResponder(nil))
+
+        // The same draft becomes valid when the conflicting group is deleted; retry must clear its error.
+        editor = try type("home", into: field, in: window)
+        editor.insertNewline(nil)
+        try #require(await waitForUpdate(hosting.view) {
+            find("settings-group-name-error-\(work.id)", in: hosting.view) != nil
+        })
+        #expect(field.stringValue == "home")
+        #expect(writes.count == 2)
+        #expect(try element("settings-group-delete-\(home.id)", in: hosting.view).accessibilityPerformPress())
+        try #require(await waitForUpdate(hosting.view) {
+            find("settings-group-confirm-delete-\(home.id)", in: hosting.view) != nil
+        })
+        #expect(try element("settings-group-confirm-delete-\(home.id)", in: hosting.view).accessibilityPerformPress())
+        try #require(await waitForUpdate(hosting.view) { model.preferences.itemGroups.count == 1 })
+        #expect(field.stringValue == "home")
+        #expect(writes.count == 3)
+        #expect(window.makeFirstResponder(field))
+        let retryEditor = try #require(window.fieldEditor(true, for: field) as? NSTextView)
+        retryEditor.insertNewline(nil)
+        try #require(await waitForUpdate(hosting.view) {
+            model.preferences.itemGroups[0].name == "home"
+                && find("settings-group-name-error-\(work.id)", in: hosting.view) == nil
+        })
+        let expectedWrites = [("Focus", true), ("Focus time", true), ("Focus time", false), ("home", false)].map { name, includeHome in
+            var preferences = initial
+            var renamed = work
+            renamed.name = name
+            preferences.itemGroups = includeHome ? [renamed, home] : [renamed]
+            return preferences
+        }
+        #expect(writes.all == expectedWrites)
+        #expect(field.stringValue == "home")
         #expect(window.makeFirstResponder(nil))
         #expect(!window.isVisible)
         #expect(!window.isKeyWindow)

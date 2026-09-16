@@ -19,7 +19,7 @@ struct PresetsSettingsTab: View {
                     saveRow
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("settings-preset-save-row")
-                        .settingsSearchTarget(.savePreset)
+                        .settingsSearchTarget(.savePreset, including: presets.isEmpty ? SettingsSearchTarget.presetControls : [])
                 }
                 .padding(6)
             }
@@ -178,6 +178,7 @@ private struct PresetRow: View {
                     .focused($nameFocused)
                     .accessibilityLabel("Name of preset \(preset.name)")
                     .accessibilityIdentifier("settings-preset-name-\(preset.id)")
+                    .settingsSearchTarget(.presetName)
                     .help("Rename \(preset.name). Names save on Return or when you leave the field.")
                     // Committing only on Return or blur avoids persisting every keystroke.
                     .onSubmit { commitRename() }
@@ -208,13 +209,16 @@ private struct PresetRow: View {
                             .disabled(isActive || model.placementInProgress)
                             .help(applyHelp)
                             .accessibilityIdentifier("settings-preset-apply-\(preset.id)")
+                            .settingsSearchTarget(.applyPreset)
                         Button("Update from Current") { updatePreset() }
                             .disabled(isActive)
                             .help("Replace this preset's arrangement with the saved one.")
                             .accessibilityIdentifier("settings-preset-update-\(preset.id)")
+                            .settingsSearchTarget(.updatePreset)
                         Button("Delete…") { confirmingDelete = true }
                             .help("Delete \(preset.name). The saved arrangement is not changed.")
                             .accessibilityIdentifier("settings-preset-delete-\(preset.id)")
+                            .settingsSearchTarget(.deletePreset)
                     }
                     .controlSize(.small)
                 }
@@ -232,6 +236,7 @@ private struct PresetRow: View {
                         .accessibilityIdentifier("settings-preset-cancel-delete-\(preset.id)")
                     Button("Delete", role: .destructive) { deletePreset() }
                         .accessibilityIdentifier("settings-preset-confirm-delete-\(preset.id)")
+                        .settingsSearchTarget(.deletePreset)
                 }
                 .controlSize(.small)
                 .padding(.top, 4)

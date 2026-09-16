@@ -9,16 +9,17 @@ struct SpacingSettingsSection: View {
     private var spacing: MenuBarSpacing { model.preferences.menuBarSpacing }
 
     var body: some View {
-        Section("Menu bar spacing") {
+        Section {
             HStack {
                 Toggle("Reduce menu bar item spacing", isOn: $model.preferences.menuBarSpacing.enabled)
                     .accessibilityIdentifier("settings-spacing-enabled")
-                    .settingsSearchTarget(.spacing)
+                    .settingsSearchTarget(.spacing, including: spacing.enabled ? [] : SettingsSearchTarget.spacingControls)
                 Spacer(minLength: 12)
                 if spacing.enabled {
                     Button("Reset to system default") { model.preferences.menuBarSpacing = .systemDefault }
                         .help("Turns custom spacing off and restores the system values (\(MenuBarSpacing.systemDefault.spacing) pt).")
                         .accessibilityIdentifier("settings-spacing-reset")
+                        .settingsSearchTarget(.resetSpacing)
                 }
             }
 
@@ -32,6 +33,9 @@ struct SpacingSettingsSection: View {
                         .fixedSize()
                         .accessibilityIdentifier("settings-spacing-spacing")
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-spacing-value-row")
+                    .settingsSearchTarget(.spacingAmount)
                     LabeledContent("Selection padding") {
                         Stepper(value: $model.preferences.menuBarSpacing.selectionPadding, in: MenuBarSpacing.validRange) {
                             Text("\(spacing.selectionPadding) pt")
@@ -40,6 +44,9 @@ struct SpacingSettingsSection: View {
                         .fixedSize()
                         .accessibilityIdentifier("settings-spacing-padding")
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-spacing-padding-row")
+                    .settingsSearchTarget(.selectionPadding)
                 }
             }
 
@@ -59,6 +66,8 @@ struct SpacingSettingsSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-spacing-logout-note")
             }
+        } header: {
+            SettingsSearchSectionHeading(target: .menuBarSpacing, id: "settings-spacing-heading")
         }
     }
 }

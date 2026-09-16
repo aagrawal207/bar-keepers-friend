@@ -30,6 +30,9 @@ struct GroupsSettingsContent: View {
                         .accessibilityIdentifier("settings-group-header")
                         .settingsSearchTarget(.groups)
                     createRow
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("settings-group-create-row")
+                        .settingsSearchTarget(.createGroup, including: groups.isEmpty ? SettingsSearchTarget.groupControls : [])
                     if let error = model.itemsLoadError {
                         HStack(spacing: 8) {
                             Text(error)
@@ -115,9 +118,12 @@ struct GroupsSettingsContent: View {
         GroupBox {
             List {
                 ForEach(groups) { group in
+                    let members = memberRows(for: group)
                     Section {
                         GroupHeaderRow(model: model, group: group)
-                        ForEach(memberRows(for: group)) { row in
+                            .accessibilityIdentifier("settings-group-header-\(group.id)")
+                            .settingsSearchTarget(.groupMembership, when: members.isEmpty)
+                        ForEach(members) { row in
                             GroupMemberRow(model: model, group: group, row: row)
                         }
                     }
@@ -221,6 +227,8 @@ private struct GroupHeaderRow: View {
                 TextField("Group name", text: Binding(
                     get: { nameEdit?.text ?? group.name },
                     set: { text in
+                        // AppKit echoes the value after submission; only a new edit clears validation.
+                        guard text != (nameEdit?.text ?? group.name) else { return }
                         renameError = nil
                         nameEdit = text == group.name ? nil : (text, nameEdit?.baseline ?? group.name)
                     }
@@ -232,6 +240,7 @@ private struct GroupHeaderRow: View {
                 .focused($nameFocused)
                 .accessibilityLabel("Name of group \(group.name)")
                 .accessibilityIdentifier("settings-group-name-\(group.id)")
+                .settingsSearchTarget(.groupName)
                 .help("Rename \(group.name). Names save on Return or when you leave the field.")
                 // Committing only on Return or blur avoids persisting every keystroke.
                 .onSubmit { commitRename() }
@@ -251,6 +260,7 @@ private struct GroupHeaderRow: View {
                         .disabled(model.placementInProgress)
                         .help("Delete \(group.name). Its items leave the group and keep their saved placement.")
                         .accessibilityIdentifier("settings-group-delete-\(group.id)")
+                        .settingsSearchTarget(.deleteGroup)
                 }
             }
             .controlSize(.small)
@@ -268,6 +278,7 @@ private struct GroupHeaderRow: View {
                     Button("Delete", role: .destructive) { deleteGroup() }
                         .disabled(model.placementInProgress)
                         .accessibilityIdentifier("settings-group-confirm-delete-\(group.id)")
+                        .settingsSearchTarget(.deleteGroup)
                 }
                 .controlSize(.small)
                 .padding(.top, 4)
@@ -292,11 +303,13 @@ private struct GroupHeaderRow: View {
         // A rename arriving during editing must not be overwritten by a stale Return or blur.
         guard group.name == edit.baseline, edit.text != edit.baseline else {
             nameEdit = nil
+            renameError = nil
             return
         }
         let current = model.preferences.itemGroups
         do {
             let updated = try ItemGroupLibrary.renaming(groupID: group.id, to: edit.text, in: current)
+            renameError = nil
             nameEdit = nil
             if updated != current { model.preferences.itemGroups = updated }
         } catch let error as ItemGroupLibrary.ValidationError {
@@ -356,6 +369,7 @@ private struct GroupMemberRow: View {
             .help(otherGroup.map { "Move \(row.name) from \($0.name) into \(group.name)." }
                   ?? "Include \(row.name) in \(group.name).")
             .accessibilityIdentifier("settings-group-member-\(group.id)-\(row.key)")
+            .settingsSearchTarget(.groupMembership)
 
             Spacer(minLength: 8)
 

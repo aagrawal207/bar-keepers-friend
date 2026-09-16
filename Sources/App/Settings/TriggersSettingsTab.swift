@@ -159,6 +159,7 @@ struct TriggersSettingsContent: View {
                 }
                 .disabled(addHint != nil)
                 .accessibilityIdentifier("settings-trigger-add")
+                .settingsSearchTarget(.addTrigger, including: SettingsSearchTarget.triggerEditorControls + (rules.isEmpty ? [.editTrigger, .deleteTrigger] : []))
             }
             Text("Saved rules take effect immediately.")
                 .font(.caption)
@@ -213,9 +214,11 @@ private struct TriggerRuleRow: View {
                 if !confirmingDelete {
                     Button("Edit…", action: onEdit)
                         .accessibilityIdentifier("settings-trigger-edit-\(rule.id)")
+                        .settingsSearchTarget(.editTrigger)
                     Button("Delete…") { confirmingDelete = true }
                         .help("Delete \(displayName). If it is active, your previous arrangement is restored.")
                         .accessibilityIdentifier("settings-trigger-delete-\(rule.id)")
+                        .settingsSearchTarget(.deleteTrigger)
                 }
             }
 
@@ -234,6 +237,7 @@ private struct TriggerRuleRow: View {
                         model.deleteTriggerRule(id: rule.id)
                     }
                     .accessibilityIdentifier("settings-trigger-confirm-delete-\(rule.id)")
+                    .settingsSearchTarget(.deleteTrigger)
                 }
             }
         }
@@ -305,10 +309,11 @@ struct TriggerRuleEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section(isNew ? "New rule" : "Edit rule") {
+                Section {
                     TextField("Rule name", text: $draft.name)
                         .accessibilityLabel("Rule name")
                         .accessibilityIdentifier("settings-trigger-editor-name")
+                        .settingsSearchTarget(.triggerName)
                     Picker("Apply preset", selection: $draft.presetID) {
                         ForEach(presets) { preset in
                             Text(preset.name).tag(preset.id)
@@ -318,6 +323,12 @@ struct TriggerRuleEditor: View {
                         }
                     }
                     .accessibilityIdentifier("settings-trigger-editor-preset")
+                    .settingsSearchTarget(.triggerPreset)
+                } header: {
+                    SettingsSearchSectionHeading(
+                        target: isNew ? .triggerRule : .editTrigger, id: "settings-trigger-rule-heading",
+                        including: isNew ? [.editTrigger, .deleteTrigger] : [.triggerRule, .addTrigger, .deleteTrigger]
+                    )
                 }
 
                 Section {
@@ -330,8 +341,9 @@ struct TriggerRuleEditor: View {
                         rows.append(TriggerConditionRow(condition: .onBattery))
                     }
                     .accessibilityIdentifier("settings-trigger-editor-add-condition")
+                    .settingsSearchTarget(.addTriggerCondition, including: rows.isEmpty ? [.removeTriggerCondition] : [])
                 } header: {
-                    Text("Conditions")
+                    SettingsSearchSectionHeading(target: .triggerConditions, id: "settings-trigger-conditions-heading")
                 } footer: {
                     Text("All conditions must match.")
                         .font(.caption)
@@ -359,6 +371,7 @@ struct TriggerRuleEditor: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(issue != nil)
                     .accessibilityIdentifier("settings-trigger-editor-save")
+                    .settingsSearchTarget(.saveTrigger, including: isNew ? [.addTrigger] : [])
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -406,6 +419,7 @@ struct TriggerConditionRowEditor: View {
             .accessibilityLabel("Remove condition")
             .help("Remove this condition.")
             .accessibilityIdentifier("settings-trigger-condition-remove-\(row.id)")
+            .settingsSearchTarget(.removeTriggerCondition)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .contain)

@@ -19,14 +19,14 @@ struct NotchSettingsSection: View {
     }
 
     var body: some View {
-        Section("Notch") {
+        Section {
             Picker("Make room near the notch", selection: selection) {
                 Text("Never").tag(NotchOverflowMode.never)
                 Text("When needed").tag(NotchOverflowMode.whenNeeded)
             }
             .pickerStyle(.radioGroup)
             .accessibilityIdentifier("settings-notch-picker")
-            .settingsSearchTarget(.notch)
+            .settingsSearchTarget(.notchMakeRoom)
 
             Text("When a notch would clip revealed menu bar items, temporarily tuck nearby shown icons and restore them when the section hides. Requires Accessibility and may briefly move the pointer. No effect on displays without a notch.")
                 .font(.caption)
@@ -44,6 +44,8 @@ struct NotchSettingsSection: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-notch-accessibility-note")
             }
+        } header: {
+            SettingsSearchSectionHeading(target: .notch, id: "settings-notch-heading")
         }
     }
 }

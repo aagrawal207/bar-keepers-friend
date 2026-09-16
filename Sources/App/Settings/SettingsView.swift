@@ -183,7 +183,7 @@ private struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Get started") {
+            Section {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Keep the icons you need")
@@ -196,9 +196,11 @@ private struct GeneralSettingsTab: View {
                     Spacer(minLength: 8)
                     Button("Arrange Items…", action: showItems)
                         .accessibilityIdentifier("settings-open-items")
-                        .settingsSearchTarget(.getStarted)
+                        .settingsSearchTarget(.arrangeItems)
                 }
                 .padding(.vertical, 4)
+            } header: {
+                SettingsSearchSectionHeading(target: .getStarted, id: "settings-get-started-heading")
             }
 
             LaunchAtLoginSection(model: model)
@@ -218,7 +220,7 @@ private struct BehaviorSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Hidden items") {
+            Section {
                 Toggle("Show hidden items in a floating bar", isOn: $model.preferences.useFloatingBar)
                     .accessibilityIdentifier("settings-floating-bar-enabled")
                     .settingsSearchTarget(.floatingBar, including: model.preferences.useFloatingBar ? [] : [.floatingBarStyle, .dismissOnExit])
@@ -231,12 +233,14 @@ private struct BehaviorSettingsTab: View {
                     .accessibilityIdentifier("settings-floating-bar-style")
                     .settingsSearchTarget(.floatingBarStyle)
                 }
+            } header: {
+                SettingsSearchSectionHeading(target: .hiddenItems, id: "settings-hidden-items-heading")
             }
 
-            Section("Closing the bar") {
+            Section {
                 Toggle("Automatically re-hide", isOn: $model.preferences.autoRehide)
                     .accessibilityIdentifier("settings-auto-rehide")
-                    .settingsSearchTarget(.autoRehide)
+                    .settingsSearchTarget(.autoRehide, including: model.preferences.autoRehide ? [] : [.autoRehideDelay])
                 if model.preferences.autoRehide {
                     LabeledContent("Re-hide after") {
                         Stepper(
@@ -249,15 +253,20 @@ private struct BehaviorSettingsTab: View {
                         }
                         .fixedSize()
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings-auto-rehide-delay-row")
+                    .settingsSearchTarget(.autoRehideDelay)
                 }
                 if model.preferences.useFloatingBar {
                     Toggle("Dismiss the bar when the pointer leaves it", isOn: $model.preferences.dismissBarOnMouseExit)
                         .accessibilityIdentifier("settings-dismiss-on-exit")
                         .settingsSearchTarget(.dismissOnExit)
                 }
+            } header: {
+                SettingsSearchSectionHeading(target: .closingBar, id: "settings-closing-bar-heading")
             }
 
-            Section("Reveal gestures") {
+            Section {
                 Toggle("Reveal on hover", isOn: $model.preferences.revealOnHover)
                     .disabled(!model.preferences.useFloatingBar)
                     .accessibilityIdentifier("settings-reveal-hover")
@@ -275,6 +284,8 @@ private struct BehaviorSettingsTab: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("settings-scroll-description")
+            } header: {
+                SettingsSearchSectionHeading(target: .revealGestures, id: "settings-reveal-gestures-heading")
             }
         }
         .formStyle(.grouped)
@@ -304,7 +315,7 @@ struct LaunchAtLoginSection: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        Section("Startup") {
+        Section {
             Toggle("Launch at login", isOn: $model.launchAtLogin)
                 .accessibilityIdentifier("settings-launch-at-login")
                 .settingsSearchTarget(.launchAtLogin)
@@ -323,6 +334,8 @@ struct LaunchAtLoginSection: View {
                     }
                 }
             }
+        } header: {
+            SettingsSearchSectionHeading(target: .startup, id: "settings-startup-heading")
         }
         .onAppear { model.refreshLoginItemStatus() }
         .task {
@@ -339,18 +352,20 @@ struct BackupSettingsSection: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        Section("Backup") {
+        Section {
             LabeledContent("Layout file") {
                 HStack {
                     Button("Export…") { model.exportLayout() }
                         .accessibilityIdentifier("settings-backup-export")
+                        .settingsSearchTarget(.exportLayout)
                     Button("Import…") { model.importLayout() }
                         .accessibilityIdentifier("settings-backup-import")
+                        .settingsSearchTarget(.importLayout)
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings-backup-row")
-            .settingsSearchTarget(.backup)
+            .settingsSearchTarget(.layoutFile)
             if let message = model.transferMessage {
                 // A write failure carries the system's full sentence; wrap it rather than truncate.
                 Text(message)
@@ -359,6 +374,8 @@ struct BackupSettingsSection: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("settings-backup-status")
             }
+        } header: {
+            SettingsSearchSectionHeading(target: .backup, id: "settings-backup-heading")
         }
     }
 }
@@ -370,7 +387,7 @@ private struct PermissionsSection: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        Section("Permissions") {
+        Section {
             PermissionRow(
                 model: model,
                 permission: .accessibility,
@@ -383,6 +400,8 @@ private struct PermissionsSection: View {
                 title: "Screen Recording",
                 purpose: "Lets the floating bar show each hidden icon's real image."
             )
+        } header: {
+            SettingsSearchSectionHeading(target: .permissions, id: "settings-permissions-heading")
         }
         .onAppear { model.refreshPermissions() }
         .task {
@@ -472,7 +491,6 @@ struct ItemsSettingsContent: View {
             placementPreview
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-placement-preview")
-                .settingsSearchTarget(.placementPreview)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
             listHeader
@@ -508,17 +526,19 @@ struct ItemsSettingsContent: View {
         .padding(.top, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-items-content")
+        .onDisappear { model.cancelPlacementDrag() }
     }
 
     private var placementPreview: some View {
-        let preview = model.placementPreview
+        let preview = model.placementPreview(includingSuppressed: true)
         return SettingsPlacementPreview(
             shown: preview.shown, hidden: preview.hidden, alwaysHidden: preview.alwaysHidden, unknown: preview.unknown,
             style: model.preferences.floatingBarStyle,
             useFloatingBar: model.preferences.useFloatingBar,
             hasPendingChanges: model.hasPendingChanges,
             placementInProgress: model.placementInProgress,
-            anchorSymbol: model.preferences.appIcon.menuBarSymbol
+            anchorSymbol: model.preferences.appIcon.menuBarSymbol,
+            dragModel: model
         )
     }
 
@@ -554,11 +574,11 @@ struct ItemsSettingsContent: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Choose Shown, Hidden, or Always Hidden. Apply Changes moves the icons; Discard clears your placement edits.")
+            Text("Drag icons between bars, or use the row controls. Apply Changes moves icons; Discard clears placement edits.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Option-click BKF to reveal Always Hidden items. Show in bar and the order arrows change only the floating bar and save immediately.")
+            Text("Show in bar and the order arrows change only the floating bar and save immediately.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

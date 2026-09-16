@@ -7,7 +7,7 @@ struct AdvancedSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Optional tools") {
+            Section {
                 HStack(spacing: 10) {
                     ForEach(SettingsView.Tab.advancedTabs) { tab in
                         Button { navigate(tab) } label: {
@@ -16,16 +16,18 @@ struct AdvancedSettingsTab: View {
                                 .padding(.vertical, 6)
                         }
                         .accessibilityIdentifier("settings-advanced-\(tab.rawValue)")
+                        .settingsSearchTarget(tab == .presets ? .openPresets : (tab == .triggers ? .openTriggers : .openGroups))
                     }
                 }
                 .buttonStyle(.bordered)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("settings-advanced-tools")
-                .settingsSearchTarget(.advancedTools)
                 Text("Save layouts, automate changes, or collect related icons into groups.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                SettingsSearchSectionHeading(target: .advancedTools, id: "settings-advanced-tools-heading")
             }
 
             SpacingSettingsSection(model: model, needsLogout: model.spacingNeedsLogout)

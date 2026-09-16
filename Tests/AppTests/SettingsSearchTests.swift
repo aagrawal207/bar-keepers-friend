@@ -55,8 +55,8 @@ struct SettingsSearchTests {
             ("hover", .behavior, "settings-reveal-hover"),
             ("opacity", .style, "settings-style-enabled"),
             ("Advanced profiles", .presets, "settings-preset-header"),
-            ("Advanced Wi-Fi", .triggers, "settings-trigger-header"),
-            ("Advanced membership", .groups, "settings-group-header")
+            ("Advanced Wi-Fi", .triggers, "settings-trigger-add"),
+            ("Advanced membership", .groups, "settings-group-create-row")
         ]
         for (query, target, highlight) in destinations {
             // Each child starts in General, so finding it cannot depend on mounting Advanced first.
@@ -86,6 +86,7 @@ struct SettingsSearchTests {
                     && test.activity.reads == reads && (target != .groups || !test.model.itemsLoading)
             })
             test.expectOnlyPane(target)
+            try test.expectHighlights([highlight])
             test.expectUnchanged(reads: reads)
         }
     }
@@ -93,7 +94,7 @@ struct SettingsSearchTests {
     @Test func returnSelectsTheFirstRankedResultAndClearsTheField() async throws {
         let destinations: [(String, [SettingsView.Tab], String)] = [
             ("style", [.style, .behavior], "settings-detail-title"),
-            ("Advanced Triggers Wi-Fi", [.triggers], "settings-trigger-header")
+            ("Advanced Triggers Wi-Fi", [.triggers], "settings-trigger-add")
         ]
         for (query, results, highlight) in destinations {
             let test = try Harness()
@@ -110,6 +111,7 @@ struct SettingsSearchTests {
                     && test.selectedSidebarTabs == [target.sidebarTab] && test.isHighlighted(highlight)
             })
             test.expectOnlyPane(target)
+            try test.expectHighlights([highlight])
             test.expectUnchanged()
         }
     }
@@ -377,6 +379,66 @@ struct SettingsSearchTests {
                     Issue.record("Unexpected Advanced child \(child).")
                 }
             }
+            let searches: [(String, [String])]
+            switch child {
+            case .presets:
+                searches = [
+                    ("Advanced Presets", ["settings-detail-title"]),
+                    ("Presets Rename", [hasSavedTools ? "settings-preset-name-\(preset.id)" : "settings-preset-save-row"]),
+                    ("Presets Preset name", [hasSavedTools ? "settings-preset-name-\(preset.id)" : "settings-preset-save-row"]),
+                    ("Presets Apply", [hasSavedTools ? "settings-preset-apply-\(preset.id)" : "settings-preset-save-row"]),
+                    ("Presets Update from Current", [hasSavedTools ? "settings-preset-update-\(preset.id)" : "settings-preset-save-row"]),
+                    ("Presets Delete", [hasSavedTools ? "settings-preset-delete-\(preset.id)" : "settings-preset-save-row"])
+                ]
+            case .triggers:
+                searches = [
+                    ("Advanced Triggers", ["settings-detail-title"]),
+                    ("Triggers Add Rule", ["settings-trigger-add"]),
+                    ("Triggers Edit rule", [hasSavedTools ? "settings-trigger-edit-\(rule.id)" : "settings-trigger-add"]),
+                    ("Triggers Delete", [hasSavedTools ? "settings-trigger-delete-\(rule.id)" : "settings-trigger-add"]),
+                    ("Advanced Wi-Fi", ["settings-trigger-add"])
+                ]
+            case .groups:
+                let members = try items.map { item in
+                    "settings-group-member-\(group.id)-\(try #require(ItemControlStore.key(for: item.snapshot)))"
+                }
+                searches = [
+                    ("Advanced Groups", ["settings-detail-title"]),
+                    ("Groups Create Group", ["settings-group-create-row"]),
+                    ("Groups Rename", [hasSavedTools ? "settings-group-name-\(group.id)" : "settings-group-create-row"]),
+                    ("Groups Group name", [hasSavedTools ? "settings-group-name-\(group.id)" : "settings-group-create-row"]),
+                    ("Groups Delete", [hasSavedTools ? "settings-group-delete-\(group.id)" : "settings-group-create-row"]),
+                    ("Advanced membership", hasSavedTools ? members : ["settings-group-create-row"])
+                ]
+            default:
+                searches = []
+            }
+            for (query, identifiers) in searches {
+                try await test.submit(query)
+                try #require(await test.waitForUpdate {
+                    test.queryIsEmpty && test.highlightsMatch(identifiers)
+                }, "\(query) must reach its actual controls. \(test.highlightDescription)")
+                try test.expectHighlights(identifiers)
+                test.expectOnlyPane(child)
+                #expect(test.model.pendingChangeCount == 1)
+                test.expectUnchanged(reads: reads)
+            }
+            if hasSavedTools {
+                let id = child == .presets ? preset.id : (child == .triggers ? rule.id : group.id)
+                let delete = "settings-\(prefix)-delete-\(id)"
+                let confirm = "settings-\(prefix)-confirm-delete-\(id)"
+                #expect(try test.element(delete).accessibilityPerformPress())
+                try #require(await test.waitForUpdate { test.find(confirm) != nil && test.find(delete) == nil })
+                try await test.submit("\(child.title) Delete")
+                try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([confirm]) })
+                try test.expectHighlights([confirm])
+                #expect(!test.isHighlighted("settings-\(prefix)-cancel-delete-\(id)"))
+                #expect(test.model.pendingChangeCount == 1)
+                test.expectUnchanged(reads: reads)
+                #expect(try test.element("settings-\(prefix)-cancel-delete-\(id)").accessibilityPerformPress())
+                try #require(await test.waitForUpdate { test.find(confirm) == nil && test.highlightsMatch([delete]) })
+                try test.expectHighlights([delete])
+            }
             #expect(test.model.pendingChangeCount == 1)
             #expect(test.model.hasPendingChange(for: items[0]))
             test.expectUnchanged(reads: reads)
@@ -395,8 +457,9 @@ struct SettingsSearchTests {
         #expect(!test.hasHighlights)
         #expect(try test.element("settings-sidebar-triggers").accessibilityPerformPress())
         try #require(await test.waitForUpdate {
-            test.queryIsEmpty && test.isHighlighted("settings-trigger-header") && test.selectedSidebarTabs == [.advanced]
+            test.queryIsEmpty && test.isHighlighted("settings-trigger-add") && test.selectedSidebarTabs == [.advanced]
         })
+        try test.expectHighlights(["settings-trigger-add"])
         test.expectOnlyPane(.triggers)
         #expect(test.find("settings-trigger-editor") == nil)
         #expect(try test.element("settings-back-to-advanced").accessibilityPerformPress())
@@ -474,6 +537,7 @@ struct SettingsSearchTests {
         #expect(test.model.hasPendingChange(for: items[0]))
         #expect(test.model.draftDiscardedNotice == nil)
         test.expectUnchanged(reads: reads, openedURLs: openedURLs)
+        if hasSavedTools { try await emptyGroupMembershipSearchPreservesHeaderEdits() }
     }
 
     @Test(arguments: [false, true])
@@ -502,60 +566,111 @@ struct SettingsSearchTests {
     @Test func searchResultsHighlightTheirDestinationsAcrossEveryPaneWithoutApplyingAnything() async throws {
         var preferences = Preferences.default
         preferences.menuBarStyle = MenuBarStyle(isEnabled: true, borderWidth: 2, shape: .rounded)
+        preferences.menuBarStyle.gradientEnd = MenuBarStyle.defaultGradientEnd
+        preferences.menuBarSpacing = MenuBarSpacing(enabled: true, spacing: 8, selectionPadding: 4)
         let item = settingsTestItem(1, alias: "Clipboard", observedHidden: false)
         preferences.itemAliases.setAlias("Clipboard", for: item.snapshot)
         let test = try Harness(preferences: preferences, items: [item])
         test.model.setPlacement(.hidden, for: item)
         let destinations: [(String, SettingsView.Tab, [String])] = [
-            ("get started", .general, ["settings-open-items"]),
+            ("get started", .general, ["settings-get-started-heading"]),
+            ("Arrange Items", .general, ["settings-open-items"]),
+            ("Startup", .general, ["settings-startup-heading"]),
             ("launch at login", .general, ["settings-launch-at-login"]),
+            ("Permissions", .general, ["settings-permissions-heading"]),
+            ("  GÉNERAL   Permíssions\n", .general, ["settings-permissions-heading"]),
             ("accessibility", .general, ["settings-permission-accessibility"]),
+            ("Permissions Accessibility", .general, ["settings-permission-accessibility"]),
             ("screen recording", .general, ["settings-permission-screenRecording"]),
-            ("advanced tools", .advanced, ["settings-advanced-tools"]),
-            ("spacing", .advanced, ["settings-spacing-enabled"]),
-            ("export", .advanced, ["settings-backup-row"]),
-            ("notch", .advanced, ["settings-notch-picker"]),
+            ("General Permissions Screen Recording", .general, ["settings-permission-screenRecording"]),
+            ("Optional tools", .advanced, ["settings-advanced-tools-heading"]),
+            ("advanced tools", .advanced, ["settings-advanced-tools-heading"]),
+            ("Menu bar spacing", .advanced, ["settings-spacing-heading"]),
+            ("Reduce menu bar item spacing", .advanced, ["settings-spacing-enabled"]),
+            ("spacing", .advanced, ["settings-spacing-value-row"]),
+            ("Menu bar spacing Selection padding", .advanced, ["settings-spacing-padding-row"]),
+            ("Advanced ad", .advanced, ["settings-spacing-padding-row"]),
+            ("Reset to system default", .advanced, ["settings-spacing-reset"]),
+            ("Backup", .advanced, ["settings-backup-heading"]),
+            ("Layout file", .advanced, ["settings-backup-row"]),
+            ("export", .advanced, ["settings-backup-export"]),
+            ("Backup Import", .advanced, ["settings-backup-import"]),
+            ("notch", .advanced, ["settings-notch-heading"]),
+            ("Make room near the notch", .advanced, ["settings-notch-picker"]),
             ("advanced", .advanced, ["settings-detail-title"]),
             ("aliases", .items, ["settings-items-list-header"]),
-            ("after apply", .items, ["settings-placement-preview"]),
+            ("Items item", .items, ["settings-items-list-header"]),
+            ("Placement Preview", .items, ["settings-preview-heading"]),
+            ("after apply", .items, ["settings-preview-heading"]),
+            ("Items Menu Bar", .items, ["settings-preview-menu-bar-heading"]),
+            ("Hidden Bar", .items, ["settings-preview-hidden-heading"]),
+            ("Always Hidden", .items, ["settings-preview-always-hidden-heading"]),
             ("hide all", .items, ["settings-placement-bulk"]),
             ("apply changes", .items, ["settings-placement-actions"]),
-            ("sunset", .style, ["settings-icons-row"]),
+            ("Icons", .style, ["settings-icons-heading"]),
+            ("Style Icons", .style, ["settings-icons-heading"]),
+            ("Menu bar icon", .style, ["settings-icon-menu-bar"]),
+            ("Icons sparkle", .style, ["settings-icon-menu-bar"]),
+            ("App icon", .style, ["settings-icon-app-theme"]),
+            ("sunset", .style, ["settings-icon-app-theme"]),
+            ("Style Icons Sunset", .style, ["settings-icon-app-theme"]),
+            ("Style Menu bar", .style, ["settings-style-menu-bar-heading"]),
             ("styles", .style, ["settings-style-enabled"]),
+            ("Style the menu bar", .style, ["settings-style-enabled"]),
             ("tint", .style, ["settings-style-tint"]),
             ("gradient", .style, ["settings-style-gradient-enabled"]),
+            ("Gradient end color", .style, ["settings-style-gradient-end"]),
             ("  Style OPÁCITY\n border\t", .style, ["settings-style-opacity-row", "settings-style-border-row"]),
+            ("Border color", .style, ["settings-style-border-color"]),
             ("shape", .style, ["settings-style-shape"]),
-            ("corner radius", .style, ["settings-style-corner-radius"]),
+            ("corner radius", .style, ["settings-style-corner-radius-row"]),
             ("shadow", .style, ["settings-style-shadow"]),
             ("reset style", .style, ["settings-style-reset"]),
             ("style preview", .style, ["settings-style-preview"]),
             ("style", .style, ["settings-detail-title"]),
+            ("Hidden items", .behavior, ["settings-hidden-items-heading"]),
+            ("Behavior Hidden items", .behavior, ["settings-hidden-items-heading"]),
             ("floating bar", .behavior, ["settings-floating-bar-enabled"]),
+            ("Floating bar style", .behavior, ["settings-floating-bar-style"]),
             ("horizontal strip", .behavior, ["settings-floating-bar-style"]),
+            ("Closing the bar", .behavior, ["settings-closing-bar-heading"]),
+            ("Automatically re-hide", .behavior, ["settings-auto-rehide"]),
             ("dismiss", .behavior, ["settings-dismiss-on-exit"]),
-            ("re-hide after", .behavior, ["settings-auto-rehide"]),
+            ("re-hide after", .behavior, ["settings-auto-rehide-delay-row"]),
+            ("Closing the bar delay", .behavior, ["settings-auto-rehide-delay-row"]),
+            ("Reveal gestures", .behavior, ["settings-reveal-gestures-heading"]),
             ("HóVeR", .behavior, ["settings-reveal-hover"]),
+            ("Reveal gestures hover", .behavior, ["settings-reveal-hover"]),
             ("scroll", .behavior, ["settings-reveal-scroll"]),
             ("keyboard shortcut", .shortcuts, ["settings-shortcut-toggle-enabled"]),
-            ("item shortcuts", .shortcuts, ["settings-shortcut-items-hint"]),
+            ("Toggle bar", .shortcuts, ["settings-shortcut-toggle-row"]),
+            ("item shortcuts", .shortcuts, ["settings-item-shortcuts-heading"]),
+            ("Shortcuts Item shortcuts", .shortcuts, ["settings-item-shortcuts-heading"]),
             ("profiles", .presets, ["settings-preset-header"]),
             ("save layout", .presets, ["settings-preset-save-row"]),
-            ("low power", .triggers, ["settings-trigger-header"]),
-            ("membership", .groups, ["settings-group-header"]),
+            ("low power", .triggers, ["settings-trigger-add"]),
+            ("Add Rule", .triggers, ["settings-trigger-add"]),
+            ("membership", .groups, ["settings-group-create-row"]),
+            ("Create Group", .groups, ["settings-group-create-row"]),
             ("version", .about, ["settings-about-version"]),
+            ("macOS Tahoe", .about, ["settings-about-compatibility"]),
+            ("Project & help", .about, ["settings-about-links-heading"]),
             ("project", .about, ["settings-about-project"]),
             ("support", .about, ["settings-about-issues"]),
             ("license", .about, ["settings-about-license"]),
             ("about", .about, ["settings-detail-title"])
-        ]
+        ] + SettingsView.Tab.allCases.map { ($0.title, $0, ["settings-detail-title"]) }
         var reads = 0
         for (index, destination) in destinations.enumerated() {
             let (query, tab, identifiers) = destination
             let previousTitle = test.title
+            let beforeSearch = query == "Groups" ? test.readinessDescription(tab: tab, highlights: identifiers, reads: reads) : nil
             let editor = try await test.type(query)
-            try #require(await test.waitForUpdate { test.rows.contains(tab) && !test.hasHighlights })
+            let results = SettingsView.Tab.matching(query)
+            try #require(await test.waitForUpdate { test.sidebarRowsFullyVisible(results) && !test.hasHighlights },
+                         "Search results must be visible for \(query.debugDescription). \(test.readinessDescription(tab: tab, highlights: identifiers, reads: reads, expectedRows: results))")
             #expect(test.title == previousTitle, "Typing must keep the existing pane mounted.")
+            let filteredSearch = query == "Groups" ? test.readinessDescription(tab: tab, highlights: identifiers, reads: reads, expectedRows: results) : nil
             if index.isMultiple(of: 2) {
                 editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
             } else {
@@ -564,18 +679,23 @@ struct SettingsSearchTests {
             // Groups needs current members, just as Items and Shortcuts need current item choices.
             let loadsItems = [.items, .shortcuts, .groups].contains(tab)
             if previousTitle != tab.title, loadsItems { reads += 1 }
-            try #require(await test.waitForUpdate {
-                test.title == tab.title && test.queryIsEmpty && identifiers.allSatisfy(test.isHighlighted)
-                    && test.activity.reads == reads && test.rows == Self.sidebarTabs
+            let ready = await test.waitForUpdate {
+                test.title == tab.title && test.queryIsEmpty && test.highlightsMatch(identifiers)
+                    && test.activity.reads == reads && test.sidebarRowsFullyVisible(Self.sidebarTabs)
                     && test.selectedSidebarTabs == [tab.sidebarTab]
                     && (!loadsItems || !test.model.itemsLoading)
-            }, "Search \(query.debugDescription) must highlight \(identifiers). \(test.highlightDescription)")
-            test.expectOnlyPane(tab)
-            let detail = try test.element("settings-detail").accessibilityFrame()
-            for id in identifiers {
-                let frame = try test.element(id).accessibilityFrame()
-                #expect(!frame.isEmpty && detail.contains(frame), "\(id) must be visible at the search destination.")
             }
+            if let beforeSearch, let filteredSearch {
+                let afterSelection = test.readinessDescription(tab: tab, highlights: identifiers, reads: reads)
+                Attachment.record(
+                    "Before search:\n\(beforeSearch)\nFiltered:\n\(filteredSearch)\nAfter selection:\n\(afterSelection)",
+                    named: "settings-groups-search-readiness.txt"
+                )
+            }
+            try #require(ready, "Search \(query.debugDescription) must settle completely. \(test.readinessDescription(tab: tab, highlights: identifiers, reads: reads))")
+            test.expectOnlyPane(tab)
+            try test.expectHighlights(identifiers)
+            try test.expectHeadingNeighborsUnmatched(identifiers)
             #expect(test.model.pendingChangeCount == 1)
             test.expectUnchanged(reads: reads)
         }
@@ -587,35 +707,185 @@ struct SettingsSearchTests {
         preferences.autoRehide = false
         preferences.enableGlobalHotkey = false
         let test = try Harness(preferences: preferences)
-        let destinations: [(String, String)] = [
-            ("opacity", "settings-style-enabled"),
-            ("horizontal strip", "settings-floating-bar-enabled"),
-            ("hover", "settings-reveal-hover"),
-            ("re-hide after", "settings-auto-rehide"),
-            ("selection padding", "settings-spacing-enabled"),
-            ("keyboard shortcut", "settings-shortcut-toggle-enabled")
+        let destinations: [(String, SettingsView.Tab, String)] = [
+            ("opacity", .style, "settings-style-enabled"),
+            ("Gradient end color", .style, "settings-style-enabled"),
+            ("Border color", .style, "settings-style-enabled"),
+            ("horizontal strip", .behavior, "settings-floating-bar-enabled"),
+            ("Dismiss", .behavior, "settings-floating-bar-enabled"),
+            ("Hidden items", .behavior, "settings-hidden-items-heading"),
+            ("hover", .behavior, "settings-reveal-hover"),
+            ("re-hide after", .behavior, "settings-auto-rehide"),
+            ("Closing the bar", .behavior, "settings-closing-bar-heading"),
+            ("Menu bar spacing", .advanced, "settings-spacing-heading"),
+            ("selection padding", .advanced, "settings-spacing-enabled"),
+            ("Reset to system default", .advanced, "settings-spacing-enabled"),
+            ("keyboard shortcut", .shortcuts, "settings-shortcut-toggle-enabled"),
+            ("Toggle bar", .shortcuts, "settings-shortcut-toggle-enabled"),
+            ("Item shortcuts", .shortcuts, "settings-item-shortcuts-heading")
         ]
-        for (query, id) in destinations {
+        var reads = 0
+        for (query, tab, id) in destinations {
+            let previousTitle = test.title
             try await test.submit(query)
-            try #require(await test.waitForUpdate { test.queryIsEmpty && test.isHighlighted(id) })
+            if tab == .shortcuts, previousTitle != tab.title { reads += 1 }
+            let started = ContinuousClock.now
+            var transitionalMatches: String?
+            try #require(await test.waitForUpdate {
+                guard started.duration(to: .now) < .seconds(2) else { return false }
+                let complete = test.highlightsMatch([id])
+                if transitionalMatches == nil, test.queryIsEmpty, test.isHighlighted(id), !complete {
+                    transitionalMatches = "At \(started.duration(to: .now)) after \(query.debugDescription):\n\(test.highlightDescription)"
+                }
+                return test.queryIsEmpty && test.title == tab.title && test.activity.reads == reads && complete
+            }, "The complete highlighted-region set must settle before highlight expiry for \(query.debugDescription).\n\(test.highlightDescription)")
+            if let transitionalMatches {
+                Attachment.record(
+                    transitionalMatches + "\nSettled at \(started.duration(to: .now)):\n\(test.highlightDescription)",
+                    named: "settings-search-settlement-\(id).txt"
+                )
+            }
+            try test.expectHighlights([id])
             if query == "hover" {
                 #expect(try !test.element(id).isAccessibilityEnabled())
                 #expect(try !test.element(id).accessibilityPerformPress())
             }
-            test.expectUnchanged(reads: query == "keyboard shortcut" ? 1 : 0)
+            test.expectUnchanged(reads: reads)
         }
 
         // An explicit click may reveal the searched control; search itself must never enable it.
         try await test.submit("opacity")
-        try #require(await test.waitForUpdate { test.isHighlighted("settings-style-enabled") })
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch(["settings-style-enabled"]) })
         _ = try test.element("settings-style-enabled").accessibilityPerformPress()
-        try #require(await test.waitForUpdate { test.isHighlighted("settings-style-opacity-row") })
+        try #require(await test.waitForUpdate { test.highlightsMatch(["settings-style-opacity-row"]) })
         #expect(!test.isHighlighted("settings-style-enabled"))
+        try test.expectHighlights(["settings-style-opacity-row"])
         preferences.menuBarStyle.isEnabled = true
         #expect(test.store.load() == preferences)
         #expect(test.activity.writes == [preferences])
         #expect(test.activity.captures == 0)
         #expect(test.server.moveRequests.isEmpty)
+
+        for (query, id) in [
+            ("Gradient end color", "settings-style-gradient-enabled"),
+            ("Border color", "settings-style-border-row")
+        ] {
+            try await test.submit(query)
+            try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([id]) })
+            try test.expectHighlights([id])
+            #expect(test.store.load() == preferences)
+            #expect(test.activity.writes == [preferences])
+            #expect(test.activity.captures == 0)
+            #expect(test.activity.dividerWrites.isEmpty)
+            #expect(test.server.moveRequests.isEmpty)
+        }
+    }
+
+    @Test func triggerEditorSearchTargetsVisibleHeadingsAndControlsWithoutEditingTheRule() async throws {
+        var preferences = Preferences.default
+        let preset = LayoutPreset(name: "Work", itemControls: preferences.itemControls)
+        let rule = TriggerRule(name: "Battery work", conditions: [.onBattery], presetID: preset.id)
+        preferences.presets = [preset]
+        preferences.triggers = [rule]
+        let item = settingsTestItem(1, observedHidden: false)
+        let test = try Harness(initialTab: .triggers, preferences: preferences, items: [item])
+        test.model.setPlacement(.hidden, for: item)
+        try await test.submit("Advanced Wi-Fi")
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch(["settings-trigger-add"]) })
+        try test.expectHighlights(["settings-trigger-add"])
+        #expect(test.find("settings-trigger-editor") == nil)
+        test.expectUnchanged()
+
+        for isNew in [true, false] {
+            let open = isNew ? "settings-trigger-add" : "settings-trigger-edit-\(rule.id)"
+            #expect(try test.element(open).accessibilityPerformPress())
+            try #require(await test.waitForUpdate { test.find("settings-trigger-editor") != nil })
+            let section = isNew ? "New rule" : "Edit rule"
+            let field = try test.editableField(showing: isNew ? "" : rule.name)
+            let unsavedName = "Unsaved \(section) name"
+            try test.type(unsavedName, into: field)
+            try #require(await test.waitForUpdate {
+                test.find("settings-trigger-editor-name")?.accessibilityValue() as? String == unsavedName
+            })
+            let originalConditions = test.identifiers(withPrefix: "settings-trigger-condition-remove-")
+            try #require(originalConditions.count == 1)
+            #expect(try test.element("settings-trigger-editor-add-condition").accessibilityPerformPress())
+            try #require(await test.waitForUpdate {
+                test.identifiers(withPrefix: "settings-trigger-condition-remove-").count == 2
+            })
+            let unsavedConditions = test.identifiers(withPrefix: "settings-trigger-condition-remove-")
+            #expect(originalConditions.isSubset(of: unsavedConditions))
+            let addDestination = isNew ? "settings-trigger-editor-save" : "settings-trigger-rule-heading"
+            let queries: [(String, [String])] = [
+                (section, ["settings-trigger-rule-heading"]),
+                ("Triggers New rule", ["settings-trigger-rule-heading"]),
+                ("Triggers Edit rule", ["settings-trigger-rule-heading"]),
+                ("Triggers Add Rule", [addDestination]),
+                ("Triggers Delete", ["settings-trigger-rule-heading"]),
+                ("Rule name", ["settings-trigger-editor-name"]),
+                ("\(section) Rule name", ["settings-trigger-editor-name"]),
+                ("Apply preset", ["settings-trigger-editor-preset"]),
+                ("\(section) Apply preset", ["settings-trigger-editor-preset"]),
+                ("Conditions", ["settings-trigger-conditions-heading"]),
+                ("Advanced Triggers Wi-Fi", ["settings-trigger-conditions-heading"]),
+                ("Add Condition", ["settings-trigger-editor-add-condition"]),
+                ("Triggers Remove Condition", unsavedConditions.sorted()),
+                ("Save", ["settings-trigger-editor-save"])
+            ]
+            for (query, ids) in queries {
+                try await test.submit(query)
+                try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch(ids) }, "\(test.highlightDescription)")
+                try test.expectHighlights(ids)
+                #expect(settingsTestAccessibilityText(try test.element("settings-trigger-rule-heading")).contains(section))
+                #expect(try test.element("settings-trigger-editor-name").accessibilityValue() as? String == unsavedName)
+                #expect(test.identifiers(withPrefix: "settings-trigger-condition-remove-") == unsavedConditions)
+                #expect(!test.isHighlighted("settings-trigger-header"))
+                #expect(test.model.pendingChangeCount == 1)
+                #expect(test.model.placement(of: item) == .hidden)
+                test.expectUnchanged()
+            }
+
+            var remainingConditions = unsavedConditions
+            for id in unsavedConditions.sorted() {
+                #expect(try test.element(id).accessibilityPerformPress())
+                remainingConditions.remove(id)
+                try #require(await test.waitForUpdate {
+                    test.identifiers(withPrefix: "settings-trigger-condition-remove-") == remainingConditions
+                })
+            }
+            for (query, id) in [
+                ("Triggers Remove Condition", "settings-trigger-editor-add-condition"),
+                ("Triggers Add Condition", "settings-trigger-editor-add-condition"),
+                ("Triggers New rule", "settings-trigger-rule-heading"),
+                ("Triggers Edit rule", "settings-trigger-rule-heading"),
+                ("Triggers Delete", "settings-trigger-rule-heading"),
+                ("Triggers Add Rule", addDestination)
+            ] {
+                try await test.submit(query)
+                try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([id]) }, "\(test.highlightDescription)")
+                try test.expectHighlights([id])
+                #expect(test.identifiers(withPrefix: "settings-trigger-condition-remove-").isEmpty)
+                #expect(try test.element("settings-trigger-editor-name").accessibilityValue() as? String == unsavedName)
+                #expect(!(try test.element("settings-trigger-editor-save").isAccessibilityEnabled()))
+                #expect(test.model.pendingChangeCount == 1)
+                test.expectUnchanged()
+            }
+            #expect(try test.element("settings-trigger-editor-add-condition").accessibilityPerformPress())
+            try #require(await test.waitForUpdate {
+                test.identifiers(withPrefix: "settings-trigger-condition-remove-").count == 1
+            })
+            let restoredConditions = test.identifiers(withPrefix: "settings-trigger-condition-remove-")
+            #expect(restoredConditions.isDisjoint(with: unsavedConditions))
+            try await test.submit("Triggers Remove Condition")
+            try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch(restoredConditions.sorted()) })
+            try test.expectHighlights(restoredConditions.sorted())
+            #expect(!test.isHighlighted("settings-trigger-editor-add-condition"))
+            #expect(try test.element("settings-trigger-editor-name").accessibilityValue() as? String == unsavedName)
+            test.expectUnchanged()
+            #expect(try test.element("settings-trigger-editor-cancel").accessibilityPerformPress())
+            try #require(await test.waitForUpdate { test.find("settings-trigger-editor") == nil })
+            test.expectUnchanged()
+        }
     }
 
     @Test func repeatedHighlightsExpireIndependentlyAndNavigationClearsThemWithoutLosingDrafts() async throws {
@@ -658,6 +928,35 @@ struct SettingsSearchTests {
     @Test(arguments: [ColorScheme.light, .dark], [false, true])
     func highlightsPaintTheDestinationWithoutResizingOrDisablingIt(scheme: ColorScheme, reduceMotion: Bool) async throws {
         let test = try Harness(initialTab: .behavior, scheme: scheme, reduceMotion: reduceMotion)
+        let headings: [(SettingsView.Tab, String, String, [String])] = [
+            (.general, "Permissions", "settings-permissions-heading", ["settings-permission-accessibility", "settings-permission-screenRecording"]),
+            (.style, "Icons", "settings-icons-heading", ["settings-icons-row"])
+        ]
+        for (tab, query, id, neighbors) in headings {
+            test.model.requestedTab = tab
+            try #require(await test.waitForUpdate { test.title == tab.title && test.model.requestedTab == nil })
+            let editor = try await test.type(query)
+            try #require(await test.waitForUpdate { test.rows.contains(tab) && !test.hasHighlights })
+            let frame = try test.element(id).accessibilityFrame()
+            let baseline = try settingsTestBitmap(test.hosting.view)
+            editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            try #require(await test.waitForUpdate { test.queryIsEmpty && test.isHighlighted(id) })
+            try await Task.sleep(for: .milliseconds(250))
+            test.hosting.render()
+            let painted = try settingsTestBitmap(test.hosting.view)
+            try test.expectHighlights([id])
+            #expect(try test.element(id).accessibilityFrame() == frame)
+            #expect(try changedPixels(baseline, painted, in: frame, test: test) > 30)
+            for neighbor in neighbors {
+                let neighborFrame = try test.element(neighbor).accessibilityFrame()
+                #expect(!test.isHighlighted(neighbor))
+                #expect(try changedPixels(baseline, painted, in: neighborFrame, test: test) == 0,
+                        "Searching \(query) must paint its heading, not \(neighbor).")
+            }
+            test.expectUnchanged()
+        }
+        test.model.requestedTab = .behavior
+        try #require(await test.waitForUpdate { test.title == "Behavior" && test.model.requestedTab == nil })
         let editor = try await test.type("hover")
         try #require(await test.waitForUpdate { test.rows == [.behavior] && !test.hasHighlights })
         let frame = try test.element("settings-reveal-hover").accessibilityFrame()
@@ -704,8 +1003,105 @@ struct SettingsSearchTests {
         return count
     }
 
+    private func emptyGroupMembershipSearchPreservesHeaderEdits() async throws {
+        let draftItem = settingsTestItem(1, alias: "Clipboard", observedHidden: false)
+        let member = settingsTestItem(2, alias: "Calendar", observedHidden: true)
+        let memberKey = try #require(ItemControlStore.key(for: member.snapshot))
+        let group = ItemGroup(name: "Empty tools")
+        var preferences = Preferences.default
+        // Already-hidden membership changes keep the real engine's placement intent unchanged.
+        preferences.itemControls.setHidden(true, for: member.snapshot)
+        preferences.itemAliases.setAlias("Calendar", for: member.snapshot)
+        preferences.itemGroups = [group]
+        let test = try Harness(initialTab: .groups, preferences: preferences)
+        test.model.setPlacement(.hidden, for: draftItem)
+        let headerID = "settings-group-header-\(group.id)"
+        let nameID = "settings-group-name-\(group.id)"
+        let memberID = "settings-group-member-\(group.id)-\(memberKey)"
+        let memberPrefix = "settings-group-member-\(group.id)-"
+        try #require(await test.waitForUpdate { !test.model.itemsLoading && test.find(headerID) != nil })
+        #expect(test.model.loadedItems.isEmpty)
+        #expect(test.identifiers(withPrefix: memberPrefix).isEmpty)
+        try await test.submit("Advanced membership")
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([headerID]) })
+        try test.expectHighlights([headerID])
+        #expect(!test.isHighlighted("settings-group-create-row"))
+        test.expectUnchanged(reads: 1)
+
+        let field = try test.editableField(showing: group.name)
+        let unsavedName = "Uncommitted group name"
+        try test.type(unsavedName, into: field)
+        try #require(await test.waitForUpdate { test.find(nameID)?.accessibilityValue() as? String == unsavedName })
+        test.activity.providedItems = [draftItem, member]
+        await test.model.reloadItems()
+        try #require(await test.waitForUpdate { test.identifiers(withPrefix: memberPrefix).count == 2 })
+        #expect(try test.element(nameID).accessibilityValue() as? String == unsavedName)
+        #expect(test.model.pendingChangeCount == 1)
+        test.expectUnchanged(reads: 2)
+        try test.type(group.name, into: try test.editableField(showing: unsavedName))
+        #expect(test.window.makeFirstResponder(nil))
+        try await test.submit("Advanced membership")
+        let members = test.identifiers(withPrefix: memberPrefix).sorted()
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch(members) })
+        try test.expectHighlights(members)
+        #expect(!test.isHighlighted(headerID))
+        test.expectUnchanged(reads: 2)
+
+        // Return validates the local draft without depending on focus-loss scheduling.
+        let invalidField = try test.editableField(showing: group.name)
+        let invalidEditor = try test.type(" ", into: invalidField)
+        try #require(await test.waitForUpdate {
+            test.window.firstResponder === invalidEditor && test.find(nameID)?.accessibilityValue() as? String == " "
+        })
+        invalidEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        try #require(await test.waitForUpdate {
+            test.find("settings-group-name-error-\(group.id)").map(settingsTestAccessibilityText)
+                == ItemGroupLibrary.ValidationError.emptyName.message
+        }, "Invalid name after Return: field=\(String(describing: test.find(nameID)?.accessibilityValue())) editor=\(invalidEditor.string.debugDescription) error=\(String(describing: test.find("settings-group-name-error-\(group.id)").map(settingsTestAccessibilityText))) focus=\(String(describing: test.window.firstResponder)) writes=\(test.activity.writes.count)\n\(test.highlightDescription)")
+        #expect(test.window.makeFirstResponder(nil))
+        test.expectUnchanged(reads: 2)
+        #expect(try test.element(memberID).accessibilityPerformPress())
+        var assigned = preferences
+        assigned.itemGroups[0].appendKey(memberKey)
+        try #require(await test.waitForUpdate { test.model.preferences == assigned })
+        test.expectUnchanged(reads: 2, afterWrites: [assigned])
+
+        test.activity.providedItems = []
+        await test.model.reloadItems()
+        try #require(await test.waitForUpdate {
+            test.model.loadedItems.isEmpty && test.identifiers(withPrefix: memberPrefix) == [memberID]
+        })
+        #expect(try test.element(nameID).accessibilityValue() as? String == " ")
+        #expect(try test.element(memberID).accessibilityLabel() == "Calendar (not running)")
+        try await test.submit("Advanced membership")
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([memberID]) })
+        try test.expectHighlights([memberID])
+        #expect(!test.isHighlighted(headerID))
+        test.expectUnchanged(reads: 3, afterWrites: [assigned])
+
+        #expect(try test.element(memberID).accessibilityPerformPress())
+        try #require(await test.waitForUpdate {
+            test.model.preferences == preferences && test.identifiers(withPrefix: memberPrefix).isEmpty
+        })
+        try await test.submit("Advanced membership")
+        try #require(await test.waitForUpdate { test.queryIsEmpty && test.highlightsMatch([headerID]) })
+        try test.expectHighlights([headerID])
+        #expect(try test.element(nameID).accessibilityValue() as? String == " ")
+        #expect(test.find("settings-group-name-error-\(group.id)") != nil)
+        #expect(!test.isHighlighted("settings-group-create-row"))
+        #expect(test.model.pendingChangeCount == 1)
+        #expect(test.model.placement(of: draftItem) == .hidden)
+        #expect(test.model.draftDiscardedNotice == nil)
+        test.expectUnchanged(reads: 3, afterWrites: [assigned, preferences])
+        try test.type(group.name, into: try test.editableField(showing: " "))
+        #expect(test.window.makeFirstResponder(nil))
+        try #require(await test.waitForUpdate { test.find("settings-group-name-error-\(group.id)") == nil })
+        test.expectUnchanged(reads: 3, afterWrites: [assigned, preferences])
+    }
+
     @MainActor
     private final class Activity {
+        var providedItems: [FloatingBarItem] = []
         var reads = 0
         var writes: [Preferences] = []
         var retries = 0
@@ -737,6 +1133,7 @@ struct SettingsSearchTests {
             items: [FloatingBarItem] = [], scheme: ColorScheme = .light, reduceMotion: Bool = false
         ) throws {
             let activity = Activity()
+            activity.providedItems = items
             let loginItem = SettingsTestLoginItem()
             suite = "SettingsSearchTests.\(UUID().uuidString)"
             defaults = try #require(UserDefaults(suiteName: suite))
@@ -755,7 +1152,7 @@ struct SettingsSearchTests {
             )
             let model = SettingsModel(
                 preferences: store.load(), loginItem: loginItem,
-                itemsProvider: { activity.reads += 1; return items },
+                itemsProvider: { activity.reads += 1; return activity.providedItems },
                 onRetryPlacement: { activity.retries += 1; engine.reconcileHiddenItems(userInitiated: true) },
                 onChange: { updated in
                     activity.writes.append(updated)
@@ -777,7 +1174,7 @@ struct SettingsSearchTests {
                 .environment(\.openURL, OpenURLAction { url in
                     activity.openedURLs.append(url)
                     return .handled
-                }))
+                }), configureWindow: SettingsWindowController.configureWindow)
             hosting.view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
             hosting.testWindow.appearance = hosting.view.appearance
             hosting.render()
@@ -823,7 +1220,77 @@ struct SettingsSearchTests {
 
         func isHighlighted(_ identifier: String) -> Bool {
             guard let element = find(identifier) else { return false }
-            return settingsTestAccessibility(element).contains(where: hasSearchMatch)
+            return hasSearchMatch(element)
+        }
+
+        // A new Form can coexist with retained native rows for another run-loop turn.
+        // Readiness requires the same direct-region and exclusion checks as expectHighlights.
+        func highlightsMatch(_ identifiers: [String]) -> Bool {
+            guard !identifiers.isEmpty else { return false }
+            let elements = settingsTestAccessibility(hosting.view)
+            guard let detail = elements.first(where: { $0.accessibilityIdentifier() == "settings-detail" }) else { return false }
+            let detailFrame = detail.accessibilityFrame()
+            let regions = identifiers.compactMap { id -> CGRect? in
+                guard let target = elements.first(where: { $0.accessibilityIdentifier() == id }), hasSearchMatch(target) else { return nil }
+                let frame = target.accessibilityFrame()
+                return !frame.isEmpty && detailFrame.contains(frame) ? frame : nil
+            }
+            guard regions.count == identifiers.count else { return false }
+            return elements.filter(hasSearchMatch).allSatisfy { match in
+                let frame = match.accessibilityFrame()
+                return frame.isEmpty || regions.contains { $0.contains(frame) }
+            }
+        }
+
+        func expectHighlights(_ identifiers: [String]) throws {
+            let detail = try element("settings-detail").accessibilityFrame()
+            let regions = try identifiers.map { id in
+                let target = try element(id)
+                #expect(hasSearchMatch(target), "\(id) itself must carry the match, not an arbitrary descendant.")
+                let frame = target.accessibilityFrame()
+                #expect(!frame.isEmpty && detail.contains(frame), "\(id) must be visible in the destination pane.")
+                return frame
+            }
+            for match in settingsTestAccessibility(hosting.view).filter(hasSearchMatch) {
+                let frame = match.accessibilityFrame()
+                guard !frame.isEmpty else { continue }
+                #expect(regions.contains { $0.contains(frame) },
+                        "Unexpected match outside \(identifiers): \(match.accessibilityIdentifier() ?? match.accessibilityLabel() ?? "unnamed") at \(frame).")
+            }
+        }
+
+        func expectHeadingNeighborsUnmatched(_ identifiers: [String]) throws {
+            let headings: [String: (String, [String])] = [
+                "settings-get-started-heading": ("Get started", ["settings-open-items"]),
+                "settings-startup-heading": ("Startup", ["settings-launch-at-login"]),
+                "settings-permissions-heading": ("Permissions", ["settings-permission-accessibility", "settings-permission-screenRecording"]),
+                "settings-advanced-tools-heading": ("Optional tools", ["settings-advanced-presets", "settings-advanced-triggers", "settings-advanced-groups"]),
+                "settings-spacing-heading": ("Menu bar spacing", ["settings-spacing-enabled", "settings-spacing-value-row", "settings-spacing-padding-row"]),
+                "settings-backup-heading": ("Backup", ["settings-backup-row", "settings-backup-export", "settings-backup-import"]),
+                "settings-notch-heading": ("Notch", ["settings-notch-picker"]),
+                "settings-preview-heading": ("Placement Preview", ["settings-preview-phase", "settings-preview-menu-bar-heading", "settings-preview-hidden-heading", "settings-preview-always-hidden-heading"]),
+                "settings-preview-menu-bar-heading": ("Menu Bar", ["settings-preview-hidden-heading", "settings-preview-always-hidden-heading"]),
+                "settings-preview-hidden-heading": ("Hidden Bar", ["settings-preview-menu-bar-heading", "settings-preview-always-hidden-heading"]),
+                "settings-preview-always-hidden-heading": ("Always Hidden", ["settings-preview-menu-bar-heading", "settings-preview-hidden-heading"]),
+                "settings-icons-heading": ("Icons", ["settings-icon-menu-bar", "settings-icon-app-theme"]),
+                "settings-style-menu-bar-heading": ("Menu bar", ["settings-style-enabled", "settings-style-preview"]),
+                "settings-hidden-items-heading": ("Hidden items", ["settings-floating-bar-enabled", "settings-floating-bar-style"]),
+                "settings-closing-bar-heading": ("Closing the bar", ["settings-auto-rehide", "settings-auto-rehide-delay-row", "settings-dismiss-on-exit"]),
+                "settings-reveal-gestures-heading": ("Reveal gestures", ["settings-reveal-hover", "settings-reveal-scroll"]),
+                "settings-item-shortcuts-heading": ("Item shortcuts", ["settings-shortcut-items-hint", "settings-shortcut-toggle-row"]),
+                "settings-about-links-heading": ("Project & help", ["settings-about-project", "settings-about-issues", "settings-about-license"])
+            ]
+            for id in identifiers {
+                guard let (label, neighbors) = headings[id] else { continue }
+                let heading = try element(id)
+                #expect(settingsTestAccessibilityText(heading).contains(label))
+                #expect(heading.accessibilityFrame().height <= 30, "A heading query must not outline the form group below it.")
+                for neighborID in neighbors {
+                    let neighbor = try element(neighborID)
+                    #expect(!hasSearchMatch(neighbor), "\(label) must not also mark \(neighborID).")
+                    #expect(!heading.accessibilityFrame().intersects(neighbor.accessibilityFrame()))
+                }
+            }
         }
 
         var hasHighlights: Bool {
@@ -839,8 +1306,29 @@ struct SettingsSearchTests {
             settingsTestAccessibility(hosting.view).compactMap { element in
                 let id = element.accessibilityIdentifier() ?? element.accessibilityLabel() ?? "unnamed"
                 guard id.hasPrefix("settings-") || element.accessibilityHelp() != nil else { return nil }
-                return "\(id): \(element.accessibilityRole()?.rawValue ?? "nil") enabled=\(element.isAccessibilityEnabled()) matched=\(hasSearchMatch(element))"
+                return "\(id): \(element.accessibilityRole()?.rawValue ?? "nil") type=\(Swift.type(of: element.object)) frame=\(element.accessibilityFrame()) enabled=\(element.isAccessibilityEnabled()) matched=\(hasSearchMatch(element))"
             }.joined(separator: "\n")
+        }
+
+        func readinessDescription(
+            tab: SettingsView.Tab, highlights: [String], reads: Int, expectedRows: [SettingsView.Tab] = SettingsView.Tab.sidebarTabs
+        ) -> String {
+            let state = "title=\(title ?? "nil") expected=\(tab.title) query=\(searchField?.stringValue.debugDescription ?? "nil") editor=\(searchField?.currentEditor()?.string.debugDescription ?? "nil") queryEmpty=\(queryIsEmpty)\n"
+                + "rows=\(rows.map(\.rawValue)) expected=\(expectedRows.map(\.rawValue)) fullyVisible=\(sidebarRowsFullyVisible(expectedRows)) selection=\(selectedSidebarTabs.map(\.rawValue)) expected=\(tab.sidebarTab.rawValue)\n"
+                + "reads=\(activity.reads) expected=\(reads) itemsLoading=\(model.itemsLoading) directMatches=\(highlights.map { "\($0)=\(isHighlighted($0))" }) fullMatchSet=\(highlightsMatch(highlights))\n"
+                + "window=\(window.frame) contentLayout=\(window.contentLayoutRect) host=\(hosting.view.frame)\n"
+            guard let table = sidebarTable else { return state + "sidebar table missing\n" + highlightDescription }
+            let scroll = table.enclosingScrollView
+            let tableState = "table rows=\(table.numberOfRows) selected=\(Array(table.selectedRowIndexes)) frame=\(table.frame) bounds=\(table.bounds) visible=\(table.visibleRect) rowHeight=\(table.rowHeight)\n"
+                + "scroll=\(String(describing: scroll?.frame)) clip=\(String(describing: scroll?.contentView.bounds)) documentVisible=\(String(describing: scroll?.documentVisibleRect)) insets=\(String(describing: scroll?.contentInsets))\n"
+                + "constrainedClip=\(String(describing: scroll.map { $0.contentView.constrainBoundsRect($0.contentView.bounds) }))\n"
+            let nativeRows = (0..<table.numberOfRows).map { index in
+                let rect = table.rect(ofRow: index)
+                let row = table.rowView(atRow: index, makeIfNecessary: false)
+                let ids = row.map { settingsTestAccessibility($0).compactMap { $0.accessibilityIdentifier() }.filter { $0.hasPrefix("settings-sidebar-") } } ?? []
+                return "row[\(index)] rect=\(rect) fullyVisible=\(table.visibleRect.contains(rect)) view=\(String(describing: row)) ids=\(ids)"
+            }.joined(separator: "\n")
+            return state + tableState + nativeRows + "\n" + highlightDescription
         }
 
         func submit(_ query: String) async throws {
@@ -866,18 +1354,42 @@ struct SettingsSearchTests {
 
         var selectedSidebarTabs: [SettingsView.Tab] {
             guard let table = sidebarTable else { return [] }
-            let renderedRows = rows
-            return table.selectedRowIndexes.compactMap { index in
-                renderedRows.indices.contains(index) ? renderedRows[index] : nil
+            return table.selectedRowIndexes.compactMap { sidebarTab(at: $0, in: table) }
+        }
+
+        func sidebarRowsFullyVisible(_ expected: [SettingsView.Tab]) -> Bool {
+            guard rows == expected, let table = sidebarTable, table.numberOfRows == expected.count else { return false }
+            return expected.indices.allSatisfy { index in
+                let frame = table.rect(ofRow: index)
+                return !frame.isEmpty && table.visibleRect.contains(frame) && sidebarTab(at: index, in: table) == expected[index]
             }
+        }
+
+        private func sidebarTab(at index: Int, in table: NSTableView) -> SettingsView.Tab? {
+            guard let row = table.rowView(atRow: index, makeIfNecessary: false) else { return nil }
+            let elements = settingsTestAccessibility(row)
+            let tabs = SettingsView.Tab.allCases.filter { tab in
+                elements.contains { $0.accessibilityIdentifier() == "settings-sidebar-\(tab.rawValue)" }
+            }
+            return tabs.count == 1 ? tabs.first : nil
         }
 
         func find(_ identifier: String) -> SettingsTestAXElement? {
             settingsTestAccessibility(hosting.view).first { $0.accessibilityIdentifier() == identifier }
         }
 
+        func identifiers(withPrefix prefix: String) -> Set<String> {
+            Set(settingsTestAccessibility(hosting.view).compactMap { $0.accessibilityIdentifier() }.filter { $0.hasPrefix(prefix) })
+        }
+
         func element(_ identifier: String) throws -> SettingsTestAXElement {
             try #require(find(identifier), "Missing Settings accessibility identifier \(identifier).")
+        }
+
+        func editableField(showing text: String) throws -> NSTextField {
+            try #require(settingsTestSubviews(hosting.view).compactMap { $0 as? NSTextField }.first {
+                $0.isEditable && !($0 is NSSearchField) && $0.stringValue == text
+            }, "Missing editable field showing \(text.debugDescription).")
         }
 
         func requireSearchField() async throws -> NSSearchField {
@@ -889,8 +1401,13 @@ struct SettingsSearchTests {
         @discardableResult
         func type(_ text: String) async throws -> NSTextView {
             let field = try await requireSearchField()
-            try #require(window.makeFirstResponder(field), "The off-screen search field must accept focus.")
-            let editor = try #require(field.currentEditor() as? NSTextView, "The native search field must provide a field editor.")
+            return try type(text, into: field)
+        }
+
+        @discardableResult
+        func type(_ text: String, into field: NSTextField) throws -> NSTextView {
+            try #require(window.makeFirstResponder(field), "The off-screen field must accept focus.")
+            let editor = try #require(field.currentEditor() as? NSTextView, "The native field must provide a field editor.")
             #expect(editor.isFieldEditor)
             // The field editor exercises SwiftUI's real binding without posting keyboard events.
             editor.insertText(text, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
@@ -910,10 +1427,11 @@ struct SettingsSearchTests {
             return false
         }
 
-        func expectUnchanged(reads: Int = 0, openedURLs: [String] = []) {
-            #expect(model.preferences == initialPreferences)
-            #expect(store.load() == initialPreferences)
-            #expect(activity.writes.isEmpty)
+        func expectUnchanged(reads: Int = 0, openedURLs: [String] = [], afterWrites: [Preferences] = []) {
+            let expectedPreferences = afterWrites.last ?? initialPreferences
+            #expect(model.preferences == expectedPreferences)
+            #expect(store.load() == expectedPreferences)
+            #expect(activity.writes == afterWrites)
             #expect(activity.retries == 0)
             #expect(activity.reads == reads)
             #expect(activity.captures == 0)

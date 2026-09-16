@@ -34,13 +34,14 @@ struct AboutSettingsTab: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("settings-about-compatibility")
+                            .settingsSearchTarget(.aboutCompatibility)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.vertical, 4)
             }
 
-            Section("Project & help") {
+            Section {
                 LabeledContent("Project") {
                     Link("View on GitHub", destination: Self.projectURL)
                         .accessibilityIdentifier("settings-about-project")
@@ -56,6 +57,8 @@ struct AboutSettingsTab: View {
                         .accessibilityIdentifier("settings-about-license")
                         .settingsSearchTarget(.aboutLicense)
                 }
+            } header: {
+                SettingsSearchSectionHeading(target: .aboutLinks, id: "settings-about-links-heading")
             }
         }
         .formStyle(.grouped)

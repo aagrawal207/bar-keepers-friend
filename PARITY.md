@@ -1,7 +1,7 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-15 (Settings simplification and widget retirement; hostless verification passed,
-appearance review partial).
+Last reviewed: 2026-09-16, local date (Items drag/drop, search heading/control targeting, and Settings
+window chrome; full build/test and hostless checks passed, native interaction/appearance limits remain).
 Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
@@ -9,21 +9,26 @@ Reference: [Bartender 6 product](https://www.macbartender.com/),
 This is a capability and verification inventory, not a claim of full Bartender feature or native
 behavior parity. The user's current priority is reliable hide/unhide, simpler Settings, and less
 manual testing. Widgets were removed at the user's request on 2026-09-15; retained advanced tools
-still run saved configurations and still need their hardware QA. Per-Space/per-display styles and
-presets, signed auto-update, and release packaging remain gaps. Menu-bar search stays removed.
+still run saved configurations and still need their hardware QA. The latest request adds staged dragging
+between three Settings bars, correct search destinations, and a hidden native window title.
+Per-Space/per-display styles and presets, signed auto-update, and release packaging remain gaps.
+Menu-bar search stays removed.
 
 The checklist distinguishes implementation, automated coverage, and native evidence. Passing geometry
 or fake-backed tests does not prove that macOS opened a particular third-party menu, moved an item to
-the requested slot, or rendered a cursor without flicker. The new Settings workflows passed the full
-suite, including real-control and AX-geometry checks across all panes. Off-screen appearance review
-is partial because the PNGs omit some sidebar/material-backed content. Earlier results under
-Historical Verification Records predate this simplification.
+the requested slot, or rendered a cursor without flicker. The current drag workflows intercept AppKit's
+actual drag-session boundary; they do not establish native event delivery. The final full suite passed
+on 2026-09-16, including light/dark heading-pixel checks and AX geometry. No new full-window visual
+inspection is claimed. The latest prior passing baseline, Settings simplification/widget retirement,
+is recorded under Historical Verification Records. Its partial PNG review omits some sidebar/material-backed
+content; those capture omissions persist.
 
 ## Core Workflows
 
 | Capability | Current State | Remaining Work |
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
+| Settings placement editor | Three always-present horizontal strips for Menu Bar, Hidden Bar, and Always Hidden; local cached-icon/name drags stage the existing owner-keyed draft; Apply uses real persistence and the serial mover, Discard clears placement edits. All six directions and floating-bar-on/off workflows passed | Native AppKit drag-session delivery/cancel animation, live focus, and VoiceOver remain hardware QA |
 | Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
 | Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; hidden-menu-bar captures are skipped; the mirror follows current positions on open and checks for refresh after close or a Space change; resolved Control Center items are excluded | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
@@ -40,7 +45,7 @@ Historical Verification Records predate this simplification.
 
 | Capability | Current State | Remaining Work |
 |---|---|---|
-| Ordering | Items rows have Show-in-bar and Move Up/Down controls for the floating bar (presentation-only, immediate) | Native menu-bar ordering is not managed; only Shown/Hidden/Always Hidden placement is |
+| Ordering | Settings drags change tiers only. Items rows retain Show-in-bar and Move Up/Down controls for the floating bar (presentation-only, immediate) | No within-tier drag reorder or direct native menu-bar dragging from Settings; exact native ordering is not managed |
 | Multiple items from one owner | Coupled by the existing persisted owner key | A deliberate migration design before any independent identity scheme |
 | Presets/profiles | Named presets (save current, apply, update, rename, delete) in Settings > Advanced > Presets and the anchor menu; saved arrangements remain usable | Per-display/per-Space presets; native verification of a preset apply is the same as placement |
 | Triggers | Settings > Advanced > Triggers; saved enabled rules still apply presets and restore the baseline for battery, charging, battery-below, low power, Wi-Fi, frontmost app, external display, and time/weekday conditions | IOKit/CoreWLAN callbacks and DST boundaries on hardware |
@@ -48,10 +53,11 @@ Historical Verification Records predate this simplification.
 | Widgets | Removed from UI/runtime on 2026-09-15 at the user's request; readable legacy data remains inert through load/import/edit/export | Keep legacy Codable and workflow compatibility coverage; widget-only native QA is retired, and reintroduction needs a new request |
 | Styling | Tint/gradient/opacity/shape/border/shadow per-display overlay at level 23, excluded from icon capture | Whether the overlay is visible behind Tahoe's transparent bar; fullscreen Spaces; Reduce Transparency interplay |
 | Spacing | Settings > Advanced; global `NSStatusItemSpacing`/`SelectionPadding` override with log-out guidance; explicit changes only | Which global-domain host AppKit reads; effect after relaunching apps |
-| Settings navigation | Seven primary rows: General, Items, Style, Behavior, Shortcuts, Advanced, About. Advanced links to Presets/Triggers/Groups; child pages retain parent selection and a back button. General has Arrange Items/login/permissions; Behavior groups hidden-bar, closing, and reveal controls. Real-control and AX-geometry checks passed | Partial PNG review omits sidebar/glass and some material content; full-window appearance, live focus, and VoiceOver remain unverified |
-| Settings search | Passing hostless workflows cover deep-links and highlights, including "Advanced Wi-Fi"; navigation-only actions do not write preferences, move items, or capture. Items/Shortcuts/Groups retain their item loads | Live input-method/focus/VoiceOver checks remain; no item-name search or auto-scroll |
+| Settings navigation | Seven primary rows: General, Items, Style, Behavior, Shortcuts, Advanced, About; Presets/Triggers/Groups remain Advanced children. Real controls and AX geometry passed across all panes. Search-result changes reset the first sidebar row; native row count, full visibility, and selected-row identity are asserted | PNGs omit sidebar/glass and some material content; full-window appearance, live focus, and VoiceOver remain unverified |
+| Settings window chrome | Native title text hidden, transparent titlebar with `.fullSizeContentView`; close/minimize and titlebar dragging retained above 820x720 useful content. Real constructor/configured-window sizing, clearance, creation/reuse/position/selection, and expanded-footer checks passed | Live appearance/focus/VoiceOver remain QA; the expanded Advanced footer has a tight margin of about 5pt |
+| Settings search | Explicit shared heading/control index prioritizes exact labels, with whole-token page qualifiers and specific conditional fallbacks. Full-suite workflows passed direct-match, other-region exclusion, heading-pixel, cross-mode trigger, and empty-group checks. Search does not write preferences, move items, or capture; Items/Shortcuts/Groups retain their item loads | Live input-method/focus/VoiceOver checks remain; no item-name search or detail-pane auto-scroll |
 | About | Runtime app artwork and bundle version; explicit GitHub project, issues, and MIT license links; exact URLs verified through injected `OpenURLAction` | PNG version 16.0 is the test runner's `Bundle.main` version, not the production app's; real browser handoff and on-screen accessibility remain native QA |
-| Onboarding/login/backup | Fresh-install onboarding, live permission status, staged Apply/Discard and cached previews retained; login approval feedback in General; layout import/export in Advanced | Real permission and `SMAppService` transitions; native onboarding presentation |
+| Onboarding/login/backup | Fresh-install onboarding, live permission status, staged Apply/Discard with a cached arrangement editor; login approval feedback in General; layout import/export in Advanced | Real permission and `SMAppService` transitions; native onboarding presentation |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
 | Updates/install | Manual GitHub release check and Restart in the anchor menu; [README source build](README.md#build-from-source) uses the reader's own stable Apple Development identity. Read-only GitHub checks on 2026-09-15 found no releases or downloadable release assets | Signed update feed (Sparkle), Developer ID signing, Hardened Runtime validation, notarization, and packaging |
 | Mac App Store | Current unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); see [README's Apple sources](README.md#distribution-and-the-mac-app-store) | A future edition needs a public-API, sandboxed redesign and an eligibility assessment; it is not permanently ruled out |
@@ -70,7 +76,8 @@ Historical Verification Records predate this simplification.
 - Presets, triggers, and groups remain available under Advanced. Relocation does not disable saved
   rules/groups or retire their native verification obligations. Widget-only hardware paths are gone.
 - Settings workflows and off-screen PNG review reduce the user's manual-testing burden. They do not
-  establish native focus, VoiceOver, menu activation, capture, or movement correctness.
+  establish actual AppKit drag-session delivery, native focus, VoiceOver, menu activation, capture, or
+  movement correctness. The arrangement editor is a cache-only schematic, not a live menu-bar replica.
 
 ## Verification Gates
 
@@ -83,7 +90,146 @@ Historical Verification Records predate this simplification.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
 
-## Settings Simplification And Widget Retirement
+## Items Drag-and-Drop, Search Targets, And Window Chrome
+
+The 2026-09-15 implementation replaces the inert Items previews with three permanently visible,
+stacked horizontal destination strips: **Menu Bar, Hidden Bar, Always Hidden**. Empty tiers remain
+available. The editor stays horizontal when the floating bar is a vertical list or is disabled.
+Cached glyphs and unknown-placement names use `SettingsPlacementDragSourceView`; the destination
+is the containing `SettingsPlacementDropView`, an `NSHostingView` registered for the custom drag type.
+This puts the destination on the ancestor path for drops over glyphs as well as empty strip space.
+
+The pasteboard contains one opaque, one-use UUID nonce, not an owner key or alias. External and
+wrong-model sources, and sources without a move operation, are rejected before reading the pasteboard.
+Malformed, stale, replayed, and same-tier payloads are rejected. The source advertises no operation
+outside the application. A valid drop uses the existing owner-keyed draft setter, including its sibling
+coupling. **Apply Changes** saves through the real preferences path and shares the existing serial
+mover; **Discard** abandons placement edits. There is no within-tier drag reorder or direct native
+menu-bar drag from this Settings gesture.
+
+Group members remain group-controlled. Unknown-placement names can be dragged to select a tier;
+keyless sources cannot drag. Icons suppressed from the floating bar remain dimmed and reachable in
+the editor without changing Show in bar. `SettingsModel.placementPreview` keeps its existing filtering;
+the editor opts into `placementPreview(includingSuppressed: true)`. Refresh, row placement edits,
+Apply/Discard, successful import, saved placement/group changes, and leaving Items invalidate the model
+drag session. Failed/cancelled import leaves it intact. Staged placement choices survive Settings
+close/reopen within the session, but not an app restart.
+
+Search filtering and destination selection share explicit `SettingsSearchTarget.Entry` labels, aliases,
+and section context. `SettingsSearchSectionHeading` renders those same heading labels. Exact page,
+section, and control names take priority over keyword matches. Page/parent qualifiers are removed as
+whole tokens only once, so repeated words in "Style Reset Style" or "Shortcuts Item shortcuts" survive.
+"Permissions", "Icons", "Startup", "Menu bar spacing", "Hidden items", "Closing the bar", and "Reveal
+gestures" highlight their headings. "Permissions Accessibility" highlights the permission row;
+"Items Menu Bar", "Hidden Bar", and "Always Hidden" highlight the respective editor headings.
+
+Conditional controls have specific reachable fallbacks: Gradient for its hidden end color, Border for
+its hidden color, and the appropriate floating-bar/rehide/spacing/shortcut enabling switch. A closed
+trigger editor points to Add Rule; empty preset/group libraries point to their creation controls.
+An already-open trigger editor exposes its own rule/condition headings and controls, with fallbacks for
+unavailable targets from the other editor mode. A group with no member rows targets its own header for
+membership queries. Search preserves the three-second cue, leaves disabled controls disabled, and does
+not enable features or open editors.
+
+`SettingsWindowController.configureWindow` hides the native title text, makes its background
+transparent, removes the separator, and uses `.fullSizeContentView`. The AppKit title remains window
+metadata and BKF's sidebar identity stays visible. Native close/minimize buttons and titlebar dragging
+sit above the full **820x720 useful content area**. Content-background dragging is disabled so it does
+not compete with item drags. The controller creates the window once and retains its position and
+selected pane on reuse; an explicit tab request still navigates.
+
+### Fixed defects and verification boundaries
+
+- **Sidebar clipping after search:** the native list retained a 37pt offset after result-row heights
+  changed, clipping General when search cleared. `SettingsSidebar` uses `ScrollViewReader` to reset
+  the first-row anchor when results change. Tests check native row count, full visibility, and actual
+  selected-row identity, rather than inferring native selection from a filtered accessibility list.
+  No detail-pane auto-scroll was added.
+- **Unavailable search destinations:** New/Edit/Add/Delete queries resolve to the visible trigger
+  editor heading or action across modes. With no conditions, Remove Condition points to Add Condition.
+  A group with no member rows supplies its header as the membership target; populated and not-running
+  members use their own controls. Workflows preserve unsaved editor state and the Items draft through
+  these transitions.
+- **Group-name validation:** an identical-value AppKit echo after Return could erase the validation
+  error. The input binding ignores that echo, and successful rename explicitly clears prior validation.
+  The existing mounted rename workflow deletes a conflicting group and retries the unchanged text,
+  checking exactly four preference snapshots and no invalid-name persistence.
+
+Chrome tests use the scoped `configureWindow` hook **before the first window-backed render** and compare
+window-relative rectangles. Earlier transient invalid geometry came from a late-configured test host,
+not production clipping. Real constructors and all-pane checks confirm 820x720 useful content,
+native-control/sidebar/search clearance, and an expanded Advanced footer that fits with about 5pt left.
+
+Search tests wait for the **complete expected highlight-region set within two seconds**, before the
+three-second cue expires. Native Form accessibility rows from the prior state were observed lingering
+for 200–280ms. The complete-set wait retains direct-target and other-region exclusion assertions;
+no assertions were weakened to accept partial or stale matches.
+
+### Automated coverage (passed in the final full suite)
+
+Three new workflows in `StagedPlacementIntegrationTests` use the real mounted Settings
+view, model, isolated `PreferencesStore`, engine, and placement controller. Root hit tests must reach
+the source and a registered destination ancestor over both glyphs and empty areas. Constructed
+`NSEvent` mouse-down/drag/up events are **unposted** and passed directly to the mounted source handlers.
+They check clicks and motion below/above the 4pt drag threshold, with the cached image used for the
+drag image. The `beginDraggingSession` boundary is intercepted; a unique pasteboard and fake
+`NSDraggingInfo` replace AppKit's session transport. Native menu-bar input/capture remain behind fakes.
+
+| Coverage | Test | Level |
+|---|---|---|
+| All six tier directions, empty destination, absent-intent reversals, owner siblings, suppressed glyph reachability with filtered preview preserved, real Discard, one persisted serial Apply, in-progress drag rejection, store reload; Apply parameterized with floating bar on/off | `StagedPlacementIntegrationTests.mountedDragsStageEveryDirectionAndApplyOnePersistedSerialBatch` | Functional workflow |
+| External/wrong-model/copy-only rejection before pasteboard reads; wrong type, malformed/missing/multiple items, stale/replayed tokens; superseded source cannot cancel its successor; row placement edit, cancellation, Discard, and retained drafts | `StagedPlacementIntegrationTests.mountedDropRejectsForeignMalformedStaleAndReplayedTokensWithoutLosingDrafts` | Functional workflow |
+| Unknown placement through the real provider, keyless source rejection, pane exit/re-entry, suspended/cancelled refresh with cached rows retained, group control, saved intent replacement, failed/cancelled/successful import | `StagedPlacementIntegrationTests.unknownItemsRefreshNavigationAndPreferenceChangesRespectDragLifetime` | Functional workflow |
+| Actual configured window and production constructor; configuration before first window-backed render, window-relative useful content/safe-area sizing, close/minimize/sidebar/search clearance, titlebar drag hit, lazy creation, close/reuse, retained position/selection, explicit tab requests, expanded-footer fit | `SettingsWindowChromeTests` | Hostless window lifecycle + geometry |
+| Exact heading/control matches across panes, qualifiers, conditional fallbacks, cross-mode trigger editor and empty/populated condition lists, empty/populated/not-running group members, strict direct-match metadata and other-region exclusion, draft/persistence preservation | Expanded `SettingsSearchTests` workflows; `SettingsSidebarTests.sectionNamesAndSpecificControlsHaveDistinctSearchDestinations` | Functional workflow + matching assertions |
+| Filtered and restored sidebar row count, full native row visibility, selected-row identity, and General reachable after clearing search | `SettingsSearchTests.searchResultsHighlightTheirDestinationsAcrossEveryPaneWithoutApplyingAnything` | Functional workflow + native table geometry |
+| Invalid rename stays local across Return/blur; valid correction clears its error; conflict deletion followed by unchanged-text retry; exactly four expected preference snapshots | `GroupsSettingsTabTests.renamingCommitsOnReturnAndKeepsAnInvalidNameLocal` | Hostless interaction + model write assertions |
+| Permissions/Icons heading pixels change without painting neighboring controls; stable bounds, light/dark and Reduce Motion; existing control highlight remains actionable | `SettingsSearchTests.highlightsPaintTheDestinationWithoutResizingOrDisablingIt` | Hostless bitmap + interaction |
+| Three stacked bars remain available when empty, horizontal layout for both floating styles, bounded overflow; configured-window pane bounds and Items controls | `SettingsPlacementPreviewTests`, `SettingsViewTests`, `SettingsSidebarTests` | Hostless rendering + geometry |
+
+Drag staging and search add **no metrics or telemetry, screen capture, or native item placement**.
+The workflows assert no preference writes or native work from a drop/search. Explicit page navigation
+retains the existing item reads for Items/Shortcuts/Groups. Apply retains the existing post-placement
+capture when the floating bar is enabled; the passing workflow also covers it disabled.
+
+### Verification results (2026-09-16)
+
+The final local run **succeeded** on macOS **26.6.2** / Xcode **27.0**: **1089 tests across 80 suites,
+1816 invocations, zero failures or skips**. It used the documented project/scheme/signing options with
+the following final arguments (abbreviated command):
+
+```sh
+xcodebuild ... \
+  -resultBundlePath "$TMPDIR/opencode/bkf-placement-drag-full-04.xcresult" \
+  -collect-test-diagnostics on-failure \
+  COMPILER_INDEX_STORE_ENABLE=NO -quiet build test
+```
+
+| Evidence field | Current result |
+|---|---|
+| Build result metadata | `xcresulttool get build-results` for `bkf-placement-drag-full-04.xcresult`: `status: succeeded`, `errorCount: 0`. Eight pre-existing actor-isolation warnings came from untouched `FloatingBarController.swift`. |
+| Built-app signature | `codesign --verify --deep --strict` passed on the current `DerivedData/Build/Products/Debug/BarKeepersFriend.app`. |
+| Diff and independent review | `git diff --check` and `git diff --cached --check` were clean. A read-only general reviewer, initially in a fresh context with follow-up reviews, **APPROVED** after the trigger cross-mode, empty-group membership, and successful-rename validation fixes. No different-model review was performed for this change. The prior dedicated-agent authentication issue is historical. |
+| Security review | Current manual security review completed. Automated scanner unavailability was reconfirmed in the unchanged environment (`scan_diff`, `semgrep`, and `gitleaks`); no automated security scan ran. |
+| Current appearance evidence | Light/dark heading-pixel checks and AX geometry passed, including all panes, real native sidebar rows, configured-window clearance, and the expanded footer. No new full-window visual inspection is claimed; `cacheDisplay` still omits glass/sidebar and some material-backed content. |
+| Artifact cleanup | Completed after recordkeeping on 2026-09-16. This work's temporary test bundles, exported PNGs, diagnostic probes, caches, and build intermediates were removed. `DerivedData` is about 11 MB, retaining the runnable `Build/Products/Debug/BarKeepersFriend.app`; strict signature verification passed again after cleanup. Transient result-bundle references are historical; those files are not retained. |
+
+### Remaining hardware evidence
+
+Actual AppKit drag-session event delivery and cancellation animation remain unverified because the
+hostless workflows intercept session creation. Live pointer/keyboard focus, titlebar/material appearance,
+and VoiceOver still need limited hardware QA. Window geometry and heading-pixel assertions do not fill
+the existing `cacheDisplay` omissions of glass/sidebar and some material-backed content. Native
+menu-bar movement, capture, and external-display obligations remain as recorded for those mechanisms.
+
+## Historical Verification Records
+
+The dated results below describe their original code states, before the current Items drag/drop,
+search-targeting, and window-chrome changes. The latest prior passing baseline is the Settings
+simplification/widget retirement below. Counts, former page layouts, and retired widget test names
+are historical records, not claims about the current tree. Current completion evidence belongs above.
+
+### Settings Simplification And Widget Retirement
 
 On 2026-09-15 the user asked for simpler Settings and fewer manual checks, and explicitly said widgets
 were unnecessary. `SettingsView.Tab.sidebarTabs` exposes General, Items, Style, Behavior, Shortcuts,
@@ -107,7 +253,7 @@ Tests for the retired runner/controller/editor were removed with those implement
 tests remain, and the new compatibility workflow uses literal JSON rather than generating its input
 with the current encoder. Group installation and trigger monitoring remain wired to saved preferences.
 
-### Automated coverage — passed in the full suite
+#### Automated coverage (historical full-suite pass)
 
 | Coverage | Test or artifact | Level |
 |---|---|---|
@@ -125,7 +271,7 @@ a browser. There are no new metrics, telemetry, native input gestures, or captur
 change. Moving retained tools changes their discoverability, not their runtime or hardware QA.
 Widget-specific status-item/action/Shortcuts-process/mailto checks are retired with those paths.
 
-### Verification results (2026-09-15)
+#### Historical verification results (2026-09-15)
 
 - **Full build/test:** `xcodebuild ... build test` passed on macOS 26.6.2 / Xcode 27.0:
   **1082 tests across 79 suites, 1794 invocations, zero failures or skips**.
@@ -137,7 +283,7 @@ Widget-specific status-item/action/Shortcuts-process/mailto checks are retired w
 - **Security:** manual security review completed. `scan_diff`, `semgrep`, and `gitleaks` were
   unavailable via `command -v`; no automated security scan ran.
 
-### Partial off-screen appearance review
+#### Historical partial off-screen appearance review
 
 The normal full suite generated **26 PNG attachments: 20 light/dark pane renders and six expanded
 configuration panes**. Representative inspection covered General light/dark, Items light, Behavior
@@ -152,16 +298,10 @@ visual verification. Live sidebar/material appearance, non-collapsibility under 
 focus, child/back navigation feel, VoiceOver, and browser handoff remain outstanding.
 
 The About PNG displays the test runner's `Bundle.main` version, **16.0**, rather than the production
-app's version. A temporary layer-render experiment did not improve the omissions and was reverted;
-the final production/test sources match the passing full-suite run, with only documentation updated.
-At the user's disk-space request, test artifacts are transient and cleaned after summarization;
-retention of the result bundle or exported PNGs is not guaranteed.
-
-## Historical Verification Records
-
-The dated results below describe their original code states, before the current Settings
-simplification/widget retirement. Counts, former page layouts, and retired widget test names are
-historical records, not claims about the current tree. Current completion evidence belongs above.
+app's version. A temporary layer-render experiment did not improve the omissions and was reverted.
+At the end of that pass, the production/test sources matched its passing full-suite run. The current
+drag/search/chrome changes have their own 2026-09-16 verification record above. Test artifacts for the
+prior baseline were transient; retention of its result bundle or exported PNGs is not guaranteed.
 
 ### Parity Verification
 

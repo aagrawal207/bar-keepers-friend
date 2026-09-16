@@ -26,47 +26,57 @@ struct SettingsSidebar: View {
             .padding(.horizontal, 14)
             .padding(.top, 10)
             .padding(.bottom, 4)
-            List(selection: listSelection) {
-                ForEach(tabs) { tab in
-                    // Activating the current pane must work without a selection-change notification.
-                    Button { select(tab) } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(tab.title)
-                                if isSearching, tab.sidebarTab != tab {
-                                    Text(tab.sidebarTab.title)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        } icon: {
-                            Image(systemName: tab.systemImage)
-                                .symbolRenderingMode(.hierarchical)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 3)
-                        .contentShape(Rectangle())
+            ScrollViewReader { scroll in
+                sidebarList
+                    .onChange(of: tabs) { _, results in
+                        // Filtering changes row heights; retaining the old offset can clip the first result.
+                        if let first = results.first { scroll.scrollTo(first, anchor: .top) }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(tab.title)
-                    .accessibilityIdentifier("settings-sidebar-\(tab.rawValue)")
-                    .tag(tab)
-                }
-            }
-            .listStyle(.sidebar)
-            .overlay {
-                if tabs.isEmpty {
-                    Text("No matching settings")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(16)
-                        .accessibilityIdentifier("settings-search-empty")
-                }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings-sidebar")
+    }
+
+    private var sidebarList: some View {
+        List(selection: listSelection) {
+            ForEach(tabs) { tab in
+                // Activating the current pane must work without a selection-change notification.
+                Button { select(tab) } label: {
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(tab.title)
+                            if isSearching, tab.sidebarTab != tab {
+                                Text(tab.sidebarTab.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } icon: {
+                        Image(systemName: tab.systemImage)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityIdentifier("settings-sidebar-\(tab.rawValue)")
+                .tag(tab)
+            }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if tabs.isEmpty {
+                Text("No matching settings")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(16)
+                    .accessibilityIdentifier("settings-search-empty")
+            }
+        }
     }
 
     /// Command-clicking the selected row deselects in a List; the detail must always show a pane.

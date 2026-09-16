@@ -21,10 +21,10 @@ struct ShortcutsSettingsSection: View {
     static let requiresFloatingBarText = "Not active: item shortcuts need the floating bar."
 
     var body: some View {
-        Section("Shortcuts") {
+        Section {
             Toggle("Toggle the bar with a global shortcut", isOn: $model.preferences.enableGlobalHotkey)
                 .accessibilityIdentifier("settings-shortcut-toggle-enabled")
-                .settingsSearchTarget(.toggleShortcut)
+                .settingsSearchTarget(.toggleShortcut, including: model.preferences.enableGlobalHotkey ? [] : [.toggleShortcutRecorder])
             if model.preferences.enableGlobalHotkey {
                 LabeledContent("Toggle bar") {
                     HotkeyRecorderView(
@@ -39,19 +39,23 @@ struct ShortcutsSettingsSection: View {
                         }
                     )
                 }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("settings-shortcut-toggle-row")
+                .settingsSearchTarget(.toggleShortcutRecorder)
                 if failures.contains(HotkeyService.toggleFailureIdentifier) {
                     unavailable(id: "settings-shortcut-toggle-unavailable")
                 }
             }
+        } header: {
+            SettingsSearchSectionHeading(target: .shortcutsSection, id: "settings-shortcuts-heading")
         }
 
-        Section("Item shortcuts") {
+        Section {
             Text(Self.itemHint)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("settings-shortcut-items-hint")
-                .settingsSearchTarget(.itemShortcuts)
 
             // One line for the whole section; every row would otherwise repeat the same reason.
             if !model.preferences.useFloatingBar {
@@ -73,6 +77,11 @@ struct ShortcutsSettingsSection: View {
             ForEach(rows) { row in
                 itemRow(row, plan: plan)
             }
+        } header: {
+            SettingsSearchSectionHeading(
+                target: .itemShortcuts, id: "settings-item-shortcuts-heading",
+                including: Self.rows(for: model).isEmpty ? [.itemShortcutRecorder] : []
+            )
         }
         // The Items tab normally loads the list; this section may be the first one shown.
         .task { await model.reloadItems() }
@@ -122,6 +131,9 @@ struct ShortcutsSettingsSection: View {
                     .accessibilityIdentifier("settings-shortcut-item-\(row.key)-absent")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-shortcut-item-\(row.key)-row")
+        .settingsSearchTarget(.itemShortcutRecorder)
         if let reason = plan.skipped[row.key], reason != .requiresFloatingBar {
             Text(Self.inactiveText(for: reason))
                 .font(.caption)

@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
+    private let makeWindow: @MainActor (SettingsView) -> NSWindow
     let model: SettingsModel
 
     init(
@@ -14,8 +15,12 @@ final class SettingsWindowController {
         loginItem: any LoginItemManaging,
         itemsProvider: @escaping () async throws -> [FloatingBarItem],
         onRetryPlacement: @escaping () -> Void = {},
+        makeWindow: @escaping @MainActor (SettingsView) -> NSWindow = {
+            NSWindow(contentViewController: NSHostingController(rootView: $0))
+        },
         onChange: @escaping (Preferences) -> Void
     ) {
+        self.makeWindow = makeWindow
         self.model = SettingsModel(
             preferences: preferences,
             loginItem: loginItem,
@@ -25,21 +30,36 @@ final class SettingsWindowController {
         )
     }
 
-    /// A nil tab keeps whatever the user last selected; the window is created only once.
     func show(tab: SettingsView.Tab? = nil) {
-        if window == nil {
-            let hosting = NSHostingController(rootView: SettingsView(model: model, initialTab: tab ?? .general))
-            let window = NSWindow(contentViewController: hosting)
-            window.title = "Bar Keeper's Friend"
-            window.styleMask = [.titled, .closable, .miniaturizable]
-            window.isReleasedWhenClosed = false
-            window.center()
-            self.window = window
-        } else if let tab {
-            model.requestedTab = tab
-        }
+        let window = prepareWindow(tab: tab)
         NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// A nil tab keeps whatever the user last selected; the window is created only once.
+    func prepareWindow(tab: SettingsView.Tab? = nil) -> NSWindow {
+        if let window {
+            if let tab { model.requestedTab = tab }
+            return window
+        }
+        let window = makeWindow(SettingsView(model: model, initialTab: tab ?? .general))
+        Self.configureWindow(window)
+        window.center()
+        self.window = window
+        return window
+    }
+
+    static func configureWindow(_ window: NSWindow) {
+        window.title = "Bar Keeper's Friend"
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        // AppKit's titlebar safe area keeps the traffic lights above the fixed-size Settings view.
+        // Retain native titlebar dragging; content-background dragging would compete with item drags.
+        window.isMovable = true
+        window.isMovableByWindowBackground = false
+        window.isReleasedWhenClosed = false
     }
 }
 
@@ -50,6 +70,9 @@ final class SettingsWindowController {
 final class SettingsModel {
     var preferences: Preferences {
         didSet {
+            if oldValue.itemGroups != preferences.itemGroups || !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls) {
+                placementDrag = nil
+            }
             if !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls) {
                 // A draft is relative to the arrangement that just changed underneath it.
                 if !placementDraft.isEmpty {
@@ -178,6 +201,14 @@ final class SettingsModel {
     private(set) var itemsLoadError: String? = nil
     @ObservationIgnored private var itemsLoadGeneration: UInt64 = 0
     private var placementDraft = ItemPlacementDraft()
+    private struct PlacementDrag {
+        let token: UUID
+        let windowID: CGWindowID
+        let ownerKey: String
+        let source: ItemPlacement?
+    }
+    private var placementDrag: PlacementDrag?
+    var isDraggingPlacementItem: Bool { placementDrag != nil }
     var placementInProgress = false
     var placementMessage: String? = nil
     var placementFailed = false
@@ -207,6 +238,7 @@ final class SettingsModel {
 
     func reloadItems() async {
         guard !Task.isCancelled else { return }
+        placementDrag = nil
         itemsLoadGeneration &+= 1
         let generation = itemsLoadGeneration
         itemsLoading = true
@@ -278,6 +310,7 @@ final class SettingsModel {
 
     func setPlacement(_ placement: ItemPlacement, forAll items: [FloatingBarItem]) {
         guard !placementInProgress else { return }
+        placementDrag = nil
         draftDiscardedNotice = nil
         placementDraft = draftSettingPlacement(placement, forAll: items)
     }
@@ -303,6 +336,49 @@ final class SettingsModel {
             controls: preferences.itemControls
         )
         return draft
+    }
+
+    // MARK: - Local placement drags
+
+    func canDragPlacement(of item: FloatingBarItem, from source: ItemPlacement?) -> Bool {
+        guard !itemsLoading, !placementInProgress, let key = ItemControlStore.key(for: item.snapshot),
+              let current = loadedItems.first(where: { $0.id == item.id }),
+              ItemControlStore.key(for: current.snapshot) == key, group(containing: current) == nil else { return false }
+        return previewPlacement(of: current, controls: placementDraft.applying(to: effectiveControls)) == source
+    }
+
+    func beginPlacementDrag(of item: FloatingBarItem, from source: ItemPlacement?) -> UUID? {
+        guard canDragPlacement(of: item, from: source), let key = ItemControlStore.key(for: item.snapshot) else { return nil }
+        let token = UUID()
+        placementDrag = PlacementDrag(token: token, windowID: item.id, ownerKey: key, source: source)
+        return token
+    }
+
+    func endPlacementDrag(_ token: UUID) {
+        if placementDrag?.token == token { placementDrag = nil }
+    }
+
+    func cancelPlacementDrag() {
+        placementDrag = nil
+    }
+
+    func canDropPlacement(_ token: UUID, into destination: ItemPlacement) -> Bool {
+        placementDragItem(token, into: destination) != nil
+    }
+
+    @discardableResult
+    func dropPlacement(_ token: UUID, into destination: ItemPlacement) -> Bool {
+        guard let item = placementDragItem(token, into: destination) else { return false }
+        setPlacement(destination, for: item)
+        return true
+    }
+
+    private func placementDragItem(_ token: UUID, into destination: ItemPlacement) -> FloatingBarItem? {
+        guard let drag = placementDrag, drag.token == token, drag.source != destination,
+              let item = loadedItems.first(where: { $0.id == drag.windowID }),
+              ItemControlStore.key(for: item.snapshot) == drag.ownerKey,
+              canDragPlacement(of: item, from: drag.source), canSetPlacement(destination, forAll: [item]) else { return nil }
+        return item
     }
 
     // MARK: - Floating-bar presentation (saved immediately, never staged)
@@ -336,6 +412,7 @@ final class SettingsModel {
 
     func applyPlacementChanges() {
         guard !placementInProgress, hasPendingChanges else { return }
+        placementDrag = nil
         let controls = placementDraft.applying(to: preferences.itemControls)
         // Callbacks can synchronously reenter Settings; no applied edits may remain pending.
         placementDraft = ItemPlacementDraft()
@@ -349,26 +426,30 @@ final class SettingsModel {
 
     func discardPlacementChanges() {
         guard !placementInProgress else { return }
+        placementDrag = nil
         placementDraft = ItemPlacementDraft()
     }
 
     func retryPlacement() {
         guard !placementInProgress, !hasPendingChanges, placementFailed || placementPending else { return }
+        placementDrag = nil
         onRetryPlacement()
     }
 
     var placementPreview: (shown: [FloatingBarItem], hidden: [FloatingBarItem], alwaysHidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
+        placementPreview(includingSuppressed: false)
+    }
+
+    func placementPreview(includingSuppressed: Bool) -> (shown: [FloatingBarItem], hidden: [FloatingBarItem], alwaysHidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
         // Apply reconciles every saved owner, including owners not edited in this draft.
         let controls = placementDraft.applying(to: effectiveControls)
-        let projectsIntent = hasPendingChanges || placementInProgress
         var shown: [FloatingBarItem] = []
         var hidden: [FloatingBarItem] = []
         var alwaysHidden: [FloatingBarItem] = []
         var unknown: [FloatingBarItem] = []
         for var item in loadedItems {
             item.alias = preferences.itemAliases.alias(for: item.snapshot)
-            let projected: ItemPlacement? = projectsIntent && controls.hasPlacementIntent(item.snapshot)
-                ? controls.placement(for: item.snapshot) : item.observedPlacement
+            let projected = previewPlacement(of: item, controls: controls)
             switch projected {
             case .hidden?: hidden.append(item)
             case .alwaysHidden?: alwaysHidden.append(item)
@@ -378,10 +459,19 @@ final class SettingsModel {
         }
         func barOrdered(_ tier: [FloatingBarItem]) -> [FloatingBarItem] {
             let byID = Dictionary(tier.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            return ItemControlStore.visibleBarItems(from: tier.map(\.snapshot), controls: controls)
+            // Suppressed glyphs stay reachable in the placement editor without changing mirror visibility.
+            let ordered = includingSuppressed
+                ? ItemControlStore.orderedBarItems(from: tier.map(\.snapshot), controls: controls)
+                : ItemControlStore.visibleBarItems(from: tier.map(\.snapshot), controls: controls)
+            return ordered
                 .compactMap { byID[$0.windowID] }
         }
         return (shown, barOrdered(hidden), barOrdered(alwaysHidden), unknown)
+    }
+
+    private func previewPlacement(of item: FloatingBarItem, controls: ItemControlStore) -> ItemPlacement? {
+        (hasPendingChanges || placementInProgress) && controls.hasPlacementIntent(item.snapshot)
+            ? controls.placement(for: item.snapshot) : item.observedPlacement
     }
 
     /// The user's display nickname for the item, edited via the name field. Empty clears it.
@@ -435,6 +525,7 @@ final class SettingsModel {
                 imported.triggerState = TriggerRuntimeState()
                 imported.hasCompletedOnboarding = preferences.hasCompletedOnboarding
                 placementDraft = ItemPlacementDraft()
+                placementDrag = nil
                 preferences = imported
                 transferFailed = false
                 transferMessage = "Imported settings."

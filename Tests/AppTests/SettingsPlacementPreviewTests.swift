@@ -71,7 +71,8 @@ struct SettingsPlacementPreviewTests {
             let elements = settingsTestAccessibility(hosting.view)
             let text = elements.map { settingsTestAccessibilityText($0) }.joined(separator: " ")
             #expect(text.contains("Menu Bar"))
-            #expect(text.contains(style == .horizontal ? "Hidden Bar" : "Hidden List"))
+            #expect(text.contains("Hidden Bar"))
+            #expect(text.contains("Always Hidden"))
             #expect(text.contains("Hidden bar is disabled"))
             #expect(text.contains("cached glyphs or app icons"))
             if count == 0 {
@@ -168,13 +169,20 @@ struct SettingsPlacementPreviewTests {
     }
 
     @Test(arguments: FloatingBarStyle.allCases, [ColorScheme.light, .dark])
-    func alwaysHiddenBoxAppearsOnlyWithItemsAndStaysBounded(style: FloatingBarStyle, scheme: ColorScheme) throws {
+    func allThreeBarsStayAvailableWhenEmptyAndOverflowKeepsThemBounded(style: FloatingBarStyle, scheme: ColorScheme) throws {
         let plain = settingsTestHost(SettingsPlacementPreview(
             shown: [settingsTestItem(1)], hidden: [settingsTestItem(2)], unknown: [], style: style
         ).environment(\.colorScheme, scheme).frame(width: 608))
         let plainElements = settingsTestAccessibility(plain.view)
-        #expect(!plainElements.contains { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
-        #expect(!plainElements.map { settingsTestAccessibilityText($0) }.joined().contains("Option-click"))
+        let emptyTier = try #require(plainElements.first { $0.accessibilityIdentifier() == "settings-preview-always-hidden" })
+        #expect(!emptyTier.accessibilityFrame().isEmpty)
+        #expect(plainElements.map { settingsTestAccessibilityText($0) }.joined().contains("Option-click"))
+        let frames = try ["menu-bar", "hidden", "always-hidden"].map { name in
+            try #require(plainElements.first { $0.accessibilityIdentifier() == "settings-preview-\(name)" }).accessibilityFrame()
+        }
+        #expect(frames[0].minY > frames[1].maxY)
+        #expect(frames[1].minY > frames[2].maxY)
+        #expect(frames.allSatisfy { $0.width > 580 && $0.height >= 30 })
         let plainHeight = plain.view.fittingSize.height
 
         for count in [1, 80] {
@@ -197,8 +205,8 @@ struct SettingsPlacementPreviewTests {
             #expect(settingsTestAccessibilityText(caption).contains("Option-click"))
             let size = hosting.view.fittingSize
             #expect(size.height <= 230)
-            // A third column may add one wrapped row, never a second row of boxes.
-            #expect(size.height <= plainHeight + 60)
+            // Only the phase caption can gain a line; item count must not grow the three bars.
+            #expect(size.height <= plainHeight + 26)
             #expect(size.width <= 608)
             let bitmap = try settingsTestBitmap(hosting.view)
             #expect(settingsTestPixelCount(bitmap) { $0.redComponent > 0.9 && $0.greenComponent < 0.1 } > 100)
@@ -230,8 +238,12 @@ func settingsTestItem(
 }
 
 @MainActor
-func settingsTestHost<Content: View>(_ content: Content) -> SettingsTestHostingController {
-    SettingsTestHostingController(rootView: AnyView(content.environment(\.accessibilityEnabled, true)))
+func settingsTestHost<Content: View>(
+    _ content: Content, configureWindow: (@MainActor (NSWindow) -> Void)? = nil
+) -> SettingsTestHostingController {
+    SettingsTestHostingController(
+        rootView: AnyView(content.environment(\.accessibilityEnabled, true)), configureWindow: configureWindow
+    )
 }
 
 @MainActor
@@ -241,7 +253,11 @@ final class SettingsTestHostingController: NSHostingController<AnyView> {
     private static var activeHosts = 0
     private static var previousEnhancedUI: Any?
 
-    override init(rootView: AnyView) {
+    override convenience init(rootView: AnyView) {
+        self.init(rootView: rootView, configureWindow: nil)
+    }
+
+    init(rootView: AnyView, configureWindow: (@MainActor (NSWindow) -> Void)?) {
         // Native SwiftUI scroll/list metadata requires this process-local accessibility opt-in.
         // Preserve it across overlapping hosts and restore the caller's value after the last host.
         if Self.activeHosts == 0 {
@@ -256,6 +272,8 @@ final class SettingsTestHostingController: NSHostingController<AnyView> {
                                        backing: .buffered, defer: true)
         testWindow.isReleasedWhenClosed = false
         testWindow.contentView = view
+        // Full-size chrome changes safe-area layout; configure it before the first window-backed render.
+        configureWindow?(testWindow)
         render()
         #expect(!testWindow.isVisible)
     }

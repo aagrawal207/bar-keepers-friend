@@ -20,20 +20,32 @@ open **Settings**, **Pause**, **Restart**, **Check for Updates**, or **Quit**.
 ### Hide or unhide an item
 
 1. Open **Settings > Items**.
-2. Choose **Shown**, **Hidden**, or **Always Hidden** for the items you want to change:
-   - **Shown** keeps the icon in the normal menu bar.
-   - **Hidden** tucks it away until you open BKF.
+2. In **Placement Preview**, drag a cached icon into the destination strip, or choose its
+   placement with the row control:
+   - **Menu Bar / Shown** keeps the icon in the normal menu bar.
+   - **Hidden Bar / Hidden** tucks it away until you open BKF.
    - **Always Hidden** keeps it out of ordinary reveals; Option-click includes it.
-3. Review the **Menu Bar** and **Hidden Bar/List** previews.
+3. Review the arrangement labeled **After Apply**, which includes saved placement requests.
 4. Choose **Apply Changes** to save your choices and move the real items. Choose **Discard**
    to abandon the unapplied placement edits.
 5. Click the BKF icon or press **⌥⌘B** to reveal hidden icons; repeat to close the bar.
-   To restore an icon permanently, select **Shown** and **Apply Changes**.
+   To restore an icon permanently, drag it to **Menu Bar** or select **Shown**, then **Apply Changes**.
 
-**Hide All / Show All** use the same draft and require Apply Changes. Previews use cached
-images: **After Apply** shows your proposed arrangement and **Last Observed** shows the latest
-loaded placement. They are schematics, not live screenshots or exact spacing previews.
-If a move fails, Settings shows the failure and offers **Retry**.
+The three stacked destination strips stay visible and horizontal, even when empty or when the
+floating bar uses a vertical list or is turned off. Drop over an icon or an empty part of the
+destination strip. Dragging stages a placement choice; it does not drag the real native menu-bar
+item or start a screen capture.
+
+Icons with **Show in bar** off remain dimmed in the editor so you can move them to another tier;
+dragging does not turn Show in bar on. Drag a name from **Placement unknown** to choose its
+placement. Group members stay group-controlled; manage them in **Advanced > Groups**. Icons
+sharing the same app identity share a placement choice.
+
+**Hide All / Show All** use the same draft and require Apply Changes. **Last Observed** shows
+the latest loaded placement. The editor uses cached glyphs or app icons, so spacing and order
+can differ from the real menu bar. Dragging changes tiers only, not order within a tier.
+The row's **Show in bar** checkbox and order arrows affect the floating bar and save immediately.
+If an applied move fails, Settings shows the failure and offers **Retry**.
 
 Placement drafts survive closing Settings within the current session, but not an app restart.
 Item nicknames save separately on Return or when you leave the field; Discard does not undo them.
@@ -82,10 +94,21 @@ The everyday pages are **General**, **Items**, **Style**, **Behavior**, and **Sh
 **Advanced** holds presets, triggers, groups, and infrequent system-wide options.
 **About** contains version and project information.
 
-Use the sidebar's **Search Settings** field to find a page or setting. Selecting a result
-briefly highlights the destination; a hidden control points to its enabling switch.
+Use the sidebar's **Search Settings** field to find a page, heading, or control. Selecting a
+result highlights the destination for three seconds. Exact labels take priority: **Permissions**
+highlights that heading, while **Permissions Accessibility** highlights the permission row.
+Try **Icons**, **Startup**, **Menu bar spacing**, **Hidden items**, **Closing the bar**, or
+**Reveal gestures** for section headings, and **Items Menu Bar**, **Hidden Bar**, or
+**Always Hidden** for the arrangement strips' headings. A hidden setting points to its enabling
+control; unavailable editor actions point to a visible heading or action. Search does not enable
+a feature or open an editor.
+The sidebar returns to its first row when the results change, including when search clears.
+Search does not scroll the destination page.
+
 **Style > Icons** changes BKF's menu-bar symbol and its artwork in Settings, About, and alerts.
-The installed Finder icon stays the same.
+The installed Finder icon stays the same. Settings keeps BKF's identity in the sidebar and
+hides the duplicate native title text. Standard close/minimize buttons and titlebar dragging
+remain available above the Settings content.
 
 For upgrades from earlier source builds: widgets have been removed from the UI and runtime.
 Legacy saved widget data is retained for compatibility but remains inactive.
@@ -160,8 +183,10 @@ If you previously launched it with Xcode Run, use **Xcode Stop** before opening 
 copy. The generated `.xcodeproj` and `DerivedData/` are ignored by Git; regenerate the project
 after source files are added or removed. Keep supplying your signing override on later builds.
 
-To reclaim build space, quit BKF before deleting `DerivedData/`: that folder contains the runnable
-app as well as build caches. The next build recreates it.
+Test result bundles, exported screenshots, and build intermediates are transient. Record needed
+verification results before cleanup, and retain `DerivedData/Build/Products/Debug/BarKeepersFriend.app`
+to keep the runnable app. Deleting all of `DerivedData/` deletes the app too; quit BKF before doing
+that. The next build recreates it.
 
 ### Run the tests
 
@@ -181,8 +206,9 @@ xcodebuild \
 
 Tests cover pure Core logic and off-screen AppKit/SwiftUI workflows using real models and
 isolated preferences, with native capture and input replaced by fakes. They do not launch
-the menu-bar agent, capture your desktop, or move your cursor. Recorded results and hardware
-verification gaps live in [PARITY.md](PARITY.md).
+the menu-bar agent, capture your desktop, or move your cursor. The **September 16, 2026 full
+build/test passed**, including the mounted Settings workflows. Counts, signature/review results,
+and remaining hardware verification gaps live in [PARITY.md](PARITY.md).
 
 ## Known limitations
 
@@ -194,6 +220,10 @@ verification gaps live in [PARITY.md](PARITY.md).
   can block later work; the queue timeout does not guarantee recovery.
 - Several features have automated coverage but still need live checks, including hover focus,
   Always Hidden placement, presets/triggers/groups, styling, spacing, and notch make-room.
+- Settings drag/drop has mounted-view workflow coverage, with the actual AppKit drag session
+  intercepted. Live drag delivery, cancellation animation, titlebar/material appearance, and
+  focus/VoiceOver still need hardware checks. Off-screen glass/sidebar rendering omissions persist;
+  passing geometry and heading-pixel checks do not establish full-window appearance.
 - Styles and presets apply across displays; per-Space/per-display choices and automatic
   updates are not yet available. Settings search does not search menu-bar items.
 
