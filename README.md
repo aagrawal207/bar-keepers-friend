@@ -7,10 +7,25 @@ Hidden icons appear in a floating bar below the menu bar, with a horizontal stri
 list to choose from. Click an icon there to open its real menu. You can also reveal hidden
 items in the menu bar itself.
 
-**Try it:** [build from source](#build-from-source). As of September 15, 2026, there are
-**no published [GitHub releases](https://github.com/aagrawal207/bar-keepers-friend/releases)**
-or ready-to-install app/DMG downloads. The app is under active development; see
-[known limitations](#known-limitations) before relying on it for every menu-bar workflow.
+**[Download v0.1.0 for macOS](https://github.com/aagrawal207/bar-keepers-friend/releases/download/v0.1.0/BarKeepersFriend-0.1.0-universal.dmg)**
+
+The DMG is Developer ID-signed and notarized, with Apple silicon and Intel binaries.
+[Release notes and checksums](https://github.com/aagrawal207/bar-keepers-friend/releases/tag/v0.1.0).
+This is an early release; see [known limitations](#known-limitations). You can also
+[build from source](#build-from-source).
+
+## Install
+
+1. Download and open the DMG. Quit any existing copy of BKF.
+2. Drag **BarKeepersFriend.app** to **Applications**, then open it from there.
+3. Find BKF in the menu bar. It has no Dock icon. Right-click its icon for **Settings**.
+4. **Settings > General** explains the optional Accessibility and Screen Recording permissions.
+
+If General still reports **Not granted** after upgrading from an earlier source-signed build,
+macOS may be retaining the old signature's permission entry. Remove the old BKF entry from
+**Privacy & Security > Accessibility** and **Screen & System Audio Recording**, add
+**`/Applications/BarKeepersFriend.app`**, enable it, then quit and reopen BKF. Its General page
+should show **Granted** for each permission you enabled.
 
 ## Everyday use
 
@@ -214,9 +229,10 @@ xcodebuild \
 
 Tests cover pure Core logic and off-screen AppKit/SwiftUI workflows using real models and
 isolated preferences, with native capture and input replaced by fakes. They do not launch
-the menu-bar agent, capture your desktop, or move your cursor. The **September 16, 2026 full
-build/test passed**, including the mounted Settings workflows. Counts, signature/review results,
-and remaining hardware verification gaps live in [PARITY.md](PARITY.md).
+the menu-bar agent, capture your desktop, or move your cursor. Before v0.1.0 publication, the full
+Release-optimized suite passed natively on arm64 and under Rosetta on x86_64, including the mounted
+Settings workflows. Counts, signature/review results, and remaining hardware verification gaps live in
+[PARITY.md](PARITY.md).
 
 ## Known limitations
 
@@ -257,8 +273,9 @@ to be evaluated against Apple's requirements at submission time.
 
 **Developer ID-signed, notarized direct distribution** is the release route for this edition.
 [Distribution/RELEASING.md](Distribution/RELEASING.md) documents archive/export, notarization, DMG
-packaging, and Gatekeeper verification using `Scripts/release.py`. Public release preparation is in
-progress. Apple's [Developer ID distribution guide](https://developer.apple.com/developer-id/)
+packaging, and Gatekeeper verification using `Scripts/release.py`. Version 0.1.0 was published on
+September 17, 2026 after app/DMG notarization and Gatekeeper validation.
+Apple's [Developer ID distribution guide](https://developer.apple.com/developer-id/)
 describes the signing model. The source-build instructions above produce a local development app.
 
 ## Feedback and contributing

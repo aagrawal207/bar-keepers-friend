@@ -69,7 +69,7 @@ The full suite for that change passed, including real-control workflows and AX g
 Settings pane. Appearance review is partial: off-screen PNGs omit sidebar/glass and some material-backed
 content. Live appearance, focus, and VoiceOver remain unverified; see the verification details below.
 
-Latest request (2026-09-16): prepare a public direct-download release using `asc`. The user selected
+Latest request (2026-09-16/17): publish a public direct-download release using `asc`. The user selected
 Developer ID-signed, notarized distribution rather than an App Store redesign. Developer ID issuance
 through the API required the Account Holder; the user created the certificate using the generated CSR.
 The matching private key and certificate are installed in Keychain, and the temporary plaintext key
@@ -79,8 +79,16 @@ entitlements/debug dylibs; the Utilities category is set. A universal Developer 
 signature and metadata checks. The full Release-optimized suite passed on arm64 and x86_64 under Rosetta:
 **1097 tests, 1827 invocations per architecture, 3654 total**, zero failures/skips. Tests require the
 command-only `ENABLE_TESTABILITY=YES` override for existing `@testable` imports. The shipping archive
-does not use that override. Notarization, final signed-app smoke checks, and publication are pending;
-do not claim a downloadable release yet. No Playwright or other harness configuration was changed.
+does not use that override. **v0.1.0 (build 1) was published on 2026-09-17** from source commit
+`f5357331f5b511ca0aa2d54510a92bdb4793907f`:
+[release](https://github.com/aagrawal207/bar-keepers-friend/releases/tag/v0.1.0).
+Apple accepted both the app and DMG with no issues; stapled tickets and Gatekeeper checks passed,
+including a fresh download of the published DMG. The installed copy at `/Applications/BarKeepersFriend.app`
+is running. After permission re-add/restart, it reports both permissions Granted, captures six real
+glyphs, displays the floating bar, and passed two native reorder/restore moves on attempt one.
+The user's current layout and preferences were preserved. The certificate transition needed renewed
+TCC grants; do not mislabel that as a capture/mover code fix. No Playwright or other harness configuration
+was changed. Release receipts and exact verification scope are recorded in `PARITY.md`.
 
 Prior request (2026-09-16): polish Items dragging and support ordering within a bar. The implementation
 adds precise insertion feedback, drag-edge scrolling, and owner-keyed order drafts alongside placement.
@@ -202,13 +210,21 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 
 - Direct-release workflow: [Distribution/RELEASING.md](Distribution/RELEASING.md). Release artifacts use
   a separate `artifacts/` directory and a Developer ID identity, preserving the local Debug app.
-- **Release verification in progress (2026-09-16):** the full optimized suite passed on both arm64 and
+- **Release verification (published 2026-09-17):** the full optimized suite passed on both arm64 and
   x86_64/Rosetta, 1097 tests and 1827 invocations per architecture (3654 total), zero failures/skips.
-  Result: `artifacts/release-tests/Release-universal.xcresult`. Existing actor-isolation/deprecated-AX
-  warnings remain; Xcode's test-only `_Testing_CoreTransferable` framework lacks an x86_64 slice and
-  produced a linker warning, but both architectures executed the full suite. A bare-metal Intel test
-  is not claimed. An initial Release test build failed because `@testable` requires
+  Result: `artifacts/release-tests/Release-universal.xcresult.zip`, retained compressed with a passing
+  archive-integrity check; extract before opening in Xcode or using `xcresulttool`. Existing
+  actor-isolation/deprecated-AX warnings remain; Xcode's test-only `_Testing_CoreTransferable` framework
+  lacks an x86_64 slice and produced a linker warning, but both architectures executed the full suite.
+  A bare-metal Intel test is not claimed. An initial Release test build failed because `@testable` requires
   `ENABLE_TESTABILITY=YES`; the documented test command supplies it without changing shipping settings.
+- **Release artifact cleanup (2026-09-17):** after recording verification, removed the dirty QA build,
+  release/test build caches, failed test result, uncompressed passing result, duplicate DMG staging/download,
+  notarization ZIP, and temporary smoke/CSR files. `artifacts/` fell from about 2.0 GiB to 535 MiB.
+  Retained the complete passing result ZIP, final DMG, release archive/dSYMs, exported app, and
+  notarization/checksum records. Full DMG/mounted-payload verification passed again after cleanup.
+  The installed release is running from Applications; its strict signature and the retained Debug
+  app's signature both passed. Local Debug `DerivedData` remains about 11 MiB.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Setup: [README source-build instructions](README.md#build-from-source) cover full Xcode.app,
@@ -217,7 +233,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Build from the repo root, with `BKF_SIGNING_IDENTITY` set as in README:
   `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -configuration Debug -destination 'platform=macOS' -derivedDataPath "$PWD/DerivedData" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$BKF_SIGNING_IDENTITY" build`
 - Test: same command with `test`.
-- **Current verified build/test (2026-09-16 local date, within-bar order and drag polish):**
+- **Prior verified build/test (2026-09-16 local date, within-bar order and drag polish):**
   `xcodebuild ... build test` passed on macOS 26.6.2 / Xcode 27.0: **1097 tests, 81 suites,
   1827 invocations**, zero failures or skips. Result: `bkf-order-full-03.xcresult` under
   `$TMPDIR/opencode` (transient). Incremental build metadata reported zero errors/warnings; the test
@@ -225,14 +241,14 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
   warnings remain. Strict signature verification passed. Manual code/security review and diff checks
   completed; no independent review or automated security scan is claimed. The three scanners remain
   unavailable. The insertion-marker PNG was inspected; broader appearance limits remain.
-- **Current limited native verification:** real AppKit drags through Settings, Apply, and four item-relative
+- **Prior within-bar native verification:** real AppKit drags through Settings, Apply, and four item-relative
   native moves passed on the built-in display, with independent frame reads. Every move used one attempt.
   Original positions, including Battery's relative position, were restored; the empty Always Hidden
   strip accepted a real Maccy drop and Discard, ending with zero pending edits. See `PARITY.md` for
   probe corrections, the system-module adjacency limitation, and the remaining native QA.
-- **Current artifact cleanup:** after recording the results, this work's temporary test bundles, exported
+- **Prior within-bar artifact cleanup:** after recording the results, this work's temporary test bundles, exported
   insertion PNG, live probe, build intermediates, and caches were removed. `DerivedData` is about 11 MB,
-  retaining the running signed app. Strict signature verification passed again after cleanup. The
+  retaining the signed Debug app. Strict signature verification passed again after cleanup. The
   `bkf-order-full-03.xcresult` reference is historical; that transient bundle is not retained.
 - **Prior verified build/test (2026-09-16 local date, initial Items drag/drop, search targeting, window chrome):**
   `xcodebuild ... build test` succeeded on macOS 26.6.2 / Xcode 27.0: **1089 tests, 80 suites**,
@@ -309,6 +325,11 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
 
 ## Built (done)
 
+- **Notarized direct-download release (2026-09-17).** Public v0.1.0 includes a universal DMG and
+  SHA-256 checksums. `Scripts/release.py` provides archive/export, resumable notarization, signed DMG
+  packaging, and mounted-payload/Gatekeeper verification; `Distribution/RELEASING.md` documents it.
+  The installed Developer ID build passed the limited live checks in `PARITY.md`. Automatic Sparkle
+  updating remains unimplemented; the existing manual latest-release check now has a public release.
 - **Cosmetic hide/show** — own anchor + (now invisible) divider `NSStatusItem`; expanding the
   divider's length pushes items left of the anchor off-screen. Zero permissions, zero private
   APIs — the unbreakable baseline. Divider width bounded `[500, 9000]` (never literal 10000).
@@ -603,8 +624,9 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   written only for resolved owners; a remembered glyph stands in on the next launch but counts as
   incomplete so this launch's own capture replaces it. `MirrorReliabilityWorkflowTests` (4 workflows)
   drives the real engine and controller over `FakeWindowServer` with a scripted screenshot closure.
-  Live: the relaunch inside the fullscreen Space logged the skip and made zero capture requests. The
-  visible-bar half (real glyphs after leaving the Space) still needs a session on a normal Space.
+  Live: the relaunch inside the fullscreen Space logged the skip and made zero capture requests.
+  The installed v0.1.0 release captured 6/6 real glyphs on the visible built-in bar after permission
+  renewal/restart. Automatic recovery after leaving fullscreen without a restart still needs evidence.
   The screen-recording indicator is permanent here because DisplayLink Manager records the screen.
 - **App icon** — a custom mark in `Sources/App/Assets.xcassets/AppIcon.appiconset` (a white
   menu-bar pill with three item dots, a left "tuck" chevron = BKF's hide control, and a cleaning
@@ -1271,8 +1293,8 @@ limitations below still apply.
     overlap tolerance at `auxiliaryTopRightArea.minX`; flicker/latency inside the 5s activation deadline.
   - Shortcuts: real Carbon registration of 1+N slots; recorder first-responder capture (Command-W
     must not close Settings while recording); item shortcut fires reveal -> click -> rehide.
-  - Restart/update: LaunchServices settle vs the single-instance guard; live GitHub check (the repo
-    has no releases yet, so it should read "No published releases").
+  - Restart/update: LaunchServices settle vs the single-instance guard and the native update-check
+    alert. The public latest-release API was verified to return v0.1.0 after publication.
   - Onboarding: live permission transitions, presentation, and VoiceOver.
 
 - **Simplified Settings and About (2026-09-15).** The prior full suite passed real-control workflows
@@ -1349,10 +1371,9 @@ limitations below still apply.
 
 ### Features not yet built (from the plan, roughly prioritized)
 
-- **Sparkle auto-update** and a **notarized DMG** (Developer ID signing). The manual GitHub check is
-  in place; release signing, Hardened Runtime validation, notarization, a signed feed, and packaging
-  remain. Read-only GitHub checks on 2026-09-15 found no releases or downloadable release assets.
-  README documents source builds with the reader's own stable signing identity.
+- **Sparkle auto-update.** The manual GitHub check and Developer ID-signed, notarized DMG are in place.
+  The signed update feed and automatic updater remain. Public v0.1.0 was released on 2026-09-17;
+  README also retains source-build instructions with the reader's own stable signing identity.
 - **A future Mac App Store edition** requires a public-API, sandboxed redesign. The current
   unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); this is not a
   claim that a redesigned edition is permanently impossible. See README's Apple source links.

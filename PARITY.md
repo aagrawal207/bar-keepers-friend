@@ -1,7 +1,7 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-16, local date (direct-release preparation; optimized tests passed on arm64 and
-x86_64/Rosetta, notarization/publication pending; prior native ordering evidence remains limited).
+Last reviewed: 2026-09-17 (v0.1.0 direct-download release published; optimized tests passed on arm64
+and x86_64/Rosetta, notarization/Gatekeeper and limited installed-app smoke checks passed).
 Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
@@ -9,10 +9,10 @@ Reference: [Bartender 6 product](https://www.macbartender.com/),
 This is a capability and verification inventory, not a claim of full Bartender feature or native
 behavior parity. The user's current priority is reliable hide/unhide, simpler Settings, and less
 manual testing. Widgets were removed at the user's request on 2026-09-15; retained advanced tools
-still run saved configurations and still need their hardware QA. The latest request adds staged ordering
-within all three Settings bars, insertion feedback, and edge scrolling during drags.
-Per-Space/per-display styles and presets and signed auto-update remain gaps. Direct-release packaging
-is in progress; no downloadable release is claimed yet.
+still run saved configurations and still need their hardware QA. Staged ordering within all three
+Settings bars, insertion feedback, and drag-edge scrolling shipped in the first direct-download release.
+Per-Space/per-display styles and presets and signed auto-update remain gaps. The signed, notarized
+v0.1.0 DMG is publicly available.
 Menu-bar search stays removed.
 
 The checklist distinguishes implementation, automated coverage, and native evidence. Passing geometry
@@ -30,7 +30,7 @@ sidebar/material-backed content; it does not establish full-window appearance.
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
 | Settings placement editor | Three always-present strips for Menu Bar, Hidden Bar, and Always Hidden; cached-icon/name drags stage placement and owner-keyed order. Insertion feedback and drag-edge scrolling guide drops. Apply uses real persistence and the serial mover; Discard clears both drafts. Real same-bar drags and a drop into the empty Always Hidden strip followed by Discard passed live | Live overflow scrolling, cancel animation, focus, and VoiceOver remain hardware QA |
 | Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
-| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; hidden-menu-bar captures are skipped; the mirror follows current positions on open and checks for refresh after close or a Space change; resolved Control Center items are excluded | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
+| Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; hidden-menu-bar captures are skipped; the mirror follows current positions on open and checks for refresh after close or a Space change; resolved Control Center items are excluded. Installed v0.1.0 captured 6/6 real glyphs after permission renewal/restart | The 09-14 fallbacks were a fullscreen Space, not timing. Automatic recovery after leaving fullscreen without a restart, external-display capture, and cold-boot compositing remain hardware QA |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
 | Item activation | Positioned click with own-connection background concealment; interruption-safe optional AX path | Universal no-flicker behavior, menu compatibility, and external-display qualification |
 | Hover reveal | Cache-only opens; optional captures revalidate after queue waits; ownership and non-key ordering tested | Native first-click delivery, focus, animation transit, display qualification, and freshness without intrusive capture |
@@ -59,7 +59,7 @@ sidebar/material-backed content; it does not establish full-window appearance.
 | About | Runtime app artwork and bundle version; explicit GitHub project, issues, and MIT license links; exact URLs verified through injected `OpenURLAction` | PNG version 16.0 is the test runner's `Bundle.main` version, not the production app's; real browser handoff and on-screen accessibility remain native QA |
 | Onboarding/login/backup | Fresh-install onboarding, live permission status, staged Apply/Discard with a cached arrangement editor; login approval feedback in General; layout import/export in Advanced | Real permission and `SMAppService` transitions; native onboarding presentation |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
-| Updates/install | Manual GitHub release check and Restart; source builds use the reader's Apple Development identity. Developer ID is installed, and a universal Hardened Runtime archive/export passed signature and metadata checks. `Scripts/release.py` defines notarization, DMG packaging, and Gatekeeper verification | Notarization, final signed-app smoke checks, and public release are pending. Sparkle/signed automatic update remains unimplemented |
+| Updates/install | Public v0.1.0 universal DMG, Developer ID-signed and notarized; stapled tickets and Gatekeeper checks passed for the app/DMG and a published-asset download. Installed-app launch, permissions, glyph capture, and limited native ordering passed. Manual update check and Restart remain available | Sparkle/signed automatic update remains unimplemented; source-build upgrades may need permission re-add/restart |
 | Mac App Store | Current unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); see [README's Apple sources](README.md#distribution-and-the-mac-app-store) | A future edition needs a public-API, sandboxed redesign and an eligibility assessment; it is not permanently ruled out |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
@@ -90,7 +90,7 @@ sidebar/material-backed content; it does not establish full-window appearance.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
 
-## Direct-Download Release Preparation (2026-09-16)
+## Direct-Download Release v0.1.0 (2026-09-17)
 
 The user selected Developer ID-signed, notarized direct distribution. The API could not issue a
 Developer ID certificate without the Account Holder; the user issued one through the Developer portal
@@ -100,21 +100,70 @@ a valid Keychain signing identity. The temporary plaintext private-key file was 
 Release-only settings enable Hardened Runtime and disable base debugger entitlements/debug dylibs.
 The app category is Utilities. The existing Debug identity and app remain separate. A universal
 Developer ID archive and export passed deep/strict signature validation, secure timestamp, entitlement,
-bundle/version, and arm64/x86_64 architecture checks. No notarization or downloadable release is claimed
-at this point. The repeatable workflow is in `Distribution/RELEASING.md`.
+bundle/version, and arm64/x86_64 architecture checks. The repeatable workflow is in
+`Distribution/RELEASING.md`. The release was published after the checks below.
 
 The full Release-optimized suite passed on macOS 26.6.2 / Xcode 27.0: **1,097 tests and 1,827 invocations
 per architecture, 3,654 invocations total**, with zero failures or skips on arm64 and x86_64 under
-Rosetta. Result: `artifacts/release-tests/Release-universal.xcresult`. An initial test build failed
-because existing `@testable` imports require `ENABLE_TESTABILITY=YES`; that override is supplied only
-to the test command, not the shipping archive. Existing actor-isolation/deprecated-AX warnings remain.
+Rosetta. The full result is retained as `artifacts/release-tests/Release-universal.xcresult.zip`;
+its archive-integrity check passed. Extract it before opening in Xcode or using `xcresulttool`.
+An initial test build failed because existing `@testable` imports require `ENABLE_TESTABILITY=YES`;
+that override is supplied only to the test command, not the shipping archive. Existing
+actor-isolation/deprecated-AX warnings remain.
 Xcode's `_Testing_CoreTransferable` test framework emitted a missing-x86_64-slice warning; both
 architectures nevertheless ran the full suite. Each recorded the existing Groups Settings QoS warning.
 Rosetta execution does not qualify bare-metal Intel behavior or the remaining native hardware cases.
 
-Release preparation adds no app metrics or telemetry. Archive/export checks and optimized workflows
-are verified; notarization, mounted-DMG checks, final signed-app smoke testing, and publication remain
-pending. Playwright and other harness configuration were not changed.
+Release preparation adds no app metrics or telemetry. Playwright and other harness configuration were
+not changed.
+
+### Published artifact and platform verification
+
+| Evidence | Result |
+|---|---|
+| Release | [v0.1.0](https://github.com/aagrawal207/bar-keepers-friend/releases/tag/v0.1.0), build 1; published 2026-09-17 14:47:50 UTC, not a draft or GitHub prerelease |
+| Source | Clean revision `f5357331f5b511ca0aa2d54510a92bdb4793907f`; the fetched `v0.1.0` tag resolves to that revision |
+| DMG | `BarKeepersFriend-0.1.0-universal.dmg`, 2,845,101 bytes; published with `SHA256SUMS` |
+| Final DMG SHA-256 | `44037773ea5ad7fafe4b32e72f2fbc33be3977131c802ca4ef3e51c7ba3772ac` |
+| App notarization | `5af6d244-632f-4653-a797-68fe96056e9a`: Accepted, status code 0, `issues: null`; app ticket stapled and validated |
+| DMG notarization | `a7aa115a-ada1-446f-ba02-3acd8acec99f`: Accepted, status code 0, `issues: null`; DMG ticket stapled and validated |
+| Gatekeeper | App execution and DMG primary-signature assessments accepted as `Notarized Developer ID`; the contained app was checked from a read-only DMG mount |
+| Published download | Downloaded with `gh release download`; checksum, strict DMG signature, stapled ticket, and Gatekeeper checks passed. An unauthenticated request to the direct DMG URL returned HTTP 200. GitHub's latest-release endpoint returns v0.1.0 |
+| Local evidence | `artifacts/v0.1.0/`: final DMG, archive/dSYMs, manifest, notarization receipts/logs, `verified.json`, and checksums |
+
+### Installed-app smoke check
+
+The exact notarized app was installed at `/Applications/BarKeepersFriend.app` and launched standalone.
+Its first launch preserved the saved preferences but could not use the old source build's TCC grants.
+System Settings showed enabled entries while the app still reported Not granted. After the entries
+were re-added and the app restarted, its General page showed Accessibility and Screen Recording Granted.
+The fresh process's TCC responses allowed both services. No TCC database edits, protection disabling,
+or app re-signing was used to resolve the mismatch.
+
+The installed release then captured **6/6 real glyphs** with no app-icon fallbacks. A real Settings drag
+and Apply moved ACME (window 84) before Maccy (54), and a second moved Maccy back before ACME. Both
+production relay gestures succeeded on attempt one and ended with no pending or failed placement.
+Independent native frame reads confirmed the user's current arrangement was restored: Maccy x=1162,
+ACME x=1194, Itsycal x=1228, Battery x=1320, Control Center x=1396, and Clock x=1438, with anchor x=1130.
+The preferences blob's SHA-256 was identical before installation and after the smoke check.
+
+After Settings closed, the diagnostic toggle showed the real floating panel (196×46 at x=966, y=26)
+and then closed it. The app remained running from Applications, with its strict signature still valid.
+This verifies the installed arm64 release on the built-in display, not bare-metal Intel, external
+displays, every third-party menu, or universal absence of cursor flicker. Earlier hardware gaps remain.
+
+### Artifact retention and cleanup
+
+After the results were recorded, the dirty QA build, release/test caches, failed test bundle,
+uncompressed passing bundle, duplicate DMG staging/download, notarization ZIP, and temporary smoke/CSR
+files were removed. `artifacts/` decreased from about 2.0 GiB to 535 MiB, retaining the complete passing
+test-result ZIP, final DMG, release archive/dSYMs, exported app, manifests, and notarization receipts.
+The signing identity remains in Keychain; the temporary plaintext private key had already been removed.
+
+The full release verifier passed again after cleanup, including the mounted app, stapled tickets,
+and Gatekeeper assessments. Strict signatures passed for the running Applications copy and the
+retained Debug app. Debug `DerivedData` remains about 11 MiB. This cleanup did not rebuild or replace
+the published artifact.
 
 ## Within-Bar Order And Drag Polish (2026-09-16)
 
@@ -494,12 +543,12 @@ zero failures or skips. Strict code signature verification passed for that build
 | Resolved Control Center module excluded from mirror and Settings; unresolved blanket-label item kept | `MirrorReliabilityWorkflowTests` | Functional workflow |
 | Relaunch with new window ids and a hidden bar shows remembered glyphs, not app icons; a damaged file falls back; a newcomer falls back; this launch's capture replaces every remembered glyph and rewrites the damaged file | `MirrorReliabilityWorkflowTests` with `GlyphStore` in a temporary directory | Functional workflow |
 
-Live verification so far: the relaunched app logged `capture: menu bar hidden; skipping reveal` on
-its warm-up while the user's fullscreen Space was active and made no ScreenCaptureKit request. The
-visible-bar half (`isOnScreen == true`, real glyphs after leaving the Space) is confirmed only by the
-window-list semantics Ice relies on and still needs a session on a normal Space. A rapid relaunch
-also resolved the previous instance's lingering control windows once and left placement pending;
-it recovers on the next resume and is not part of this fix.
+Live verification: the relaunched app logged `capture: menu bar hidden; skipping reveal` on its
+warm-up while the user's fullscreen Space was active and made no ScreenCaptureKit request. The
+installed v0.1.0 release later captured 6/6 real glyphs on the visible built-in bar after permission
+renewal/restart. Automatic recovery after leaving fullscreen without restarting remains unverified.
+A rapid relaunch also resolved the previous instance's lingering control windows once and left
+placement pending; it recovers on the next resume and is not part of this fix.
 
 ### Settings Split And Icon Verification
 
