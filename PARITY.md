@@ -1,7 +1,7 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-16, local date (within-bar order and Items drag polish; full suite passed,
-with limited live drag/ordering verification on the built-in display).
+Last reviewed: 2026-09-16, local date (direct-release preparation; optimized tests passed on arm64 and
+x86_64/Rosetta, notarization/publication pending; prior native ordering evidence remains limited).
 Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
@@ -11,7 +11,8 @@ behavior parity. The user's current priority is reliable hide/unhide, simpler Se
 manual testing. Widgets were removed at the user's request on 2026-09-15; retained advanced tools
 still run saved configurations and still need their hardware QA. The latest request adds staged ordering
 within all three Settings bars, insertion feedback, and edge scrolling during drags.
-Per-Space/per-display styles and presets, signed auto-update, and release packaging remain gaps.
+Per-Space/per-display styles and presets and signed auto-update remain gaps. Direct-release packaging
+is in progress; no downloadable release is claimed yet.
 Menu-bar search stays removed.
 
 The checklist distinguishes implementation, automated coverage, and native evidence. Passing geometry
@@ -58,7 +59,7 @@ sidebar/material-backed content; it does not establish full-window appearance.
 | About | Runtime app artwork and bundle version; explicit GitHub project, issues, and MIT license links; exact URLs verified through injected `OpenURLAction` | PNG version 16.0 is the test runner's `Bundle.main` version, not the production app's; real browser handoff and on-screen accessibility remain native QA |
 | Onboarding/login/backup | Fresh-install onboarding, live permission status, staged Apply/Discard with a cached arrangement editor; login approval feedback in General; layout import/export in Advanced | Real permission and `SMAppService` transitions; native onboarding presentation |
 | BKF icons | Menu-bar symbol (5 SF Symbols) and app-icon theme (5 gradients on the shipped mark) chosen in Style > Icons; persisted leniently; applied to the anchor, Settings header, About, and alerts without re-signing the bundle | Live anchor appearance and pop-up rendering; the Finder icon is deliberately not changed |
-| Updates/install | Manual GitHub release check and Restart in the anchor menu; [README source build](README.md#build-from-source) uses the reader's own stable Apple Development identity. Read-only GitHub checks on 2026-09-15 found no releases or downloadable release assets | Signed update feed (Sparkle), Developer ID signing, Hardened Runtime validation, notarization, and packaging |
+| Updates/install | Manual GitHub release check and Restart; source builds use the reader's Apple Development identity. Developer ID is installed, and a universal Hardened Runtime archive/export passed signature and metadata checks. `Scripts/release.py` defines notarization, DMG packaging, and Gatekeeper verification | Notarization, final signed-app smoke checks, and public release are pending. Sparkle/signed automatic update remains unimplemented |
 | Mac App Store | Current unsandboxed/private-API architecture conflicts with App Review 2.5.1 and 2.4.5(i); see [README's Apple sources](README.md#distribution-and-the-mac-app-store) | A future edition needs a public-API, sandboxed redesign and an eligibility assessment; it is not permanently ruled out |
 | Capture privacy | Whole-display acquisition followed by local icon cropping | Qualify a narrower acquisition path; do not claim menu-bar-only acquisition today |
 
@@ -88,6 +89,32 @@ sidebar/material-backed content; it does not establish full-window appearance.
 - Never race a new native operation past an unfinished one merely to make a timeout appear fixed.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
+
+## Direct-Download Release Preparation (2026-09-16)
+
+The user selected Developer ID-signed, notarized direct distribution. The API could not issue a
+Developer ID certificate without the Account Holder; the user issued one through the Developer portal
+using the generated CSR. Its public-key digest matched the CSR, and the certificate/private key form
+a valid Keychain signing identity. The temporary plaintext private-key file was removed.
+
+Release-only settings enable Hardened Runtime and disable base debugger entitlements/debug dylibs.
+The app category is Utilities. The existing Debug identity and app remain separate. A universal
+Developer ID archive and export passed deep/strict signature validation, secure timestamp, entitlement,
+bundle/version, and arm64/x86_64 architecture checks. No notarization or downloadable release is claimed
+at this point. The repeatable workflow is in `Distribution/RELEASING.md`.
+
+The full Release-optimized suite passed on macOS 26.6.2 / Xcode 27.0: **1,097 tests and 1,827 invocations
+per architecture, 3,654 invocations total**, with zero failures or skips on arm64 and x86_64 under
+Rosetta. Result: `artifacts/release-tests/Release-universal.xcresult`. An initial test build failed
+because existing `@testable` imports require `ENABLE_TESTABILITY=YES`; that override is supplied only
+to the test command, not the shipping archive. Existing actor-isolation/deprecated-AX warnings remain.
+Xcode's `_Testing_CoreTransferable` test framework emitted a missing-x86_64-slice warning; both
+architectures nevertheless ran the full suite. Each recorded the existing Groups Settings QoS warning.
+Rosetta execution does not qualify bare-metal Intel behavior or the remaining native hardware cases.
+
+Release preparation adds no app metrics or telemetry. Archive/export checks and optimized workflows
+are verified; notarization, mounted-DMG checks, final signed-app smoke testing, and publication remain
+pending. Playwright and other harness configuration were not changed.
 
 ## Within-Bar Order And Drag Polish (2026-09-16)
 

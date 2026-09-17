@@ -69,7 +69,20 @@ The full suite for that change passed, including real-control workflows and AX g
 Settings pane. Appearance review is partial: off-screen PNGs omit sidebar/glass and some material-backed
 content. Live appearance, focus, and VoiceOver remain unverified; see the verification details below.
 
-Latest request (2026-09-16): polish Items dragging and support ordering within a bar. The implementation
+Latest request (2026-09-16): prepare a public direct-download release using `asc`. The user selected
+Developer ID-signed, notarized distribution rather than an App Store redesign. Developer ID issuance
+through the API required the Account Holder; the user created the certificate using the generated CSR.
+The matching private key and certificate are installed in Keychain, and the temporary plaintext key
+was removed. `Scripts/release.py` and `Distribution/RELEASING.md` define archive/export, notarization,
+DMG packaging, and Gatekeeper verification. Release enables Hardened Runtime and excludes debugger
+entitlements/debug dylibs; the Utilities category is set. A universal Developer ID archive/export passed
+signature and metadata checks. The full Release-optimized suite passed on arm64 and x86_64 under Rosetta:
+**1097 tests, 1827 invocations per architecture, 3654 total**, zero failures/skips. Tests require the
+command-only `ENABLE_TESTABILITY=YES` override for existing `@testable` imports. The shipping archive
+does not use that override. Notarization, final signed-app smoke checks, and publication are pending;
+do not claim a downloadable release yet. No Playwright or other harness configuration was changed.
+
+Prior request (2026-09-16): polish Items dragging and support ordering within a bar. The implementation
 adds precise insertion feedback, drag-edge scrolling, and owner-keyed order drafts alongside placement.
 Apply/Discard include order arrows and drag reorders. Hidden/Always Hidden order uses existing
 `barOrder` persistence in floating-bar mode; Menu Bar order and hidden-tier order in reflow mode use
@@ -187,6 +200,15 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 
 ## Build / test / run
 
+- Direct-release workflow: [Distribution/RELEASING.md](Distribution/RELEASING.md). Release artifacts use
+  a separate `artifacts/` directory and a Developer ID identity, preserving the local Debug app.
+- **Release verification in progress (2026-09-16):** the full optimized suite passed on both arm64 and
+  x86_64/Rosetta, 1097 tests and 1827 invocations per architecture (3654 total), zero failures/skips.
+  Result: `artifacts/release-tests/Release-universal.xcresult`. Existing actor-isolation/deprecated-AX
+  warnings remain; Xcode's test-only `_Testing_CoreTransferable` framework lacks an x86_64 slice and
+  produced a linker warning, but both architectures executed the full suite. A bare-metal Intel test
+  is not claimed. An initial Release test build failed because `@testable` requires
+  `ENABLE_TESTABILITY=YES`; the documented test command supplies it without changing shipping settings.
 - Generate project after adding/removing files: `xcodegen generate` (the `.xcodeproj` is
   gitignored — `project.yml` is the source of truth).
 - Setup: [README source-build instructions](README.md#build-from-source) cover full Xcode.app,

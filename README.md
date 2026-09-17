@@ -255,10 +255,11 @@ A future Mac App Store edition would need a redesign around supported public API
 Sandbox restrictions, potentially with a different feature set. Its eligibility would need
 to be evaluated against Apple's requirements at submission time.
 
-**Developer ID-signed, notarized direct distribution** is the realistic planned route for
-this edition. It still needs release signing, Hardened Runtime validation, notarization, and
-installer work. Apple's [Developer ID distribution guide](https://developer.apple.com/developer-id/)
-describes that process. The source-build instructions above produce a local development app.
+**Developer ID-signed, notarized direct distribution** is the release route for this edition.
+[Distribution/RELEASING.md](Distribution/RELEASING.md) documents archive/export, notarization, DMG
+packaging, and Gatekeeper verification using `Scripts/release.py`. Public release preparation is in
+progress. Apple's [Developer ID distribution guide](https://developer.apple.com/developer-id/)
+describes the signing model. The source-build instructions above produce a local development app.
 
 ## Feedback and contributing
 

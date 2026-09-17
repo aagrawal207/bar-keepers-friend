@@ -1,0 +1,23 @@
+Bar Keeper's Friend
+
+Requires macOS 26 (Tahoe). Includes Apple silicon and Intel binaries.
+
+1. Quit any running copy of Bar Keeper's Friend.
+2. Drag BarKeepersFriend.app to Applications.
+3. Open Bar Keeper's Friend from Applications, then eject this disk image.
+
+The app lives in the menu bar and has no Dock icon. Right-click its icon for
+Settings. In Settings > Items, drag icons between bars or reorder them, then
+choose Apply Changes. Option-Command-B reveals hidden items.
+
+Basic in-place hiding needs no permissions. Settings > General explains the
+optional Accessibility and Screen Recording permissions. macOS may require
+re-approval when replacing an earlier source-signed build.
+
+Help and known limitations:
+https://github.com/aagrawal207/bar-keepers-friend#readme
+
+Report a problem:
+https://github.com/aagrawal207/bar-keepers-friend/issues
+
+MIT license. See LICENSE.txt.
