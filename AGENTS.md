@@ -69,7 +69,20 @@ The full suite for that change passed, including real-control workflows and AX g
 Settings pane. Appearance review is partial: off-screen PNGs omit sidebar/glass and some material-backed
 content. Live appearance, focus, and VoiceOver remain unverified; see the verification details below.
 
-Latest request (2026-09-15): drag items between **Menu Bar, Hidden Bar, and Always Hidden** in
+Latest request (2026-09-16): polish Items dragging and support ordering within a bar. The implementation
+adds precise insertion feedback, drag-edge scrolling, and owner-keyed order drafts alongside placement.
+Apply/Discard include order arrows and drag reorders. Hidden/Always Hidden order uses existing
+`barOrder` persistence in floating-bar mode; Menu Bar order and hidden-tier order in reflow mode use
+one-shot, serialized native requests. No persistence key or attribution label changed. Six added
+Settings workflows cover order and lifecycle behavior; the planner checks all 720 six-item permutations.
+The full suite passed: **1097 tests, 81 suites, 1827 invocations**. After the user unlocked and showed
+the menu bar, real Settings drags and four native Menu Bar reorder moves passed on the built-in display,
+each native move on attempt one. The original full layout was restored. Ordering covers manageable
+items, not exact adjacency around omitted system modules; an after-Maccy drop crossed Battery and was
+restored with two before-drops. Native hidden-tier ordering, other displays, and pointer/focus/VoiceOver
+remain unverified. See `PARITY.md` for the exact scope.
+
+Prior request (2026-09-15): drag items between **Menu Bar, Hidden Bar, and Always Hidden** in
 Settings; highlight the correct headings/controls after search; hide the native top-bar title
 "Bar Keeper's Friend". The implementation uses three always-present horizontal destination strips,
 the existing owner-keyed placement draft, an explicit shared search index, and transparent native
@@ -93,8 +106,9 @@ focus, VoiceOver, native menus, movement, or capture.
 The drag workflows mount the real Settings views and hit-test sources/destinations. Constructed mouse
 events go directly to source handlers and are never posted; the native `beginDraggingSession` boundary
 is intercepted. A unique pasteboard and fake `NSDraggingInfo` replace AppKit transport, while the real
-model, isolated store, and engine exercise staging and Apply. Actual drag-session delivery and cancel
-animation remain hardware QA. Current coverage and final results are in `PARITY.md`.
+model, isolated store, and engine exercise staging and Apply. A separate live session verified actual
+same-bar drags and an empty-strip drop/Discard; live overflow/cancel animation remain hardware QA.
+Current coverage and final results are in `PARITY.md`.
 Configured-window tests must pass the scoped `configureWindow` hook before the first window-backed
 render and compare window-relative rectangles. Search readiness requires the complete expected
 highlight-region set within two seconds, before the three-second cue expires; retained native Form
@@ -181,24 +195,41 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
 - Build from the repo root, with `BKF_SIGNING_IDENTITY` set as in README:
   `xcodebuild -project BarKeepersFriend.xcodeproj -scheme BarKeepersFriend -configuration Debug -destination 'platform=macOS' -derivedDataPath "$PWD/DerivedData" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$BKF_SIGNING_IDENTITY" build`
 - Test: same command with `test`.
-- **Current verified build/test (2026-09-16 local date, Items drag/drop, search targeting, window chrome):**
+- **Current verified build/test (2026-09-16 local date, within-bar order and drag polish):**
+  `xcodebuild ... build test` passed on macOS 26.6.2 / Xcode 27.0: **1097 tests, 81 suites,
+  1827 invocations**, zero failures or skips. Result: `bkf-order-full-03.xcresult` under
+  `$TMPDIR/opencode` (transient). Incremental build metadata reported zero errors/warnings; the test
+  result had one existing QoS warning in `GroupsSettingsTabTests`. Full-compilation actor-isolation
+  warnings remain. Strict signature verification passed. Manual code/security review and diff checks
+  completed; no independent review or automated security scan is claimed. The three scanners remain
+  unavailable. The insertion-marker PNG was inspected; broader appearance limits remain.
+- **Current limited native verification:** real AppKit drags through Settings, Apply, and four item-relative
+  native moves passed on the built-in display, with independent frame reads. Every move used one attempt.
+  Original positions, including Battery's relative position, were restored; the empty Always Hidden
+  strip accepted a real Maccy drop and Discard, ending with zero pending edits. See `PARITY.md` for
+  probe corrections, the system-module adjacency limitation, and the remaining native QA.
+- **Current artifact cleanup:** after recording the results, this work's temporary test bundles, exported
+  insertion PNG, live probe, build intermediates, and caches were removed. `DerivedData` is about 11 MB,
+  retaining the running signed app. Strict signature verification passed again after cleanup. The
+  `bkf-order-full-03.xcresult` reference is historical; that transient bundle is not retained.
+- **Prior verified build/test (2026-09-16 local date, initial Items drag/drop, search targeting, window chrome):**
   `xcodebuild ... build test` succeeded on macOS 26.6.2 / Xcode 27.0: **1089 tests, 80 suites**,
   **1816 invocations**, zero failures or skips. The run includes all six drag directions with the
   floating bar both enabled and disabled. Result reference: `bkf-placement-drag-full-04.xcresult`
   under `$TMPDIR/opencode` (transient). `xcresulttool get build-results` reported `status: succeeded`,
   `errorCount: 0`, and eight pre-existing actor-isolation warnings in untouched
   `FloatingBarController.swift`. `PARITY.md` records the final command options and evidence scope.
-- **Current signature:** `codesign --verify --deep --strict` passed on
+- **Signature for that baseline:** `codesign --verify --deep --strict` passed on
   `DerivedData/Build/Products/Debug/BarKeepersFriend.app`.
-- **Current review:** `git diff --check` and `git diff --cached --check` were clean. The read-only
+- **Review for that baseline:** `git diff --check` and `git diff --cached --check` were clean. The read-only
   general reviewer, initially in a fresh context with follow-up reviews, **APPROVED** after fixes for
   trigger-editor cross-mode targets, empty-group membership targeting, and successful rename clearing
   prior validation. No different-model review was performed for this change; the dedicated-agent
   authentication failure below belongs to the historical baseline.
-- **Current security:** manual security review completed. Automated scanner unavailability was
+- **Security for that baseline:** manual security review completed. Automated scanner unavailability was
   reconfirmed in the unchanged environment (`scan_diff`, `semgrep`, and `gitleaks`); no automated
   security scan ran.
-- **Current appearance evidence:** light/dark heading-pixel checks and real-control/AX geometry
+- **Appearance evidence for that baseline:** light/dark heading-pixel checks and real-control/AX geometry
   passed, including native sidebar row counts, full visibility, selection, configured-window controls,
   and the expanded Advanced footer. The footer fits with about 5pt remaining. No new full-window
   visual inspection is claimed; `cacheDisplay` still omits glass/sidebar and some material-backed content.
@@ -220,7 +251,7 @@ the floating-bar controller accepts injectable capture, attribution, and AX acti
   2026-09-15, macOS 26.6.2 / Xcode 27.0, **1112 tests, 81 suites**, 1819 invocations including
   parameterized cases, zero failures or skipped tests. That built app also passed
   `codesign --verify --deep --strict`. These are not counts or verification of the current changes.
-- **Artifact cleanup (2026-09-16):** completed after recording the results above and in `PARITY.md`.
+- **Prior artifact cleanup (2026-09-16, initial drag/search/chrome work):** completed after recording the results above and in `PARITY.md`.
   This work's temporary test bundles, exported PNGs, diagnostic probes, build caches, and intermediates
   were removed. `DerivedData` is about 11 MB, retaining `Build/Products/Debug/BarKeepersFriend.app`;
   its strict signature verification passed again after cleanup. Result-bundle references are historical;
@@ -373,18 +404,41 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
   tests covered actual controls, cached pixels, overflow, aliases, unknown placement, and window fit
   with read/placement errors. Current useful Settings content is 820x720 below native chrome. Test
   windows never order on screen; pointer/VoiceOver feel and external-display placement remain native QA.
-- **Items drag-and-drop arrangement (implemented 2026-09-15; hostless verification passed 2026-09-16).**
+- **Within-bar ordering and drag polish (2026-09-16; full suite + limited native verification passed).**
+  The editor accepts same-tier drops and shows an insertion line over glyphs or empty strip space.
+  Its registered `NSView` container owns the SwiftUI host and a separate, noninteractive AppKit marker.
+  This avoids adding unsupported subviews directly to `NSHostingView`. A drag image is centered at the
+  pointer; the source and owner siblings dim. AppKit periodic drag updates scroll crowded strips at
+  their edges. No standalone scrolling timer is installed. A same-position drop succeeds without a draft.
+  Source window and source-owned token checks reject wrong-window and substituted-source payloads.
+  `ItemOrderDraft` stages owner-keyed ordering; siblings share a slot. Reversals and membership changes
+  clear redundant order edits. Order survives fresh native window IDs. Apply persists hidden-tier order
+  through existing `barOrder` keys; the arrows also stage. Show in bar and names still save independently.
+  Menu Bar order, and hidden-tier order with the floating bar off, use an ephemeral order request on the
+  existing serialized placement chain. Combined placement/order Apply uses one write and one pass.
+  Order-only Apply leaves observed tiers alone and reports any pre-existing unmet placement separately.
+  `ItemOrderPlanner` keeps a longest increasing subsequence and moves the remaining items across a live
+  reference. The reference is deliberately on the wrong side: the existing native mover can return early
+  for an item already on the requested side without establishing adjacency. The controller checks both
+  the full-edge tier membership and final order, with a fixed gesture budget and fresh reads between moves.
+  Pause, interruption, and failures retain native order for retry in this session; successful tiers clear
+  individually. Import or a replacement saved arrangement supersedes the request. Native order is not a
+  new persisted policy and is not continuously enforced. After unlock, real Settings drags, four native
+  Menu Bar reorder moves, and an empty-strip drop/Discard passed. All native moves succeeded on attempt
+  one, and the original full layout was restored. Exact adjacency around omitted system modules is not
+  guaranteed. Workflow names, metrics/logging scope, and remaining evidence are recorded in `PARITY.md`.
+- **Initial Items drag-and-drop arrangement (implemented 2026-09-15; hostless verification passed 2026-09-16).**
   `SettingsPlacementPreview` always shows three stacked horizontal destination strips: Menu Bar,
   Hidden Bar, Always Hidden. Empty strips remain drop targets, including with a vertical floating
   list or the floating bar disabled. Cached glyphs and unknown-placement names have an AppKit
-  `SettingsPlacementDragSourceView`; the containing `SettingsPlacementDropView` is an `NSHostingView`
+  `SettingsPlacementDragSourceView`; the initial `SettingsPlacementDropView` was an `NSHostingView`
   registered for drops, so both glyphs and empty areas resolve to the destination ancestor.
   A custom pasteboard type carries only an opaque one-use UUID nonce, never owner keys or aliases.
   External/wrong-model sources and non-move masks are rejected before reading the pasteboard;
   malformed, stale, replayed, and same-tier payloads are rejected. The source's outside-application
   operation mask is empty. A valid drop calls the existing owner-keyed draft setter; siblings sharing
   an owner follow the choice. Apply persists once and uses the existing serial mover; Discard clears
-  the draft. There is no within-tier drag reorder or direct native menu-bar drag from this gesture.
+  the draft. That version changed tiers only; the within-tier ordering extension is described above.
   Grouped items remain group-controlled, keyless sources cannot drag, and unknown placement remains
   selectable. Suppressed glyphs stay reachable and dimmed in the editor without enabling Show in bar.
   The existing filtered `placementPreview` property is preserved; the editable UI explicitly calls
@@ -574,7 +628,7 @@ Run the app **standalone**, not via Xcode Run — an Xcode-launched process is p
     Option-click reveals both tiers (reflow) or appends an "Always hidden" group to the floating bar.
     Only intent-backed owners live in the tier; a stray item that physically lands past the divider
     is mirrored as plain hidden. Planner output is byte-identical without the divider. Items rows use
-    a three-segment picker plus Show-in-bar and bar-order controls (presentation-only, immediate).
+    a three-segment picker plus Show-in-bar (immediate) and bar-order controls (staged until Apply).
   - **Live layout mode**: shipped 2026-09-12, removed 2026-09-15 (see Removed). Placement applies at
     launch (floating-bar mode), on Apply Changes/Retry, on preset/trigger/import intent changes, on
     display change (floating-bar mode), on unpause, and through `resumePendingPlacement`.
@@ -1209,11 +1263,13 @@ limitations below still apply.
 - **Staged Settings interaction.** Off-screen tests exercise Apply/Discard/bulk controls, edited
   aliases across regrouping, editor overflow, and window bounds. The new mounted drag workflows
   hit-test real sources and destination ancestors, but intercept `beginDraggingSession` and use
-  unposted events plus fake `NSDraggingInfo`. Actual AppKit session event delivery, cancel animation,
+  unposted events plus fake `NSDraggingInfo`. Separate live checks verified same-bar session delivery,
+  an empty-strip drop/Discard, and four Menu Bar reorder moves. Live overflow/cancel animation,
   pointer/keyboard focus, and VoiceOver remain unverified. Configured-window geometry and heading
   pixel checks do not qualify live titlebar/material appearance. The `cacheDisplay` glass/sidebar
   omissions persist; no fresh full-window appearance claim is made. The schematic cannot qualify
-  exact native ordering, spacing, or external-display moves.
+  exact spacing or external-display moves. Order covers manageable items; adjacency around omitted
+  system modules is not guaranteed. Native ordering within hidden tiers still needs evidence.
 - **Cursor concealment and Itsycal on external displays.** Repeat moves/activation on the failing
   external layout while unlocked, observe actual cursor visibility throughout the gesture, and verify
   both native representations and menu position. Capability flags, sampled endpoints, and fake relay

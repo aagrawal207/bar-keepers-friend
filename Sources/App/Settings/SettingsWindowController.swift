@@ -15,6 +15,7 @@ final class SettingsWindowController {
         loginItem: any LoginItemManaging,
         itemsProvider: @escaping () async throws -> [FloatingBarItem],
         onRetryPlacement: @escaping () -> Void = {},
+        onStageItemOrder: @escaping ([ItemPlacement: [String]], ItemControlStore, Bool) -> Void = { _, _, _ in },
         makeWindow: @escaping @MainActor (SettingsView) -> NSWindow = {
             NSWindow(contentViewController: NSHostingController(rootView: $0))
         },
@@ -26,6 +27,7 @@ final class SettingsWindowController {
             loginItem: loginItem,
             itemsProvider: itemsProvider,
             onRetryPlacement: onRetryPlacement,
+            onStageItemOrder: onStageItemOrder,
             onChange: onChange
         )
     }
@@ -70,10 +72,16 @@ final class SettingsWindowController {
 final class SettingsModel {
     var preferences: Preferences {
         didSet {
-            if oldValue.itemGroups != preferences.itemGroups || !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls) {
+            let placementChanged = !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls)
+            let orderChanged = oldValue.itemControls.barOrder != preferences.itemControls.barOrder
+            if oldValue.itemGroups != preferences.itemGroups || placementChanged || orderChanged {
                 placementDrag = nil
+                if !orderDraft.isEmpty {
+                    draftDiscardedNotice = "Your pending order edits were discarded because the saved arrangement changed."
+                }
+                orderDraft = ItemOrderDraft()
             }
-            if !oldValue.itemControls.hasSamePlacementIntent(as: preferences.itemControls) {
+            if placementChanged {
                 // A draft is relative to the arrangement that just changed underneath it.
                 if !placementDraft.isEmpty {
                     draftDiscardedNotice = "Your pending placement edits were discarded because the saved arrangement changed (a preset or trigger applied)."
@@ -86,6 +94,7 @@ final class SettingsModel {
 
     private let loginItem: any LoginItemManaging
     private let onRetryPlacement: () -> Void
+    private let onStageItemOrder: ([ItemPlacement: [String]], ItemControlStore, Bool) -> Void
     private let onChange: (Preferences) -> Void
     /// Supplies every manageable menu bar item (both shown and hidden) so the Items tab can list
     /// everything the user might want to toggle. Async because it enumerates + attributes the live
@@ -97,6 +106,7 @@ final class SettingsModel {
         loginItem: any LoginItemManaging,
         itemsProvider: @escaping () async throws -> [FloatingBarItem],
         onRetryPlacement: @escaping () -> Void = {},
+        onStageItemOrder: @escaping ([ItemPlacement: [String]], ItemControlStore, Bool) -> Void = { _, _, _ in },
         onChange: @escaping (Preferences) -> Void
     ) {
         self.preferences = preferences
@@ -104,6 +114,7 @@ final class SettingsModel {
         self.loginItemStatus = loginItem.status
         self.itemsProvider = itemsProvider
         self.onRetryPlacement = onRetryPlacement
+        self.onStageItemOrder = onStageItemOrder
         self.onChange = onChange
     }
 
@@ -201,6 +212,8 @@ final class SettingsModel {
     private(set) var itemsLoadError: String? = nil
     @ObservationIgnored private var itemsLoadGeneration: UInt64 = 0
     private var placementDraft = ItemPlacementDraft()
+    private var orderDraft = ItemOrderDraft()
+    private var applyingOrder = ItemOrderDraft()
     private struct PlacementDrag {
         let token: UUID
         let windowID: CGWindowID
@@ -209,7 +222,13 @@ final class SettingsModel {
     }
     private var placementDrag: PlacementDrag?
     var isDraggingPlacementItem: Bool { placementDrag != nil }
-    var placementInProgress = false
+    func isDraggingPlacement(_ item: FloatingBarItem) -> Bool {
+        placementDrag?.ownerKey == ItemControlStore.key(for: item.snapshot) && placementDrag != nil
+    }
+    var placementInProgress = false {
+        didSet { if !placementInProgress { applyingOrder = ItemOrderDraft() } }
+    }
+    var placementIncludesTierChanges = true
     var placementMessage: String? = nil
     var placementFailed = false
     var placementPending = false
@@ -227,14 +246,15 @@ final class SettingsModel {
         ItemGroupLibrary.effectiveControls(groups: preferences.itemGroups, base: preferences.itemControls)
     }
 
-    var hasPendingChanges: Bool { !placementDraft.isEmpty }
+    var hasPendingPlacementChanges: Bool { !placementDraft.isEmpty }
+    var hasPendingChanges: Bool { hasPendingPlacementChanges || !orderDraft.isEmpty }
 
     /// Grouped owners are placed by their group, so the Items tab must not offer them a choice.
     func group(containing item: FloatingBarItem) -> ItemGroup? {
         guard let key = ItemControlStore.key(for: item.snapshot) else { return nil }
         return ItemGroupLibrary.group(containing: key, in: preferences.itemGroups)
     }
-    var pendingChangeCount: Int { placementDraft.count }
+    var pendingChangeCount: Int { placementDraft.ownerKeys.union(orderDraft.ownerKeys).count }
 
     func reloadItems() async {
         guard !Task.isCancelled else { return }
@@ -270,14 +290,16 @@ final class SettingsModel {
             case .alwaysHidden: alwaysHidden.append(item)
             }
         }
-        return (hidden, shown, alwaysHidden)
+        return (orderedPreviewItems(hidden, in: .hidden, includingSuppressed: true),
+                orderedPreviewItems(shown, in: .shown, includingSuppressed: true),
+                orderedPreviewItems(alwaysHidden, in: .alwaysHidden, includingSuppressed: true))
     }
 
     /// Pending placement can display intent, but an observed failure must remain actionable.
     func placement(of item: FloatingBarItem) -> ItemPlacement {
         if let staged = placementDraft.placement(for: item.snapshot) { return staged }
         let controls = effectiveControls
-        if placementInProgress, let requested = controls.placement(for: item.snapshot) {
+        if placementInProgress, placementIncludesTierChanges, let requested = controls.placement(for: item.snapshot) {
             return requested
         }
         return item.observedPlacement ?? controls.placement(for: item.snapshot) ?? .shown
@@ -290,6 +312,7 @@ final class SettingsModel {
 
     func hasPendingChange(for item: FloatingBarItem) -> Bool {
         placementDraft.placement(for: item.snapshot) != nil
+            || ItemControlStore.key(for: item.snapshot).map { orderDraft.ownerKeys.contains($0) } == true
     }
 
     func setHidden(_ hidden: Bool, for item: FloatingBarItem) {
@@ -313,6 +336,9 @@ final class SettingsModel {
         placementDrag = nil
         draftDiscardedNotice = nil
         placementDraft = draftSettingPlacement(placement, forAll: items)
+        for tier in ItemPlacement.allCases {
+            orderDraft.reconcileMembership(in: tier, baseline: previewItems(in: tier, includingOrderDraft: false).map(\.snapshot))
+        }
     }
 
     func canSetPlacement(_ placement: ItemPlacement, forAll items: [FloatingBarItem]) -> Bool {
@@ -367,21 +393,30 @@ final class SettingsModel {
     }
 
     @discardableResult
-    func dropPlacement(_ token: UUID, into destination: ItemPlacement) -> Bool {
+    func dropPlacement(_ token: UUID, into destination: ItemPlacement, before windowID: CGWindowID? = nil) -> Bool {
         guard let item = placementDragItem(token, into: destination) else { return false }
-        setPlacement(destination, for: item)
+        let target = windowID.flatMap { id in previewItems(in: destination).first { $0.id == id } }
+        guard windowID == nil || target != nil else { return false }
+        let nextOwner = target.flatMap { ItemControlStore.key(for: $0.snapshot) }
+        guard target == nil || nextOwner != nil else { return false }
+        let changesTier = placementDrag?.source != destination
+        if changesTier { setPlacement(destination, for: item) }
+        stageOrder(item, before: nextOwner, in: destination,
+                   ensurePosition: changesTier && placementDraft.placement(for: item.snapshot) != nil)
+        placementDrag = nil
         return true
     }
 
     private func placementDragItem(_ token: UUID, into destination: ItemPlacement) -> FloatingBarItem? {
-        guard let drag = placementDrag, drag.token == token, drag.source != destination,
+        guard let drag = placementDrag, drag.token == token,
               let item = loadedItems.first(where: { $0.id == drag.windowID }),
               ItemControlStore.key(for: item.snapshot) == drag.ownerKey,
-              canDragPlacement(of: item, from: drag.source), canSetPlacement(destination, forAll: [item]) else { return nil }
+              canDragPlacement(of: item, from: drag.source),
+              drag.source == destination || canSetPlacement(destination, forAll: [item]) else { return nil }
         return item
     }
 
-    // MARK: - Floating-bar presentation (saved immediately, never staged)
+    // MARK: - Visibility and staged order
 
     /// Whether the floating bar draws this item; suppression never affects menu-bar placement.
     func isShownInBar(_ item: FloatingBarItem) -> Bool {
@@ -395,30 +430,51 @@ final class SettingsModel {
 
     /// Bar order is per tier: a row can only trade places with rows shown in the same section.
     func canMoveInBar(_ item: FloatingBarItem, _ step: ItemControlStore.BarOrderStep) -> Bool {
-        guard placement(of: item) != .shown else { return false }
-        return preferences.itemControls.canMoveInBar(item.snapshot, step, among: barSection(of: item))
+        orderNeighbor(of: item, step: step) != nil
     }
 
     func moveInBar(_ item: FloatingBarItem, _ step: ItemControlStore.BarOrderStep) {
-        guard canMoveInBar(item, step) else { return }
-        // One nested mutation is one preferences write, matching the other presentation edits.
-        preferences.itemControls.moveInBar(item.snapshot, step, among: barSection(of: item))
+        guard let destination = orderNeighbor(of: item, step: step) else { return }
+        placementDrag = nil
+        stageOrder(item, before: destination.before, in: destination.placement)
     }
 
-    private func barSection(of item: FloatingBarItem) -> [MenuBarItemSnapshot] {
+    private func orderNeighbor(of item: FloatingBarItem, step: ItemControlStore.BarOrderStep) -> (placement: ItemPlacement, before: String?)? {
         let tier = placement(of: item)
-        return loadedItems.filter { placement(of: $0) == tier }.map(\.snapshot)
+        guard canDragPlacement(of: item, from: tier), let key = ItemControlStore.key(for: item.snapshot) else { return nil }
+        let owners = ItemOrderDraft.ownerOrder(previewItems(in: tier).map(\.snapshot))
+        guard let index = owners.firstIndex(of: key),
+              owners.indices.contains(index + (step == .earlier ? -1 : 1)) else { return nil }
+        return (tier, step == .earlier ? owners[index - 1] : (index + 2 < owners.count ? owners[index + 2] : nil))
+    }
+
+    private func stageOrder(_ item: FloatingBarItem, before nextOwner: String?, in tier: ItemPlacement, ensurePosition: Bool = false) {
+        guard let key = ItemControlStore.key(for: item.snapshot) else { return }
+        let current = previewItems(in: tier).map(\.snapshot)
+        let baseline = previewItems(in: tier, includingOrderDraft: false).map(\.snapshot)
+        if orderDraft.move(key, before: nextOwner, in: tier, items: current, baseline: baseline, ensurePosition: ensurePosition) {
+            draftDiscardedNotice = nil
+        }
     }
 
     func applyPlacementChanges() {
         guard !placementInProgress, hasPendingChanges else { return }
         placementDrag = nil
-        let controls = placementDraft.applying(to: preferences.itemControls)
+        let hadPlacementChanges = !placementDraft.isEmpty
+        let controls = orderDraft.applying(to: placementDraft.applying(to: preferences.itemControls))
+        let nativeOrders = orderDraft.orders.filter { $0.key == .shown || !preferences.useFloatingBar }
+            .mapValues { owners in owners.filter { ItemGroupLibrary.group(containing: $0, in: preferences.itemGroups) == nil } }
+            .filter { !$0.value.isEmpty }
+        let intentChanged = !controls.hasSamePlacementIntent(as: preferences.itemControls)
         // Callbacks can synchronously reenter Settings; no applied edits may remain pending.
+        applyingOrder = orderDraft
         placementDraft = ItemPlacementDraft()
+        orderDraft = ItemOrderDraft()
+        if !nativeOrders.isEmpty { onStageItemOrder(nativeOrders, controls, hadPlacementChanges) }
         if controls != preferences.itemControls {
             preferences.itemControls = controls
-        } else {
+        }
+        if !intentChanged && (hadPlacementChanges || !nativeOrders.isEmpty) {
             // Cached section membership cannot verify the native destination's full-edge postcondition.
             onRetryPlacement()
         }
@@ -428,6 +484,7 @@ final class SettingsModel {
         guard !placementInProgress else { return }
         placementDrag = nil
         placementDraft = ItemPlacementDraft()
+        orderDraft = ItemOrderDraft()
     }
 
     func retryPlacement() {
@@ -440,8 +497,8 @@ final class SettingsModel {
         placementPreview(includingSuppressed: false)
     }
 
-    func placementPreview(includingSuppressed: Bool) -> (shown: [FloatingBarItem], hidden: [FloatingBarItem], alwaysHidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
-        // Apply reconciles every saved owner, including owners not edited in this draft.
+    func placementPreview(includingSuppressed: Bool, includingOrderDraft: Bool = true) -> (shown: [FloatingBarItem], hidden: [FloatingBarItem], alwaysHidden: [FloatingBarItem], unknown: [FloatingBarItem]) {
+        // A tier Apply reconciles all saved owners; order-only edits keep the observed tier membership.
         let controls = placementDraft.applying(to: effectiveControls)
         var shown: [FloatingBarItem] = []
         var hidden: [FloatingBarItem] = []
@@ -457,20 +514,37 @@ final class SettingsModel {
             case nil: unknown.append(item)
             }
         }
-        func barOrdered(_ tier: [FloatingBarItem]) -> [FloatingBarItem] {
-            let byID = Dictionary(tier.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            // Suppressed glyphs stay reachable in the placement editor without changing mirror visibility.
-            let ordered = includingSuppressed
-                ? ItemControlStore.orderedBarItems(from: tier.map(\.snapshot), controls: controls)
-                : ItemControlStore.visibleBarItems(from: tier.map(\.snapshot), controls: controls)
-            return ordered
-                .compactMap { byID[$0.windowID] }
+        return (orderedPreviewItems(shown, in: .shown, includingSuppressed: true, includingOrderDraft: includingOrderDraft),
+                orderedPreviewItems(hidden, in: .hidden, includingSuppressed: includingSuppressed, includingOrderDraft: includingOrderDraft),
+                orderedPreviewItems(alwaysHidden, in: .alwaysHidden, includingSuppressed: includingSuppressed, includingOrderDraft: includingOrderDraft), unknown)
+    }
+
+    private func orderedPreviewItems(
+        _ items: [FloatingBarItem], in placement: ItemPlacement, includingSuppressed: Bool, includingOrderDraft: Bool = true
+    ) -> [FloatingBarItem] {
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var snapshots = items.map(\.snapshot)
+        if placement.isHidden && preferences.useFloatingBar {
+            snapshots = ItemControlStore.orderedBarItems(from: snapshots, controls: preferences.itemControls)
         }
-        return (shown, barOrdered(hidden), barOrdered(alwaysHidden), unknown)
+        if includingOrderDraft {
+            snapshots = (placementInProgress ? applyingOrder : orderDraft).ordered(snapshots, in: placement)
+        }
+        if !includingSuppressed { snapshots.removeAll { preferences.itemControls.isSuppressed($0) } }
+        return snapshots.compactMap { byID[$0.windowID] }
+    }
+
+    func previewItems(in placement: ItemPlacement, includingOrderDraft: Bool = true) -> [FloatingBarItem] {
+        let preview = placementPreview(includingSuppressed: true, includingOrderDraft: includingOrderDraft)
+        switch placement {
+        case .shown: return preview.shown
+        case .hidden: return preview.hidden
+        case .alwaysHidden: return preview.alwaysHidden
+        }
     }
 
     private func previewPlacement(of item: FloatingBarItem, controls: ItemControlStore) -> ItemPlacement? {
-        (hasPendingChanges || placementInProgress) && controls.hasPlacementIntent(item.snapshot)
+        (!placementDraft.isEmpty || (placementInProgress && placementIncludesTierChanges)) && controls.hasPlacementIntent(item.snapshot)
             ? controls.placement(for: item.snapshot) : item.observedPlacement
     }
 
@@ -525,8 +599,10 @@ final class SettingsModel {
                 imported.triggerState = TriggerRuntimeState()
                 imported.hasCompletedOnboarding = preferences.hasCompletedOnboarding
                 placementDraft = ItemPlacementDraft()
+                orderDraft = ItemOrderDraft()
                 placementDrag = nil
                 preferences = imported
+                onStageItemOrder([:], imported.itemControls, false)
                 transferFailed = false
                 transferMessage = "Imported settings."
             } else {

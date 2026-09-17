@@ -26,6 +26,12 @@ struct SettingsPlacementPreview: View {
         return hasPendingChanges ? "After Apply" : "Last Observed"
     }
 
+    private var pendingNotice: String {
+        guard hasPendingChanges else { return "" }
+        return dragModel?.hasPendingPlacementChanges == false
+            ? " Order changes are staged until Apply." : " After Apply includes saved placement requests."
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -75,8 +81,8 @@ struct SettingsPlacementPreview: View {
                 .help("These items have no observed placement and no placement selected for this preview.")
             }
 
-            Text("Using cached glyphs or app icons; spacing and order may differ. Always Hidden opens with Option-click."
-                 + (hasPendingChanges ? " After Apply includes saved placement requests." : "")
+            Text("Using cached glyphs or app icons; spacing may differ. Always Hidden opens with Option-click."
+                 + pendingNotice
                  + (style == .vertical ? " Hidden items open in a vertical list." : ""))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -84,7 +90,7 @@ struct SettingsPlacementPreview: View {
                 .accessibilityIdentifier("settings-preview-caption")
 
             if !useFloatingBar {
-                Text("Hidden bar is disabled. Placement edits still apply to the menu bar.")
+                Text("Hidden bar is disabled. Apply arranges these items in the native menu bar.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -230,6 +236,7 @@ struct SettingsPlacementPreview: View {
         var metrics: FloatingBarLayout.Metrics = .default
         var dragModel: SettingsModel?
         var placement: ItemPlacement?
+        @State private var isHovered = false
 
         private var help: String {
             guard let dragModel else { return "\(item.displayName) - \(section). Preview only." }
@@ -237,7 +244,7 @@ struct SettingsPlacementPreview: View {
                 return "\(item.displayName) is in \(group.name). Manage its placement in Advanced → Groups."
             }
             let visibility = dragModel.isShownInBar(item) ? "" : " Not drawn in the floating bar."
-            return "\(item.displayName) - \(section). Drag to another bar, then Apply Changes.\(visibility)"
+            return "\(item.displayName) - \(section). Drag between icons or to another bar, then Apply Changes.\(visibility)"
         }
 
         var body: some View {
@@ -258,7 +265,13 @@ struct SettingsPlacementPreview: View {
             .frame(width: metrics.itemExtent + (style == .vertical ? metrics.rowLabelWidth : 0),
                    height: metrics.itemExtent)
             .foregroundStyle(.primary)
-            .opacity(dragModel.map { $0.isShownInBar(item) ? 1 : 0.5 } ?? 1)
+            .background {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.accentColor.opacity(isHovered && dragModel?.canDragPlacement(of: item, from: placement) == true ? 0.12 : 0))
+                    .allowsHitTesting(false)
+            }
+            .opacity(dragModel.map { $0.isDraggingPlacement(item) ? 0.3 : ($0.isShownInBar(item) ? 1 : 0.5) } ?? 1)
+            .onHover { isHovered = $0 }
             .overlay {
                 if let dragModel {
                     SettingsPlacementDragSource(model: dragModel, item: item, placement: placement, iconSize: metrics.iconSize)
@@ -269,6 +282,9 @@ struct SettingsPlacementPreview: View {
             .accessibilityAddTraits(.isStaticText)
             .accessibilityLabel(item.displayName)
             .accessibilityValue(section)
+            .accessibilityHint(dragModel == nil ? "" : "Drag to arrange, then Apply Changes. Items from the same app move together.")
+            .accessibilityAction(named: "Move earlier") { dragModel?.moveInBar(item, .earlier) }
+            .accessibilityAction(named: "Move later") { dragModel?.moveInBar(item, .later) }
             .accessibilityIdentifier("settings-preview-item-\(item.id)")
             .help(help)
         }

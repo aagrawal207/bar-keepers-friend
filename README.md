@@ -25,29 +25,37 @@ open **Settings**, **Pause**, **Restart**, **Check for Updates**, or **Quit**.
    - **Menu Bar / Shown** keeps the icon in the normal menu bar.
    - **Hidden Bar / Hidden** tucks it away until you open BKF.
    - **Always Hidden** keeps it out of ordinary reveals; Option-click includes it.
-3. Review the arrangement labeled **After Apply**, which includes saved placement requests.
+3. Review the arrangement labeled **After Apply**. Drop between icons to set their order.
 4. Choose **Apply Changes** to save your choices and move the real items. Choose **Discard**
-   to abandon the unapplied placement edits.
+   to abandon the unapplied placement and order edits.
 5. Click the BKF icon or press **⌥⌘B** to reveal hidden icons; repeat to close the bar.
    To restore an icon permanently, drag it to **Menu Bar** or select **Shown**, then **Apply Changes**.
 
 The three stacked destination strips stay visible and horizontal, even when empty or when the
-floating bar uses a vertical list or is turned off. Drop over an icon or an empty part of the
-destination strip. Dragging stages a placement choice; it does not drag the real native menu-bar
-item or start a screen capture.
+floating bar uses a vertical list or is turned off. An insertion line shows where the icon will
+land, including within its current bar. Hold near a crowded strip's edge to scroll during the drag.
+Dropping back in the same position is a no-op. Dragging stages edits without moving native items
+or starting a screen capture.
 
 Icons with **Show in bar** off remain dimmed in the editor so you can move them to another tier;
 dragging does not turn Show in bar on. Drag a name from **Placement unknown** to choose its
 placement. Group members stay group-controlled; manage them in **Advanced > Groups**. Icons
-sharing the same app identity share a placement choice.
+sharing the same app identity move together, including when reordered.
 
 **Hide All / Show All** use the same draft and require Apply Changes. **Last Observed** shows
-the latest loaded placement. The editor uses cached glyphs or app icons, so spacing and order
-can differ from the real menu bar. Dragging changes tiers only, not order within a tier.
-The row's **Show in bar** checkbox and order arrows affect the floating bar and save immediately.
-If an applied move fails, Settings shows the failure and offers **Retry**.
+the latest loaded placement. The editor uses cached glyphs or app icons, so spacing can differ
+from the real menu bar. The row's order arrows also stage changes; **Show in bar** saves immediately.
 
-Placement drafts survive closing Settings within the current session, but not an app restart.
+Reordering **Hidden Bar** or **Always Hidden** saves the floating bar's display order on Apply.
+Reordering **Menu Bar**, or either hidden tier with the floating bar disabled, requests native
+item moves through the existing serialized mover and needs Accessibility. Order-only Apply keeps
+the observed tiers; it does not retry unrelated saved placement requests. Native order is applied
+once rather than enforced continuously. A failed native order remains available for **Retry**
+until BKF quits or a replacement arrangement is applied/imported.
+The editor orders manageable items; system modules such as Battery are omitted, so their exact
+position between managed icons is not controlled.
+
+Placement and order drafts survive closing Settings within the current session, but not an app restart.
 Item nicknames save separately on Return or when you leave the field; Discard does not undo them.
 
 ### Reveal controls
@@ -221,7 +229,9 @@ and remaining hardware verification gaps live in [PARITY.md](PARITY.md).
 - Several features have automated coverage but still need live checks, including hover focus,
   Always Hidden placement, presets/triggers/groups, styling, spacing, and notch make-room.
 - Settings drag/drop has mounted-view workflow coverage, with the actual AppKit drag session
-  intercepted. Live drag delivery, cancellation animation, titlebar/material appearance, and
+  intercepted. A separate live check verified same-bar drags, an empty-strip drop/Discard, and four
+  native Menu Bar reorder moves on the built-in display. Hidden-tier native ordering, other displays,
+  live overflow/cancel animation, titlebar/material appearance, and
   focus/VoiceOver still need hardware checks. Off-screen glass/sidebar rendering omissions persist;
   passing geometry and heading-pixel checks do not establish full-window appearance.
 - Styles and presets apply across displays; per-Space/per-display choices and automatic

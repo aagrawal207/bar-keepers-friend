@@ -1325,7 +1325,7 @@ struct SettingsModelTests {
         #expect(model.hasPendingChange(for: items[1]) == hidden)
     }
 
-    @Test func barPresentationControlsSaveImmediatelyWithoutStagingOrMovingItems() async {
+    @Test func visibilitySavesImmediatelyWhileOrderUsesApplyWithoutNativeMoves() async {
         let items = [
             makeItem("first.hidden", id: 1, observedPlacement: .hidden),
             makeItem("second.hidden", id: 2, observedPlacement: .hidden),
@@ -1358,18 +1358,23 @@ struct SettingsModelTests {
         #expect(model.placementPreview.hidden.map(\.id) == [2])
 
         model.moveInBar(items[0], .later)
-        #expect(writes.count == 2)
-        #expect(model.preferences.itemControls.barOrder == ["second.hidden": 0, "first.hidden": 1])
+        #expect(writes.count == 1)
+        #expect(model.preferences.itemControls.barOrder.isEmpty)
+        #expect(model.hasPendingChanges)
         #expect(model.canMoveInBar(items[0], .earlier))
         #expect(!model.canMoveInBar(items[0], .later))
         model.moveInBar(items[0], .later)
-        #expect(writes.count == 2)
+        #expect(writes.count == 1)
         model.moveInBar(items[3], .earlier)
-        #expect(writes.count == 2)
+        #expect(writes.count == 1)
 
         model.setShownInBar(true, for: items[0])
-        #expect(writes.count == 3)
+        #expect(writes.count == 2)
         #expect(model.placementPreview.hidden.map(\.id) == [2, 1])
+        #expect(model.hasPendingChanges)
+        model.applyPlacementChanges()
+        #expect(writes.count == 3)
+        #expect(model.preferences.itemControls.barOrder == ["second.hidden": 0, "first.hidden": 1])
         #expect(!model.hasPendingChanges)
         #expect(retries == 0)
         #expect(model.preferences.itemControls.hiddenInMenuBar.isEmpty)

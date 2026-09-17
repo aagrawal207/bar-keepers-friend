@@ -65,8 +65,27 @@ final class CosmeticHideEngine {
     private(set) var placementMessage: String?
     private(set) var placementFailed = false
     private(set) var placementPending = false
+    private(set) var placementIncludesTierChanges = true
     private(set) var placementTask: Task<Void, Never>?
     private var placementRequestID = 0
+    private struct ItemOrderRequest {
+        let id = UUID()
+        var orders: [ItemPlacement: [String]]
+        let controls: ItemControlStore
+        let applyPlacement: Bool
+    }
+    private var itemOrderRequest: ItemOrderRequest?
+
+    /// Prepared before the matching preference write so tier moves and order share one serialized pass.
+    func stageItemOrder(_ orders: [ItemPlacement: [String]], controls: ItemControlStore, applyPlacement: Bool = true) {
+        if orders.isEmpty {
+            guard itemOrderRequest != nil else { return }
+            itemOrderRequest = nil
+            reconcileHiddenItems(userInitiated: true)
+        } else {
+            itemOrderRequest = ItemOrderRequest(orders: orders, controls: controls, applyPlacement: applyPlacement)
+        }
+    }
     private let controlWindowIDsProvider: (() -> (anchor: CGWindowID, divider: CGWindowID)?)?
     private let setDividerCollapsed: ((Bool) -> Void)?
     private let anchorFrameProvider: (() -> CGRect?)?
@@ -543,6 +562,7 @@ final class CosmeticHideEngine {
         hiddenDivider = nil
         alwaysHiddenDivider = nil
         alwaysHiddenDividerInstalled = false
+        itemOrderRequest = nil
         placementPending = false
         updatePlacementStatus(applying: false)
     }
@@ -554,7 +574,15 @@ final class CosmeticHideEngine {
     func apply(preferences: Preferences, userInitiated: Bool = true) {
         let wasFloatingBar = self.preferences.useFloatingBar
         let previousControls = placementControls
+        let previousGroups = self.preferences.itemGroups
         self.preferences = preferences
+        var orderInvalidated = false
+        if let request = itemOrderRequest,
+           !request.controls.hasSamePlacementIntent(as: preferences.itemControls)
+            || request.controls.barOrder != preferences.itemControls.barOrder || previousGroups != preferences.itemGroups {
+            itemOrderRequest = nil
+            orderInvalidated = true
+        }
         stateMachine.autoRehideSections = Self.autoRehideSections(for: preferences)
         updateHoverMonitoring()
         updateScrollMonitoring()
@@ -577,8 +605,8 @@ final class CosmeticHideEngine {
             }
         }
 
-        // Only a changed tier intent moves items; an unrelated settings edit must not drag icons.
-        if !placementControls.hasSamePlacementIntent(as: previousControls) {
+        // An invalidated order must relinquish its queued work; unrelated edits never schedule moves.
+        if !placementControls.hasSamePlacementIntent(as: previousControls) || orderInvalidated {
             reconcileHiddenItems(userInitiated: userInitiated)
         }
     }
@@ -684,12 +712,13 @@ final class CosmeticHideEngine {
     /// Explicit Settings commands take ownership of the section; background requests wait for
     /// dismissal or permission recovery. Superseded commands never publish stale completion.
     func reconcileHiddenItems(userInitiated: Bool = false) {
+        placementIncludesTierChanges = itemOrderRequest?.applyPlacement ?? true
         placementRequestID += 1
         let requestID = placementRequestID
         let wasApplying = placementInProgress
         placementTask?.cancel()
         let controls = placementControls
-        guard controls.hasAnyPlacementIntent else {
+        guard controls.hasAnyPlacementIntent || itemOrderRequest != nil else {
             placementPending = false
             updatePlacementStatus(applying: false)
             guard wasApplying else { return }
@@ -753,6 +782,7 @@ final class CosmeticHideEngine {
             controller.controlItemWindowIDs = self.floatingBar?.controlItemWindowIDs ?? []
             let result: HiddenItemController.ReconcileResult
             let requestControls = self.placementControls
+            let orderRequest = self.itemOrderRequest
             if let controls = self.placementControlIDs {
                 let alwaysHiddenID = self.alwaysHiddenControlWindowID
                 DebugLog.log("placement: starting request=\(requestID) anchorWindow=\(controls.anchor) dividerWindow=\(controls.divider) alwaysHiddenWindow=\(alwaysHiddenID.map(String.init) ?? "none")")
@@ -767,12 +797,18 @@ final class CosmeticHideEngine {
                     alwaysHiddenDividerWindowID: alwaysHiddenID,
                     controls: requestControls,
                     displayXRange: self.anchorDisplayXRange,
-                    displayMenuBarTop: self.anchorDisplayMenuBarTop
+                    displayMenuBarTop: self.anchorDisplayMenuBarTop,
+                    orders: orderRequest?.orders ?? [:],
+                    applyPlacement: orderRequest?.applyPlacement ?? true
                 )
             } else {
                 result = HiddenItemController.ReconcileResult(observationFailed: true)
             }
             guard !Task.isCancelled, requestID == self.placementRequestID else { return }
+            if let orderRequest, self.itemOrderRequest?.id == orderRequest.id {
+                for tier in result.completedOrderTiers { self.itemOrderRequest?.orders[tier] = nil }
+                if self.itemOrderRequest?.orders.isEmpty == true { self.itemOrderRequest = nil }
+            }
             if result.cancelled {
                 // Native session loss need not cancel this task; keep intent for a fresh request.
                 self.placementPending = true
@@ -802,6 +838,10 @@ final class CosmeticHideEngine {
                 self.updatePlacementStatus(applying: false, message: "Couldn't read a stable menu bar layout. Items have been left revealed; try again.", failed: true)
             } else if !result.failed.isEmpty {
                 self.updatePlacementStatus(applying: false, message: "Couldn't move \(result.failed.count) item(s). Choose Retry to apply the saved placement again.", failed: true)
+            } else if !result.orderFailed.isEmpty {
+                self.updatePlacementStatus(applying: false, message: "Couldn't finish ordering the items. Choose Retry; pending native order is kept until the app quits.", failed: true)
+            } else if result.unappliedPlacement {
+                self.updatePlacementStatus(applying: false, message: "Order applied. Some saved placement requests are still unmet; choose Retry to apply them.", failed: true)
             } else {
                 self.updatePlacementStatus(applying: false)
             }
@@ -1538,7 +1578,7 @@ final class CosmeticHideEngine {
         // when idle.
         guard !isPaused else { return }
         if sectionInUse {
-            placementPending = placementControls.hasAnyPlacementIntent
+            placementPending = placementControls.hasAnyPlacementIntent || itemOrderRequest != nil
             return
         }
         enact(stateMachine.apply(.screenParametersChanged))
@@ -1561,7 +1601,7 @@ final class CosmeticHideEngine {
         // so the items on the now-current display land on the right side of the anchor. No-op when
         // nothing is marked hidden. The planner is display-scoped (see `anchorDisplayXRange`), so
         // this only touches the active display's items, never the other display's mirror copies.
-        if placementControls.hasAnyPlacementIntent {
+        if placementControls.hasAnyPlacementIntent || itemOrderRequest != nil {
             reconcileHiddenItems()
         } else {
             refreshFloatingBarCache()

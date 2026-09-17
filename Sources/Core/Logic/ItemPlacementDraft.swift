@@ -11,6 +11,7 @@ public struct ItemPlacementDraft: Equatable, Sendable {
 
     public var isEmpty: Bool { changes.isEmpty }
     public var count: Int { changes.count }
+    public var ownerKeys: Set<String> { Set(changes.keys) }
 
     public func placement(for snapshot: MenuBarItemSnapshot) -> ItemPlacement? {
         guard let key = ItemControlStore.key(for: snapshot) else { return nil }

@@ -657,7 +657,7 @@ struct StagedPlacementIntegrationTests {
         )
         let fixture = try Fixture(
             useFloatingBar: useFloatingBar, moveGate: (started, release), additionalItems: [sibling],
-            alwaysHiddenDivider: true, store: store
+            alwaysHiddenDivider: true, store: store, reflowsOnMove: true
         )
         defer { fixture.engine.uninstall() }
         let model = fixture.model
@@ -679,9 +679,9 @@ struct StagedPlacementIntegrationTests {
             #expect(!model.preferences.itemControls.hasPlacementIntent(forKey: "Unconfigured App"))
         }
         let sameSide = try await beginDrag(5, from: .shown, into: .shown, model: model, host: host)
-        expectRejected(sameSide.info, by: sameSide.target)
+        try performDrop(sameSide, model: model)
         #expect(!model.hasPendingChanges)
-        #expect(model.isDraggingPlacementItem)
+        #expect(!model.isDraggingPlacementItem)
         sameSide.source.finishDragging()
         #expect(!model.isDraggingPlacementItem)
 
@@ -733,6 +733,8 @@ struct StagedPlacementIntegrationTests {
         expected.itemControls.setPlacement(.shown, forKey: "Hidden App")
         expected.itemControls.setPlacement(.alwaysHidden, forKey: "Shown App")
         expected.itemControls.setPlacement(.hidden, forKey: "Unconfigured App")
+        expected.itemControls.setOrderIndex(0, forKey: "Keep Hidden")
+        expected.itemControls.setOrderIndex(1, forKey: "Unconfigured App")
         try pressDragControl("settings-placement-apply", in: host)
         try #require(await settleDragUI(host) { fixture.server.moveAttempts == [1] && model.placementInProgress })
         let placement = try #require(fixture.engine.placementTask)
@@ -751,16 +753,17 @@ struct StagedPlacementIntegrationTests {
         await release.open()
         await placement.value
         try #require(await settleDragUI(host) { !model.itemsLoading && !model.placementInProgress })
-        #expect(fixture.server.moveAttempts == [1, 2, 5])
-        #expect(fixture.server.base.moveRequests.map(\.windowID) == [1, 2, 5])
-        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == [90, 92, 91])
-        #expect(fixture.server.base.moveRequests.map(\.targetX) == [1040, 592, 976])
+        #expect(fixture.server.moveAttempts == [1, 2, 5, 4])
+        #expect(fixture.server.base.moveRequests.map(\.windowID) == [1, 2, 5, 4])
+        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == [90, 92, 91, 1])
         #expect(fixture.server.maxConcurrentMoves == 1)
-        #expect(fixture.server.base.items.filter { ![1, 2, 5].contains($0.windowID) }
-                == snapshots.filter { ![1, 2, 5].contains($0.windowID) })
+        #expect(model.previewItems(in: .shown).map(\.id) == [4, 1, 6])
+        #expect(model.previewItems(in: .hidden).map(\.id) == [3, 5])
+        #expect(model.previewItems(in: .alwaysHidden).map(\.id) == [2])
+        #expect(fixture.server.base.items.map(\.ownerBundleID) == snapshots.map(\.ownerBundleID))
         #expect(fixture.work.captureRequests.count == (useFloatingBar ? 1 : 0))
         if useFloatingBar { #expect(Set(try #require(fixture.work.captureRequests.first)) == [2, 3, 5]) }
-        #expect(fixture.work.movesAtCapture == (useFloatingBar ? [[1, 2, 5]] : []))
+        #expect(fixture.work.movesAtCapture == (useFloatingBar ? [[1, 2, 5, 4]] : []))
         #expect(fixture.work.preferenceWritesAtCapture == (useFloatingBar ? [1] : []))
         #expect(fixture.work.placementAttributions == [[1, 2, 3, 4, 5, 6]])
         #expect(fixture.work.providerCalls == 2)
@@ -774,7 +777,7 @@ struct StagedPlacementIntegrationTests {
         #expect(model.preferences == expected)
         #expect(model.preferences.itemAliases == saved.itemAliases)
         #expect(model.preferences.itemControls.suppressedFromBar == saved.itemControls.suppressedFromBar)
-        #expect(model.preferences.itemControls.barOrder == saved.itemControls.barOrder)
+        #expect(model.preferences.itemControls.barOrder == expected.itemControls.barOrder)
         #expect(model.preferences.itemControls.hiddenInMenuBar.contains("Absent App"))
         #expect(!model.placementPending && !model.placementFailed)
         expectRejected(interrupted.info, by: interrupted.target)
@@ -826,6 +829,21 @@ struct StagedPlacementIntegrationTests {
         )
         expectRejected(copyOnly, by: valid.target)
         #expect(copyOnly.pasteboardReads == 0)
+
+        foreign.source.model = model
+        let wrongWindow = SettingsPlacementTestDraggingInfo(
+            source: foreign.source, items: [settingsPlacementTestPasteboardItem(valid.token.uuidString)], destination: valid.target
+        )
+        expectRejected(wrongWindow, by: valid.target)
+        #expect(wrongWindow.pasteboardReads == 0)
+        foreign.source.model = other.model
+        let substitutedSource = SettingsPlacementTestDraggingInfo(
+            source: try dragSource(4, from: .shown, in: host),
+            items: [settingsPlacementTestPasteboardItem(valid.token.uuidString)], destination: valid.target
+        )
+        expectRejected(substitutedSource, by: valid.target)
+        #expect(substitutedSource.pasteboardReads > 0)
+        #expect(model.canDropPlacement(valid.token, into: .alwaysHidden))
 
         let payloads: [[NSPasteboardItem]] = [
             [],
@@ -1081,6 +1099,322 @@ struct StagedPlacementIntegrationTests {
         #expect(!host.testWindow.isVisible && !host.testWindow.isKeyWindow)
     }
 
+    @Test func floatingOrderReversalsDiscardAndApplyKeepSiblingsAndRealCacheConsistent() async throws {
+        let suite = "StagedFloatingOrder.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = PreferencesStore(backing: defaults)
+        let sibling = MenuBarItemSnapshot(windowID: 6, ownerPID: 1, ownerBundleID: "Hidden App",
+                                          frame: CGRect(x: 760, y: 0, width: 24, height: 22))
+        let fixture = try Fixture(additionalItems: [sibling], store: store)
+        defer { fixture.engine.uninstall() }
+        await fixture.bar.captureAndCache(anchorMinX: 1000)
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        let saved = model.preferences
+        let reads = fixture.server.readCount
+        let captures = fixture.work.captureRequests.count
+        #expect(model.previewItems(in: .hidden).map(\.id) == [3, 6, 1])
+
+        let noop = try await beginDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 1)
+        try performDrop(noop, model: model)
+        #expect(!model.hasPendingChanges)
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 3)
+        #expect(model.previewItems(in: .hidden).map(\.id) == [6, 1, 3])
+        #expect(model.pendingChangeCount == 1)
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host)
+        #expect(!model.hasPendingChanges)
+        #expect(model.previewItems(in: .hidden).map(\.id) == [3, 6, 1])
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 3)
+        try pressDragControl("settings-placement-discard", in: host)
+        try #require(await settleDragUI(host) { !model.hasPendingChanges })
+        #expect(model.preferences == saved && store.load() == saved)
+        #expect(model.previewItems(in: .hidden).map(\.id) == [3, 6, 1])
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 3)
+
+        #expect(fixture.work.preferenceWrites.isEmpty)
+        #expect(fixture.server.readCount == reads)
+        #expect(fixture.work.captureRequests.count == captures)
+        #expect(fixture.server.moveAttempts.isEmpty)
+        #expect(fixture.bar.mirroredWindowIDs == [3, 6, 1])
+        try pressDragControl("settings-placement-apply", in: host)
+        try #require(await settleDragUI(host) { !model.hasPendingChanges })
+        var expected = saved
+        expected.itemControls.setOrderIndex(0, forKey: "Hidden App")
+        expected.itemControls.setOrderIndex(1, forKey: "Keep Hidden")
+        #expect(fixture.work.preferenceWrites == [expected])
+        #expect(PreferencesStore(backing: defaults).load() == expected)
+        #expect(fixture.bar.mirroredWindowIDs == [6, 1, 3])
+        #expect(fixture.server.readCount == reads)
+        #expect(fixture.work.captureRequests.count == captures)
+        #expect(fixture.work.retryCalls == 0 && fixture.server.moveAttempts.isEmpty)
+        #expect(fixture.engine.placementTask == nil)
+        let restarted = try Fixture(additionalItems: [sibling], store: PreferencesStore(backing: defaults))
+        defer { restarted.engine.uninstall() }
+        await restarted.model.reloadItems()
+        #expect(restarted.model.previewItems(in: .hidden).map(\.id) == [6, 1, 3])
+        #expect(!restarted.model.hasPendingChanges)
+    }
+
+    @Test(arguments: [false, true])
+    func allThreeBarsApplyExactOrderThroughOneSerialPass(useFloatingBar: Bool) async throws {
+        let suite = "StagedThreeBarOrder.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controls = ItemControlStore(hiddenInMenuBar: ["Hidden App", "Keep Hidden"],
+                                       shownInMenuBar: ["Shown App", "Keep Shown"],
+                                       alwaysHiddenInMenuBar: ["Tier First", "Tier Last"])
+        let extra = [(CGWindowID(7), "Tier First", CGFloat(400)), (8, "Tier Last", 450)].map { id, key, x in
+            MenuBarItemSnapshot(windowID: id, ownerPID: 1, ownerBundleID: key, frame: CGRect(x: x, y: 0, width: 24, height: 22))
+        }
+        let panel = SilentPanel(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+        let fixture = try Fixture(useFloatingBar: useFloatingBar, itemControls: controls, additionalItems: extra,
+                                  alwaysHiddenDivider: true, store: PreferencesStore(backing: defaults), reflowsOnMove: true, panel: panel)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        let saved = model.preferences
+        let reads = fixture.server.readCount
+        #expect(model.previewItems(in: .alwaysHidden).map(\.id) == [7, 8])
+        try await stageDrag(5, from: .shown, into: .shown, model: model, host: host, before: 2)
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 3)
+        try await stageDrag(8, from: .alwaysHidden, into: .alwaysHidden, model: model, host: host, before: 7)
+        #expect(model.pendingChangeCount == 3)
+        #expect(model.previewItems(in: .shown).map(\.id) == [5, 2, 4])
+        #expect(model.previewItems(in: .hidden).map(\.id) == [1, 3])
+        #expect(model.previewItems(in: .alwaysHidden).map(\.id) == [8, 7])
+        #expect(fixture.work.preferenceWrites.isEmpty && fixture.server.moveAttempts.isEmpty)
+        #expect(fixture.work.captureRequests.isEmpty && fixture.server.readCount == reads)
+
+        try pressDragControl("settings-placement-apply", in: host)
+        let task = try #require(fixture.engine.placementTask)
+        await task.value
+        try #require(await settleDragUI(host) { !model.itemsLoading && !model.placementInProgress })
+        #expect(!model.hasPendingChanges && !model.placementFailed && !model.placementPending)
+        #expect(model.previewItems(in: .shown).map(\.id) == [5, 2, 4])
+        #expect(model.previewItems(in: .hidden).map(\.id) == [1, 3])
+        #expect(model.previewItems(in: .alwaysHidden).map(\.id) == [8, 7])
+        #expect(fixture.server.base.items.sorted { $0.frame.minX < $1.frame.minX }
+            .filter { [2, 4, 5].contains($0.windowID) }.map(\.windowID) == [5, 2, 4])
+        #expect(fixture.server.moveAttempts == (useFloatingBar ? [5] : [5, 1, 8]))
+        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == (useFloatingBar ? [2] : [2, 3, 7]))
+        #expect(fixture.server.maxConcurrentMoves == 1)
+        #expect(fixture.work.placementAttributions.count == 1 && fixture.work.completions == 1)
+        #expect(fixture.work.captureRequests.count == (useFloatingBar ? 1 : 0))
+        #expect(fixture.work.retryCalls == 1 && fixture.work.preferenceWrites.count == 1)
+        #expect(model.preferences.itemControls.hasSamePlacementIntent(as: saved.itemControls))
+        #expect(!model.preferences.itemControls.hasPlacementIntent(forKey: "Unconfigured App"))
+        #expect(model.preferences.itemAliases == saved.itemAliases)
+        #expect(PreferencesStore(backing: defaults).load() == model.preferences)
+        if useFloatingBar {
+            #expect(fixture.bar.mirroredWindowIDs == [1, 3])
+            let anchor = try #require(fixture.server.base.items.first { $0.windowID == 90 }).frame
+            await fixture.bar.show(anchorMinX: anchor.minX, anchorRightX: anchor.maxX, includeAlwaysHidden: true)
+            let content = try #require(panel.contentViewController as? NSHostingController<FloatingBarView>).rootView
+            #expect(content.items.map(\.id) == [1, 3])
+            #expect(content.alwaysHiddenItems.map(\.id) == [8, 7])
+            fixture.bar.hide()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func nativeOrderWithoutPlacementIntentSurvivesPauseAndInterruptedOrFailedApply(interrupt: Bool) async throws {
+        let started = AsyncGate()
+        let release = AsyncGate()
+        defer { Task { await release.open() } }
+        let fixture = try Fixture(useFloatingBar: false, moveGate: (started, release), itemControls: ItemControlStore(), reflowsOnMove: true)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        fixture.engine.menuTogglePause()
+        try await stageDrag(5, from: .shown, into: .shown, model: model, host: host, before: 2)
+        try pressDragControl("settings-placement-apply", in: host)
+        #expect(model.placementPending && !model.placementInProgress)
+        #expect(fixture.work.preferenceWrites.isEmpty && fixture.server.moveAttempts.isEmpty)
+        if !interrupt { fixture.server.failingWindowID.withLock { $0 = 5 } }
+        fixture.engine.menuTogglePause()
+        let first = try #require(fixture.engine.placementTask)
+        await started.wait()
+        if interrupt { fixture.engine.menuTogglePause() }
+        await release.open()
+        await first.value
+        #expect(fixture.server.base.moveRequests.isEmpty)
+        #expect(fixture.server.moveAttempts == [5])
+        #expect(interrupt ? model.placementPending : model.placementFailed)
+        #expect(!model.hasPendingChanges)
+        if interrupt {
+            fixture.engine.menuTogglePause()
+        } else {
+            try #require(await settleDragUI(host) { !model.placementInProgress && model.placementFailed })
+            #expect(model.previewItems(in: .shown).map(\.id) == [2, 4, 5])
+            fixture.server.failingWindowID.withLock { $0 = nil }
+            try pressDragControl("settings-placement-retry", in: host)
+        }
+        let retry = try #require(fixture.engine.placementTask)
+        await retry.value
+        try #require(await settleDragUI(host) { !model.placementInProgress && !model.itemsLoading })
+        #expect(!model.placementFailed && !model.placementPending)
+        #expect(model.previewItems(in: .shown).map(\.id) == [5, 2, 4])
+        #expect(fixture.server.moveAttempts == [5, 5])
+        #expect(fixture.server.base.moveRequests.map(\.windowID) == [5])
+        #expect(fixture.server.maxConcurrentMoves == 1)
+        #expect(fixture.work.preferenceWrites.isEmpty && fixture.work.captureRequests.isEmpty)
+        #expect(fixture.server.base.clickedWindowIDs.isEmpty)
+        fixture.engine.reconcileHiddenItems()
+        #expect(fixture.server.moveAttempts == [5, 5], "A completed order request is one-shot.")
+    }
+
+    @Test func crowdedBarsScrollDuringDragAndKeepInsertionFeedbackNoninteractive() async throws {
+        let extras = (6...35).map { id in
+            MenuBarItemSnapshot(windowID: CGWindowID(id), ownerPID: 1, ownerBundleID: "Overflow \(id)",
+                                frame: CGRect(x: 1400 + CGFloat(id) * 40, y: 0, width: 24, height: 22))
+        }
+        let fixture = try Fixture(additionalItems: extras)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        let drag = try await beginDrag(2, from: .shown, into: .shown, model: model, host: host, before: 2)
+        defer { drag.source.finishDragging() }
+        let target = drag.target
+        let source = try dragSource(2, from: .shown, in: host)
+        let scroll = try #require(source.enclosingScrollView)
+        let startX = scroll.contentView.bounds.minX
+        let reads = fixture.server.readCount
+        let board = [settingsPlacementTestPasteboardItem(drag.token.uuidString)]
+        let point = CGPoint(x: target.bounds.maxX - 3, y: target.bounds.midY)
+        let info = SettingsPlacementTestDraggingInfo(source: source, items: board, destination: target,
+                                                     locationInWindow: target.convert(point, to: nil))
+        try #require(target.draggingEntered(info) == .move)
+        #expect(target.wantsPeriodicDraggingUpdates())
+        for _ in 0..<80 {
+            #expect(target.draggingUpdated(info) == .move)
+            host.render()
+        }
+        #expect(scroll.contentView.bounds.minX > startX + 100)
+        let markerX = try #require(target.insertionX)
+        #expect(markerX >= target.bounds.minX && markerX <= target.bounds.maxX)
+        let markerHit = try dragHit(at: CGPoint(x: markerX, y: target.bounds.midY), in: target, host: host)
+        #expect(registeredDragAncestor(of: markerHit) === target)
+        #expect(model.pendingChangeCount == 0 && model.isDraggingPlacementItem)
+        #expect(fixture.server.readCount == reads && fixture.server.moveAttempts.isEmpty)
+        #expect(fixture.work.preferenceWrites.isEmpty && fixture.work.captureRequests.isEmpty)
+        target.draggingExited(info)
+        #expect(target.insertionX == nil && !target.isTargeted)
+        let withoutMarker = try settingsTestBitmap(target)
+        let cancelledX = scroll.contentView.bounds.minX
+        host.render()
+        #expect(scroll.contentView.bounds.minX == cancelledX)
+        #expect(model.pendingChangeCount == 0)
+
+        #expect(target.draggingEntered(info) == .move)
+        let withMarker = try settingsTestBitmap(target)
+        let x = Int(try #require(target.insertionX) * 2)
+        let y = Int(target.bounds.midY * 2)
+        let beforeColor = try #require(withoutMarker.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+        let afterColor = try #require(withMarker.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+        #expect(abs(beforeColor.redComponent - afterColor.redComponent)
+                + abs(beforeColor.greenComponent - afterColor.greenComponent)
+                + abs(beforeColor.blueComponent - afterColor.blueComponent) > 0.2)
+        Attachment.record(try #require(withMarker.representation(using: .png, properties: [:])), named: "Items-drag-insertion.png")
+        #expect(target.performDragOperation(info))
+        #expect(model.pendingChangeCount == 1)
+        #expect(model.previewItems(in: .shown).first?.id != 2)
+        #expect(target.insertionX == nil)
+        #expect(fixture.server.readCount == reads && fixture.work.preferenceWrites.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func orderingAlonePreservesObservedTiersDespiteAnOpposingSavedPlacement(useFloatingBar: Bool) async throws {
+        let started = AsyncGate()
+        let release = AsyncGate()
+        defer { Task { await release.open() } }
+        let controls = ItemControlStore(hiddenInMenuBar: ["Keep Hidden"],
+                                       shownInMenuBar: ["Hidden App", "Shown App", "Keep Shown"])
+        let fixture = try Fixture(useFloatingBar: useFloatingBar, moveGate: (started, release), itemControls: controls, reflowsOnMove: true)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        try await stageDrag(1, from: .hidden, into: .hidden, model: model, host: host, before: 3)
+        #expect(try settingsTestAccessibilityText(dragControl("settings-preview-caption", in: host))
+            .contains("Order changes are staged until Apply."))
+        #expect(model.previewItems(in: .hidden).map(\.id) == [1, 3])
+        #expect(model.previewItems(in: .shown).map(\.id) == [2, 4, 5])
+        try pressDragControl("settings-placement-apply", in: host)
+        if !useFloatingBar {
+            await started.wait()
+            #expect(model.placementInProgress && !model.placementIncludesTierChanges)
+            #expect(model.previewItems(in: .hidden).map(\.id) == [1, 3])
+            #expect(model.placement(of: try #require(model.loadedItems.first { $0.id == 1 })) == .hidden)
+            await release.open()
+        }
+        await fixture.engine.placementTask?.value
+        try #require(await settleDragUI(host) { !model.placementInProgress && !model.itemsLoading })
+        #expect(model.previewItems(in: .hidden).map(\.id) == [1, 3])
+        #expect(model.previewItems(in: .shown).map(\.id) == [2, 4, 5])
+        #expect(model.preferences.itemControls.hasSamePlacementIntent(as: controls))
+        #expect(fixture.server.moveAttempts == (useFloatingBar ? [] : [1]))
+        #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == (useFloatingBar ? [] : [3]))
+        if !useFloatingBar {
+            #expect(model.placementFailed && !model.placementPending)
+            #expect(model.placementMessage?.contains("saved placement requests are still unmet") == true)
+            try pressDragControl("settings-placement-retry", in: host)
+            await fixture.engine.placementTask?.value
+            #expect(model.loadedItems.first { $0.id == 1 }?.observedPlacement == .shown)
+            #expect(fixture.server.base.moveRequests.map(\.targetWindowID) == [3, 90])
+            #expect(!model.placementFailed)
+        }
+    }
+
+    @Test func orderDraftSurvivesNewWindowIDsAndSuccessfulImportCancelsAnAppliedOrderRetry() async throws {
+        let suite = "StagedOrderLifetime.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fixture = try Fixture(useFloatingBar: false, itemControls: ItemControlStore(),
+                                  store: PreferencesStore(backing: defaults), loginItem: SettingsTestLoginItem(), reflowsOnMove: true)
+        defer { fixture.engine.uninstall() }
+        let model = fixture.model
+        let host = try await mountDragItems(model)
+        try await stageDrag(5, from: .shown, into: .shown, model: model, host: host, before: 2)
+        let item = try #require(model.loadedItems.first { $0.id == 5 })
+        model.setAlias("Keep this name", for: item)
+        #expect(model.hasPendingChanges && fixture.work.preferenceWrites.count == 1)
+        let interrupted = try await beginDrag(5, from: .shown, into: .hidden, model: model, host: host)
+        let index = try #require(fixture.server.base.items.firstIndex { $0.windowID == 5 })
+        let old = fixture.server.base.items[index]
+        fixture.server.base.items[index] = MenuBarItemSnapshot(
+            windowID: 50, ownerPID: old.ownerPID, ownerBundleID: old.ownerBundleID, title: old.title, frame: old.frame
+        )
+        await model.reloadItems()
+        expectRejected(interrupted.info, by: interrupted.target)
+        interrupted.source.finishDragging()
+        #expect(model.previewItems(in: .shown).map(\.id) == [50, 2, 4])
+        #expect(model.pendingChangeCount == 1)
+        fixture.server.failingWindowID.withLock { $0 = 50 }
+        try pressDragControl("settings-placement-apply", in: host)
+        await fixture.engine.placementTask?.value
+        try #require(await settleDragUI(host) { model.placementFailed && !model.placementInProgress })
+        #expect(fixture.server.moveAttempts == [50])
+        model.importLayout { nil }
+        model.importLayout { try LayoutConfig.decode(from: Data("invalid".utf8)).preferences }
+        try pressDragControl("settings-placement-retry", in: host)
+        await fixture.engine.placementTask?.value
+        #expect(fixture.server.moveAttempts == [50, 50], "Failed and cancelled imports retain the submitted native order.")
+        let imported = model.preferences
+        model.importLayout { imported }
+        fixture.server.failingWindowID.withLock { $0 = nil }
+        fixture.engine.reconcileHiddenItems()
+        #expect(fixture.server.moveAttempts == [50, 50], "Successful import replaces even an identical saved arrangement.")
+        #expect(!model.placementFailed && !model.placementPending && !model.hasPendingChanges)
+        try await stageDrag(50, from: .shown, into: .shown, model: model, host: host, before: 2)
+        try pressDragControl("settings-placement-apply", in: host)
+        await fixture.engine.placementTask?.value
+        #expect(model.previewItems(in: .shown).map(\.id) == [50, 2, 4])
+        #expect(fixture.server.base.moveRequests.map(\.windowID) == [50])
+        #expect(fixture.work.preferenceWrites.count == 2)
+        #expect(PreferencesStore(backing: defaults).load() == imported)
+        #expect(model.alias(for: try #require(model.loadedItems.first { $0.id == 50 })) == "Keep this name")
+    }
+
     private typealias MountedDrag = (
         source: SettingsPlacementDragSourceView, target: SettingsPlacementDropView,
         token: UUID, info: SettingsPlacementTestDraggingInfo
@@ -1123,7 +1457,7 @@ struct StagedPlacementIntegrationTests {
 
     private func beginDrag(
         _ id: CGWindowID, from placement: ItemPlacement?, into destination: ItemPlacement,
-        model: SettingsModel, host: SettingsTestHostingController
+        model: SettingsModel, host: SettingsTestHostingController, before targetID: CGWindowID? = nil
     ) async throws -> MountedDrag {
         try #require(await settleDragUI(host) {
             dragSources(in: host).contains {
@@ -1199,6 +1533,8 @@ struct StagedPlacementIntegrationTests {
         #expect(session.event === movement)
         try #require(session.items.count == 1)
         let dragged = try #require(session.items.first)
+        let pointer = source.convert(movement.locationInWindow, from: nil)
+        #expect(dragged.draggingFrame.midX == pointer.x && dragged.draggingFrame.midY == pointer.y)
         let components = try #require(dragged.imageComponents)
         try #require(components.count == 1)
         #expect((components.first?.contents as? NSImage) === cached.image)
@@ -1214,7 +1550,13 @@ struct StagedPlacementIntegrationTests {
         #expect(model.canDropPlacement(token, into: validDestination))
         expectNoStaging()
 
-        let dropLocation = try dragDropLocation(in: target, host: host)
+        var dropLocation = try dragDropLocation(in: target, host: host)
+        if let targetID {
+            let targetItem = try dragSource(targetID, from: destination, in: host)
+            _ = targetItem.scrollToVisible(targetItem.bounds)
+            host.render()
+            dropLocation = targetItem.convert(CGPoint(x: targetItem.bounds.minX + 2, y: targetItem.bounds.midY), to: nil)
+        }
         let info = SettingsPlacementTestDraggingInfo(
             source: source, items: [writer], destination: target, locationInWindow: dropLocation
         )
@@ -1243,8 +1585,10 @@ struct StagedPlacementIntegrationTests {
         try #require(visible.width > 4 && visible.height > 4)
         let glyphs = settingsTestSubviews(target).compactMap { $0 as? SettingsPlacementDragSourceView }
         let emptyPoint = CGPoint(x: visible.maxX - 2, y: visible.midY)
-        #expect(!glyphs.contains { target.convert($0.bounds, from: $0).contains(emptyPoint) },
-                "The trailing padding must provide a drop point outside the cached glyphs.")
+        if glyphs.allSatisfy({ target.convert($0.bounds, from: $0).maxX < emptyPoint.x }) {
+            #expect(!glyphs.contains { target.convert($0.bounds, from: $0).contains(emptyPoint) },
+                    "A nonoverflowing strip retains empty drop space after its glyphs.")
+        }
         let emptyHit = try dragHit(at: emptyPoint, in: target, host: host)
         #expect(registeredDragAncestor(of: emptyHit) === target)
         if !glyphs.isEmpty {
@@ -1253,7 +1597,6 @@ struct StagedPlacementIntegrationTests {
             let point = CGPoint(x: rect.midX, y: rect.midY)
             let glyphHit = try dragHit(at: point, in: glyph, host: host)
             #expect(registeredDragAncestor(of: glyphHit) === target)
-            return glyph.convert(point, to: nil)
         }
         return target.convert(emptyPoint, to: nil)
     }
@@ -1278,9 +1621,9 @@ struct StagedPlacementIntegrationTests {
 
     private func stageDrag(
         _ id: CGWindowID, from placement: ItemPlacement?, into destination: ItemPlacement,
-        model: SettingsModel, host: SettingsTestHostingController
+        model: SettingsModel, host: SettingsTestHostingController, before targetID: CGWindowID? = nil
     ) async throws {
-        let drag = try await beginDrag(id, from: placement, into: destination, model: model, host: host)
+        let drag = try await beginDrag(id, from: placement, into: destination, model: model, host: host, before: targetID)
         try performDrop(drag, model: model)
         try #require(await settleDragUI(host) {
             dragSources(in: host).contains { $0.item?.id == id && $0.placement == destination }
@@ -1328,7 +1671,7 @@ struct StagedPlacementIntegrationTests {
             useFloatingBar: Bool = true, moveGate: (started: AsyncGate, release: AsyncGate)? = nil,
             itemControls: ItemControlStore? = nil, additionalItems: [MenuBarItemSnapshot] = [],
             alwaysHiddenDivider: Bool = false, store: PreferencesStore? = nil,
-            loginItem: (any LoginItemManaging)? = nil
+            loginItem: (any LoginItemManaging)? = nil, reflowsOnMove: Bool = false, panel: NSPanel? = nil
         ) throws {
             let items: [(CGWindowID, String, CGFloat)] = [
                 (1, "Hidden App", 800), (2, "Shown App", 1100), (3, "Keep Hidden", 700),
@@ -1346,6 +1689,7 @@ struct StagedPlacementIntegrationTests {
                 MenuBarItemSnapshot(windowID: 90, ownerPID: 1, title: "BKFAnchor", frame: CGRect(x: 1000, y: 0, width: 32, height: 22)),
                 MenuBarItemSnapshot(windowID: 91, ownerPID: 1, title: "BKFHidden", frame: CGRect(x: 984, y: 0, width: 16, height: 22))
             ] + tierControl, moveGate: moveGate)
+            server.base.reflowsOnMove = reflowsOnMove
             let alwaysHidden = AlwaysHiddenDividerRecorder()
             let initialPreferences = Preferences(
                 autoRehide: false, useFloatingBar: useFloatingBar,
@@ -1379,7 +1723,8 @@ struct StagedPlacementIntegrationTests {
                 attribute: { items in
                     work.barAttributions.append(items.map(\.windowID))
                     return items
-                }
+                },
+                panelFactory: panel.map { panel in { panel } }
             )
             bar.hiddenDividerWindowID = 91
             bar.controlItemWindowIDs = [90, 91]
@@ -1412,6 +1757,7 @@ struct StagedPlacementIntegrationTests {
                     work.retryCalls += 1
                     engine?.reconcileHiddenItems(userInitiated: true)
                 },
+                onStageItemOrder: { [weak engine] in engine?.stageItemOrder($0, controls: $1, applyPlacement: $2) },
                 onChange: { [weak engine] preferences in
                     work.preferenceWrites.append(preferences)
                     if let store { #expect(store.save(preferences)) }
@@ -1422,6 +1768,7 @@ struct StagedPlacementIntegrationTests {
             engine.onPlacementStatusChanged = { [weak engine, weak model] in
                 guard let engine, let model else { return }
                 if engine.placementInProgress { work.pendingDraftCountsAtStart.append(model.pendingChangeCount) }
+                model.placementIncludesTierChanges = engine.placementIncludesTierChanges
                 model.placementInProgress = engine.placementInProgress
                 model.placementPending = engine.placementPending
                 model.placementMessage = engine.placementMessage

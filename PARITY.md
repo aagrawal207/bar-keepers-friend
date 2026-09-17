@@ -1,7 +1,7 @@
 # Bartender Parity
 
-Last reviewed: 2026-09-16, local date (Items drag/drop, search heading/control targeting, and Settings
-window chrome; full build/test and hostless checks passed, native interaction/appearance limits remain).
+Last reviewed: 2026-09-16, local date (within-bar order and Items drag polish; full suite passed,
+with limited live drag/ordering verification on the built-in display).
 Reference: [Bartender 6 product](https://www.macbartender.com/),
 [release notes](https://www.macbartender.com/Bartender6/release_notes/), and
 [support](https://www.macbartender.com/Bartender6/support/).
@@ -9,26 +9,25 @@ Reference: [Bartender 6 product](https://www.macbartender.com/),
 This is a capability and verification inventory, not a claim of full Bartender feature or native
 behavior parity. The user's current priority is reliable hide/unhide, simpler Settings, and less
 manual testing. Widgets were removed at the user's request on 2026-09-15; retained advanced tools
-still run saved configurations and still need their hardware QA. The latest request adds staged dragging
-between three Settings bars, correct search destinations, and a hidden native window title.
+still run saved configurations and still need their hardware QA. The latest request adds staged ordering
+within all three Settings bars, insertion feedback, and edge scrolling during drags.
 Per-Space/per-display styles and presets, signed auto-update, and release packaging remain gaps.
 Menu-bar search stays removed.
 
 The checklist distinguishes implementation, automated coverage, and native evidence. Passing geometry
 or fake-backed tests does not prove that macOS opened a particular third-party menu, moved an item to
 the requested slot, or rendered a cursor without flicker. The current drag workflows intercept AppKit's
-actual drag-session boundary; they do not establish native event delivery. The final full suite passed
-on 2026-09-16, including light/dark heading-pixel checks and AX geometry. No new full-window visual
-inspection is claimed. The latest prior passing baseline, Settings simplification/widget retirement,
-is recorded under Historical Verification Records. Its partial PNG review omits some sidebar/material-backed
-content; those capture omissions persist.
+actual drag-session boundary; they do not establish native event delivery. A separate live session
+verified real Settings drags and four native reorder moves. The current full suite passed on 2026-09-16;
+its scope and the native results are recorded below. Off-screen rendering still omits some
+sidebar/material-backed content; it does not establish full-window appearance.
 
 ## Core Workflows
 
 | Capability | Current State | Remaining Work |
 |---|---|---|
 | Permission-free hide/show | Implemented using BKF's own divider | Preserve this baseline through every change |
-| Settings placement editor | Three always-present horizontal strips for Menu Bar, Hidden Bar, and Always Hidden; local cached-icon/name drags stage the existing owner-keyed draft; Apply uses real persistence and the serial mover, Discard clears placement edits. All six directions and floating-bar-on/off workflows passed | Native AppKit drag-session delivery/cancel animation, live focus, and VoiceOver remain hardware QA |
+| Settings placement editor | Three always-present strips for Menu Bar, Hidden Bar, and Always Hidden; cached-icon/name drags stage placement and owner-keyed order. Insertion feedback and drag-edge scrolling guide drops. Apply uses real persistence and the serial mover; Discard clears both drafts. Real same-bar drags and a drop into the empty Always Hidden strip followed by Discard passed live | Live overflow scrolling, cancel animation, focus, and VoiceOver remain hardware QA |
 | Per-item Shown/Hidden | Observed grab/placement polling; six built-in-display Alfred/ACME batches completed ten moves on the first attempt; saved Alfred Hidden also succeeded after restart | Itsycal failed on a 1920-point external display, then succeeded on the built-in display; external behavior remains open |
 | Floating bar under a crowded menu bar | Cached icons, horizontal/vertical wrapping, off-screen hosting tests; glyphs remembered across launches; hidden-menu-bar captures are skipped; the mirror follows current positions on open and checks for refresh after close or a Space change; resolved Control Center items are excluded | The 09-14 fallbacks were a fullscreen Space, not timing. Live confirmation of `isOnScreen` on a visible bar, external-display capture, and cold-boot compositing remain hardware QA |
 | Item pointer feedback | Shared row/cell hover and pressed highlight; light/dark, disabled, and sizing checks use off-screen AppKit drawing | Native enter/exit across label/whitespace and reacquisition after host replacement |
@@ -45,7 +44,7 @@ content; those capture omissions persist.
 
 | Capability | Current State | Remaining Work |
 |---|---|---|
-| Ordering | Settings drags change tiers only. Items rows retain Show-in-bar and Move Up/Down controls for the floating bar (presentation-only, immediate) | No within-tier drag reorder or direct native menu-bar dragging from Settings; exact native ordering is not managed |
+| Ordering | Same-bar drags and order arrows stage until Apply. Hidden-tier order uses existing `barOrder` persistence in floating-bar mode; Menu Bar order and hidden tiers in reflow mode use one-shot native requests. Four live Menu Bar reorder moves succeeded on attempt one; the original layout was restored | Native order covers manageable items, not exact slots among omitted system modules. Hidden-tier native order, other apps/displays, and continuous enforcement remain outside this verification |
 | Multiple items from one owner | Coupled by the existing persisted owner key | A deliberate migration design before any independent identity scheme |
 | Presets/profiles | Named presets (save current, apply, update, rename, delete) in Settings > Advanced > Presets and the anchor menu; saved arrangements remain usable | Per-display/per-Space presets; native verification of a preset apply is the same as placement |
 | Triggers | Settings > Advanced > Triggers; saved enabled rules still apply presets and restore the baseline for battery, charging, battery-below, low power, Wi-Fi, frontmost app, external display, and time/weekday conditions | IOKit/CoreWLAN callbacks and DST boundaries on hardware |
@@ -90,7 +89,126 @@ content; those capture omissions persist.
 - Keep persistence keys, attribution-label construction, protected-item exclusions, and the
   permission-free baseline unchanged unless a separately justified migration is required.
 
-## Items Drag-and-Drop, Search Targets, And Window Chrome
+## Within-Bar Order And Drag Polish (2026-09-16)
+
+Same-bar drops are accepted. The insertion line tracks the selected gap over glyphs and empty strip
+space. The registered destination is an `NSView` containing the SwiftUI host and a separate AppKit
+marker; adding the marker directly under `NSHostingView` produced an AppKit runtime warning and was
+replaced during verification. The marker ignores hit tests. The drag image is centered at the pointer,
+and owner siblings dim together. Periodic AppKit drag updates scroll overflowing strips near their
+edges; no timer remains after the drag. Same-position drops succeed without creating edits.
+
+`ItemOrderDraft` stores session-only owner order alongside the placement draft. Apply and Discard
+include ordering, including the existing arrows. Reversals clear redundant edits, and a refreshed
+window ID keeps the owner's order. Show-in-bar and alias edits retain their independent save behavior.
+The pasteboard still holds only a one-use UUID. The destination also verifies source window and
+source-owned token identity before accepting a drop.
+
+Hidden/Always Hidden order is saved through existing `barOrder` keys. Menu Bar order, and hidden-tier
+order when the floating bar is disabled, uses an ephemeral engine request. Combined placement/order
+Apply shares one preference write and one serialized pass. Order-only Apply leaves tiers at their
+observed positions, including during the Applying preview. The controller reports pre-existing unmet
+placement separately so ordering cannot masquerade as successful placement. Failed/cancelled work
+retains the native request for Retry; completed tiers clear individually. A successful import or
+replacement saved arrangement supersedes it. Native order is not a new persisted or continuous policy.
+
+`ItemOrderPlanner` retains a longest increasing subsequence and moves other windows across a reference
+on the wrong side. This is required because the existing native mover can return early for an item
+already on the requested side, even with intervening icons. The controller uses live references,
+checks full-edge tier membership and final order, and limits the total gestures. Attribution labels,
+keys, the synthesized event relay, and cursor restoration are unchanged.
+
+### Metrics and logging
+
+| Output | Emitted when | Scope |
+|---|---|---|
+| Metrics/telemetry | None added | Drafting, drag feedback, and cache-only previews emit none |
+| Existing `HiddenItemController` reconciliation log | Every pass, including zero order failures | Adds the bounded `orderFailed` count; native order errors use the existing local `DebugLog` path |
+
+### Test coverage
+
+The following six added workflows use the real mounted Settings UI, model, isolated `PreferencesStore`
+where persistence is exercised, and engine/controller. Only OS transport, status items, capture, and
+window-server behavior are replaced. The opt-in fake row reflow is a test model, not native evidence.
+
+| Case | Workflow | Level |
+|---|---|---|
+| No-op, reversal, Discard, owner siblings, unchanged cache until Apply, one save, no native work for floating-only order, save/reload | `floatingOrderReversalsDiscardAndApplyKeepSiblingsAndRealCacheConsistent` | Functional workflow |
+| Exact three-tier order, one serial pass/write, floating bar on/off, actual floating view content, unchanged placement sets | `allThreeBarsApplyExactOrderThroughOneSerialPass` | Functional workflow, two configurations |
+| Order without saved placement, Pause, cancellation or failure, Retry, one-shot completion | `nativeOrderWithoutPlacementIntentSurvivesPauseAndInterruptedOrFailedApply` | Functional workflow, two outcomes |
+| Crowded strip scrolling, gap marker bounds and pixels, noninteractive marker hit test, cancel/drop without native work | `crowdedBarsScrollDuringDragAndKeepInsertionFeedbackNoninteractive` | Functional workflow + off-screen bitmap |
+| Opposing saved placement does not change tiers during order staging, Applying, or completion; explicit Retry handles remaining placement | `orderingAlonePreservesObservedTiersDespiteAnOpposingSavedPlacement` | Functional workflow, floating bar on/off |
+| New window IDs preserve order, aliases persist independently, invalidated drag rejected, cancelled/failed import preserves Retry, successful import cancels it | `orderDraftSurvivesNewWindowIDsAndSuccessfulImportCancelsAnAppliedOrderRetry` | Functional workflow |
+| All 720 six-item permutations reach the desired sequence with minimal wrong-side moves; duplicate/absent IDs and unchanged order | `ItemOrderPlannerTests` | Pure unit/property coverage |
+
+The existing all-six-directions workflow also verifies combined placement/order Apply, and the mounted
+row workflow verifies staged arrows alongside immediate Show-in-bar changes. Existing malformed/stale/
+replayed-source, refresh/navigation, group, capture, and native-mover checks remain.
+
+### Current verification record
+
+**Full build/test passed:** 1,097 tests across 81 suites, 1,827 invocations, zero failures or skips,
+on macOS 26.6.2 / Xcode 27.0. The final result was `bkf-order-full-03.xcresult` under
+`$TMPDIR/opencode`, using the documented build command with:
+
+```sh
+xcodebuild ... \
+  -resultBundlePath "$TMPDIR/opencode/bkf-order-full-03.xcresult" \
+  -collect-test-diagnostics on-failure \
+  COMPILER_INDEX_STORE_ENABLE=NO -quiet build test
+```
+
+Build metadata reported `status: succeeded`, zero errors and zero warnings for this incremental build.
+The pre-existing actor-isolation warnings remain on a full recompilation. The test result recorded one
+existing QoS warning in `GroupsSettingsTabTests`; no drag-container runtime warning remained.
+`codesign --verify --deep --strict` passed on the built app. Manual code/security review and diff checks
+completed. No independent review of this change is claimed. `scan_diff`, `semgrep`, and `gitleaks` were
+unavailable, so no automated security scan ran. The insertion-marker PNG was inspected; full-window
+glass/material appearance and VoiceOver remain unqualified.
+
+### Live check (2026-09-16 local date)
+
+The first preflight was locked. After the user unlocked and switched from fullscreen to a visible
+menu bar, the new build ran standalone. A temporary Accessibility/CGEvent helper opened the real
+Settings window, located its controls by accessibility identifier, and posted mouse drags through
+AppKit's actual session transport. Apply ran the production engine/controller and event relay.
+Independent native window reads verified the results on the 1512-point built-in display.
+
+| Native move | Reference | Native x before → after | Result |
+|---|---|---|---|
+| Itsycal before ACME | ACME, window 84 | 1224 → 1158 | Attempt 1, one planned/succeeded move |
+| Itsycal after Maccy | Maccy, window 54 | 1158 → 1300 | Attempt 1; manageable order correct, but Battery interleaved |
+| Itsycal before Maccy | Maccy, window 54 | 1300 → 1192 | Attempt 1, one planned/succeeded move |
+| Maccy before Itsycal | Itsycal, window 50 | 1288 → 1192 | Attempt 1, original full ordering restored |
+
+The four requests ended with `failed=0`, `orderFailed=0`, and no pending work. Logs are dated
+2026-09-17 02:12–02:29 UTC. Final native positions were ACME x=1158, Maccy x=1192, Itsycal x=1224,
+Battery x=1320, Control Center x=1396, and Clock x=1438; the native anchor stayed at x=1126.
+Settings returned to Last Observed with zero pending changes. A subsequent real drag of Maccy into
+the empty Always Hidden strip created one draft; Discard returned it to Menu Bar without a native move.
+The original order remained intact and Settings was closed afterward.
+
+The first far-trailing-edge probe targeted x=1553 after the display configuration had changed to a
+1512-point screen, and staged nothing. Another attempt found Ghostty covering the target. The helper
+was corrected to check the active session, activate BKF, verify endpoint hit ownership, and use a
+visible destination. These rejected probe attempts are not counted as successful drag delivery.
+
+**Scope:** this establishes real glyph-to-glyph reorder drags, an empty-strip drop/Discard, and native
+before/after moves for Itsycal/Maccy with ACME as a reference. The after-Maccy move passed the ordering
+contract while putting Itsycal after Battery: omitted system modules are not part of the requested
+order, so exact adjacency around them is not guaranteed. Two further moves restored Battery's original
+relative position. Native hidden-tier ordering, overflow scrolling, cancel animation, other displays/apps,
+focus/VoiceOver, and absence of cursor flicker still need evidence.
+
+After recordkeeping, this work's temporary result bundles, exported insertion PNG, live probe, and build
+caches/intermediates were removed. `DerivedData` is about 11 MB and retains the running
+`Build/Products/Debug/BarKeepersFriend.app`. Strict signature verification passed after cleanup.
+Result-bundle references are historical; those transient files are not retained.
+
+## Initial Items Drag-and-Drop, Search Targets, And Window Chrome
+
+This records the preceding implementation and its verification. The ordering extension above replaces
+its same-tier rejection and immediate order arrows, and uses a registered container around the host.
 
 The 2026-09-15 implementation replaces the inert Items previews with three permanently visible,
 stacked horizontal destination strips: **Menu Bar, Hidden Bar, Always Hidden**. Empty tiers remain

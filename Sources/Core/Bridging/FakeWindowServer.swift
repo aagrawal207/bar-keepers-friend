@@ -21,6 +21,8 @@ public final class FakeWindowServer: WindowServer, @unchecked Sendable {
     public var moveError: WindowServerError?
 
     public var clickError: WindowServerError?
+    /// Opt-in row reflow for ordering workflows; legacy fixtures retain their absolute-frame behavior.
+    public var reflowsOnMove = false
 
     public init(
         items: [MenuBarItemSnapshot] = [],
@@ -47,6 +49,28 @@ public final class FakeWindowServer: WindowServer, @unchecked Sendable {
         }
         let reference = items.first { $0.windowID == targetWindowID }
         let beforeReference = reference.map { targetX < $0.frame.midX } ?? false
+        if reflowsOnMove, let reference {
+            let row = items.filter { abs($0.frame.minY - item.frame.minY) < 1 }
+                .sorted { $0.frame.minX < $1.frame.minX }
+            var reordered = row.filter { $0.windowID != item.windowID }
+            guard let referenceIndex = reordered.firstIndex(where: { $0.windowID == reference.windowID }) else {
+                throw WindowServerError.moveFailed(windowID: item.windowID)
+            }
+            reordered.insert(items[index], at: referenceIndex + (beforeReference ? 0 : 1))
+            var x = row.first?.frame.minX ?? 0
+            for (position, snapshot) in reordered.enumerated() {
+                let updated = MenuBarItemSnapshot(
+                    windowID: snapshot.windowID, ownerPID: snapshot.ownerPID, ownerBundleID: snapshot.ownerBundleID,
+                    title: snapshot.title,
+                    frame: CGRect(x: x, y: snapshot.frame.minY, width: snapshot.frame.width, height: snapshot.frame.height),
+                    isOnScreen: snapshot.isOnScreen
+                )
+                if let index = items.firstIndex(where: { $0.windowID == snapshot.windowID }) { items[index] = updated }
+                x += snapshot.frame.width
+                if position + 1 < row.count { x += max(0, row[position + 1].frame.minX - row[position].frame.maxX) }
+            }
+            return
+        }
         let frame = items[index].frame
         let moved = MenuBarItemSnapshot(
             windowID: item.windowID,

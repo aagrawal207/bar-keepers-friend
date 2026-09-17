@@ -30,7 +30,10 @@ final class HiddenItemController {
         var failed: [MenuBarItemSnapshot] = []
         var cancelled = false
         var observationFailed: Bool = false
-        var allSucceeded: Bool { !cancelled && !observationFailed && failed.isEmpty }
+        var orderFailed: Set<String> = []
+        var completedOrderTiers: Set<ItemPlacement> = []
+        var unappliedPlacement = false
+        var allSucceeded: Bool { !cancelled && !observationFailed && failed.isEmpty && orderFailed.isEmpty && !unappliedPlacement }
     }
 
     /// One read of the controls plus the candidates a reconcile or preview may plan over.
@@ -221,11 +224,13 @@ final class HiddenItemController {
         alwaysHiddenDividerWindowID: CGWindowID? = nil,
         controls: ItemControlStore,
         displayXRange: ClosedRange<CGFloat>? = nil,
-        displayMenuBarTop: CGFloat = 0
+        displayMenuBarTop: CGFloat = 0,
+        orders: [ItemPlacement: [String]] = [:],
+        applyPlacement: Bool = true
     ) async -> ReconcileResult {
         var result = ReconcileResult()
         defer {
-            DebugLog.log("HiddenItemController: reconcile planned=\(result.planned) ok=\(result.succeeded) failed=\(result.failed.count) cancelled=\(result.cancelled) observationFailed=\(result.observationFailed)")
+            DebugLog.log("HiddenItemController: reconcile planned=\(result.planned) ok=\(result.succeeded) failed=\(result.failed.count) orderFailed=\(result.orderFailed.count) cancelled=\(result.cancelled) observationFailed=\(result.observationFailed)")
         }
         guard !Task.isCancelled else {
             result.cancelled = true
@@ -248,11 +253,12 @@ final class HiddenItemController {
                 displayMenuBarTop: displayMenuBarTop, tolerateExpandedDividers: false
             )
             let observation = plan.observation
-            result.planned = plan.moves.count
+            result.planned = applyPlacement ? plan.moves.count : 0
+            result.unappliedPlacement = !applyPlacement && !plan.moves.isEmpty
             DebugLog.log("reconcile: \(plan.snapshots.count) items, plan=\(plan.moves.count) moves; anchorMinX=\(observation.anchor.minX) dividerMinX=\(observation.divider.minX) alwaysHiddenMinX=\(observation.alwaysHidden.map { "\($0.minX)" } ?? "none") hidden=\(controls.hiddenInMenuBar) alwaysHidden=\(controls.alwaysHiddenInMenuBar)")
 
             // Each candidate gets one sequential attempt; the native implementation owns retries.
-            for move in plan.moves {
+            for move in plan.moves where applyPlacement {
                 guard !Task.isCancelled else {
                     result.cancelled = true
                     break
@@ -309,6 +315,9 @@ final class HiddenItemController {
                     DebugLog.log("HiddenItemController: move returned without satisfying placement for \(item.windowID)")
                 }
             }
+            if !result.cancelled {
+                try await arrange(orders, attributed: plan.snapshots, observe: observe, result: &result)
+            }
         } catch is CancellationError {
             result.cancelled = true
         } catch {
@@ -317,5 +326,74 @@ final class HiddenItemController {
         }
         result.cancelled = result.cancelled || Task.isCancelled
         return result
+    }
+
+    private func arrange(
+        _ orders: [ItemPlacement: [String]], attributed: [MenuBarItemSnapshot],
+        observe: () throws -> Observation, result: inout ReconcileResult
+    ) async throws {
+        guard !orders.isEmpty else { return }
+        let owners = Dictionary(attributed.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
+        let immovablePIDs = ImmovableProcessIDs.current()
+        for tier in ItemPlacement.allCases {
+            guard let requested = orders[tier], !requested.isEmpty else { continue }
+            let requestedOwners = Set(requested)
+            func members(_ observation: Observation) -> [MenuBarItemSnapshot] {
+                observation.items.compactMap { raw in
+                    guard let owner = owners[raw.windowID], let key = ItemControlStore.key(for: owner),
+                          requestedOwners.contains(key), !ImmovableItems.isImmovable(owner, immovablePIDs: immovablePIDs),
+                          tier != .alwaysHidden || observation.alwaysHidden != nil,
+                          HiddenLayoutPlanner.isPlacementSatisfied(
+                            item: raw, placement: tier, anchorMaxX: observation.anchor.maxX,
+                            dividerMinX: observation.divider.minX, alwaysHiddenDividerFrame: observation.alwaysHidden
+                          ) else { return nil }
+                    return raw.attributed(bundleID: owner.ownerBundleID, pid: owner.ownerPID)
+                }.sorted { $0.frame.minX < $1.frame.minX }
+            }
+            func desired(_ items: [MenuBarItemSnapshot]) -> [CGWindowID] {
+                requested.flatMap { key in items.filter { ItemControlStore.key(for: $0) == key }.map(\.windowID) }
+            }
+
+            var live = members(try observe())
+            // Re-plan against each settled layout, with a fixed gesture budget even if an owner fights a move.
+            let budget = live.count
+            for _ in 0..<budget {
+                try Task.checkCancellation()
+                guard let move = ItemOrderPlanner.moves(current: live.map(\.windowID), desired: desired(live)).first else { break }
+                guard let item = live.first(where: { $0.windowID == move.windowID }),
+                      let reference = live.first(where: { $0.windowID == move.referenceID }) else { break }
+                let targetX = move.before ? reference.frame.minX - HiddenLayoutPlanner.hiddenMargin
+                    : reference.frame.maxX + HiddenLayoutPlanner.shownMargin
+                result.planned += 1
+                do {
+                    try Task.checkCancellation()
+                    try await windowServer.move(item: item, toX: targetX, relativeTo: reference.windowID)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if let key = ItemControlStore.key(for: item) { result.orderFailed.insert(key) }
+                    DebugLog.log("HiddenItemController: order move failed: \(error)")
+                    break
+                }
+                try Task.checkCancellation()
+                live = members(try observe())
+                guard let placed = live.first(where: { $0.windowID == item.windowID }),
+                      let target = live.first(where: { $0.windowID == reference.windowID }),
+                      move.before ? placed.frame.maxX <= target.frame.minX : placed.frame.minX >= target.frame.maxX else {
+                    if let key = ItemControlStore.key(for: item) { result.orderFailed.insert(key) }
+                    break
+                }
+                result.succeeded += 1
+            }
+            try Task.checkCancellation()
+            live = members(try observe())
+            let missing = requestedOwners.subtracting(live.compactMap(ItemControlStore.key(for:)))
+            result.orderFailed.formUnion(missing)
+            if live.map(\.windowID) != desired(live) {
+                result.orderFailed.formUnion(requestedOwners)
+            } else if missing.isEmpty && result.orderFailed.isDisjoint(with: requestedOwners) {
+                result.completedOrderTiers.insert(tier)
+            }
+        }
     }
 }

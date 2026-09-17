@@ -587,16 +587,21 @@ struct SettingsViewTests {
         #expect(try !enabled("settings-item-bar-later-3"))
 
         #expect(try element("settings-item-bar-later-1", in: hosting.view).accessibilityPerformPress())
-        #expect(await waitForUpdate(hosting.view) { writes.count == 1 })
-        #expect(model.preferences.itemControls.barOrder == ["Item 2": 0, "Item 1": 1])
-        #expect(!model.hasPendingChanges)
+        #expect(await waitForUpdate(hosting.view) { model.hasPendingChanges })
+        #expect(writes.isEmpty)
+        #expect(model.preferences.itemControls.barOrder.isEmpty)
+        #expect(model.placementPreview.hidden.map(\.id) == [2, 1])
         #expect(await waitForUpdate(hosting.view) {
             (try? element("settings-item-bar-earlier-1", in: hosting.view).isAccessibilityEnabled()) == true
         })
 
         #expect(try element("settings-item-bar-visible-1", in: hosting.view).accessibilityPerformPress())
-        #expect(await waitForUpdate(hosting.view) { writes.count == 2 })
+        #expect(await waitForUpdate(hosting.view) { writes.count == 1 })
         #expect(model.preferences.itemControls.suppressedFromBar == ["Item 1"])
+        #expect(model.hasPendingChanges)
+        #expect(try element("settings-placement-apply", in: hosting.view).accessibilityPerformPress())
+        #expect(await waitForUpdate(hosting.view) { writes.count == 2 })
+        #expect(model.preferences.itemControls.barOrder == ["Item 2": 0, "Item 1": 1])
         #expect(!model.hasPendingChanges)
         #expect(model.preferences.itemControls.hiddenInMenuBar.isEmpty)
         #expect(model.preferences.itemControls.alwaysHiddenInMenuBar.isEmpty)

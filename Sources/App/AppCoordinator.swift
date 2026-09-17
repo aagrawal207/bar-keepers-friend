@@ -335,7 +335,8 @@ final class AppCoordinator {
                 preferences: preferences,
                 loginItem: loginItem,
                 itemsProvider: { [weak self] in try await self?.floatingBar?.allManageableItems() ?? [] },
-                onRetryPlacement: { [weak self] in self?.hideEngine?.reconcileHiddenItems(userInitiated: true) }
+                onRetryPlacement: { [weak self] in self?.hideEngine?.reconcileHiddenItems(userInitiated: true) },
+                onStageItemOrder: { [weak self] in self?.hideEngine?.stageItemOrder($0, controls: $1, applyPlacement: $2) }
             ) { [weak self] updated in
                 self?.handlePreferencesChange(updated)
             }
@@ -351,6 +352,7 @@ final class AppCoordinator {
 
     private func syncPlacementStatus() {
         guard let engine = hideEngine, let model = settingsWindowController?.model else { return }
+        model.placementIncludesTierChanges = engine.placementIncludesTierChanges
         model.placementInProgress = engine.placementInProgress
         model.placementPending = engine.placementPending
         model.placementMessage = engine.placementMessage

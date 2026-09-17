@@ -574,11 +574,11 @@ struct ItemsSettingsContent: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Drag icons between bars, or use the row controls. Apply Changes moves icons; Discard clears placement edits.")
+            Text("Drag icons between bars or between other icons to reorder. Apply Changes saves the arrangement; Discard undoes your edits.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Show in bar and the order arrows change only the floating bar and save immediately.")
+            Text("Icons from the same app move together. Show in bar saves immediately; ordering waits for Apply.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -657,7 +657,7 @@ struct ItemsSettingsContent: View {
             HStack(spacing: 8) {
                 Text(model.pendingChangeCount == 1 ? "1 pending change" : "\(model.pendingChangeCount) pending changes")
                     .font(.callout)
-                    .help("Placement drafts remain when Settings closes, but are not saved across app restarts. Discard affects placement edits only.")
+                    .help("Placement and order drafts remain when Settings closes, but are not saved across app restarts.")
                     .accessibilityIdentifier("settings-placement-count")
                 Spacer(minLength: 8)
                 if !model.hasPendingChanges && (model.placementFailed || model.placementPending) {
@@ -677,7 +677,7 @@ struct ItemsSettingsContent: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings-placement-actions")
             .settingsSearchTarget(.placementActions)
-            Text("Apply and Discard affect placement only. Names save separately on Return or when you leave the field.")
+            Text("Apply and Discard affect placement and order. Names save separately on Return or when you leave the field.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -822,7 +822,7 @@ private struct ItemRow: View {
         .onDisappear { commitAlias() }
     }
 
-    /// Floating-bar presentation for tucked rows; these save immediately and never move an item.
+    /// Visibility saves independently; order arrows share the drag editor's draft.
     private var barControls: some View {
         HStack(spacing: 4) {
             Toggle("Show in bar", isOn: Binding(
@@ -841,7 +841,7 @@ private struct ItemRow: View {
             }
             .controlSize(.small)
             .disabled(!model.canMoveInBar(item, .earlier))
-            .help("Move \(displayName) earlier in the floating bar (left in a strip, up in a list). Saves immediately.")
+            .help("Move \(displayName) earlier (left in a strip, up in a list), then Apply Changes.")
             .accessibilityLabel("Move \(displayName) earlier in the bar")
             .accessibilityIdentifier("settings-item-bar-earlier-\(item.id)")
             Button {
@@ -851,7 +851,7 @@ private struct ItemRow: View {
             }
             .controlSize(.small)
             .disabled(!model.canMoveInBar(item, .later))
-            .help("Move \(displayName) later in the floating bar (right in a strip, down in a list). Saves immediately.")
+            .help("Move \(displayName) later (right in a strip, down in a list), then Apply Changes.")
             .accessibilityLabel("Move \(displayName) later in the bar")
             .accessibilityIdentifier("settings-item-bar-later-\(item.id)")
         }
